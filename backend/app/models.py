@@ -1,8 +1,8 @@
 """SQLAlchemy models for the audit control store.
 
-Nine tables, matching the four core entities (rules / schedules / runs /
-tickets) plus users, datasource registry, rule version history, tunable
-parameters and DELTA-mode watermarks.
+Eight tables, matching the four core entities (rules / schedules / runs /
+tickets) plus users, datasource registry, rule version history and tunable
+parameters.
 """
 
 from __future__ import annotations
@@ -265,24 +265,3 @@ class Param(Base, TimestampMixin):
     value_text: Mapped[str | None] = mapped_column(Text)
     description: Mapped[str] = mapped_column(Text, default="")
     updated_by: Mapped[str] = mapped_column(String(64), default="")
-
-
-# ---------------------------------------------------------------------------
-# Watermarks - support DELTA query mode
-# ---------------------------------------------------------------------------
-class Watermark(Base):
-    __tablename__ = "watermarks"
-
-    id: Mapped[int] = mapped_column(primary_key=True)
-    rule_id: Mapped[int] = mapped_column(
-        ForeignKey("rules.id", ondelete="CASCADE"), nullable=False, index=True
-    )
-    source_key: Mapped[str] = mapped_column(String(128), nullable=False)
-    last_value: Mapped[str] = mapped_column(String(255), default="")
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
-    )
-
-    __table_args__ = (
-        UniqueConstraint("rule_id", "source_key", name="uq_watermark_rule_source"),
-    )

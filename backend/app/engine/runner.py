@@ -33,7 +33,7 @@ from app.engine.ctx import RuleContext, build_views
 from app.engine.datasources import registry_for
 from app.engine.loader import load_rule
 from app.engine.ticketing import raise_tickets
-from app.models import Param, Rule, Run, Ticket, Watermark
+from app.models import Param, Rule, Run, Ticket
 from app.schemas import RuleResult
 from app.settings import settings
 
@@ -183,7 +183,6 @@ async def execute_rule(
         sched = await session.get(RuleSchedule, schedule_id)
         if sched:
             sched.last_run_at = run.finished_at
-            await _advance_watermark(session, rule, run)
 
     await session.commit()
     await session.refresh(run)
@@ -200,22 +199,3 @@ async def _run_in_thread(fn):
     import anyio
 
     return await anyio.to_thread.run_sync(fn)
-
-
-async def _advance_watermark(session: AsyncSession, rule: Rule, run: Run) -> None:
-    """Record the high-water mark for DELTA-mode rules."""
-    if rule.query_mode != "DELTA" or run.status != "pass":
-        return
-    wm = await session.execute(
-        select(Watermark).where(
-            Watermark.rule_id == rule.id, Watermark.source_key == "last_run"
-        )
-    )
-    row = wm.scalar_one_or_none()
-    stamp = run.finished_at.isoformat() if run.finished_at else ""
-    if row:
-        row.last_value = stamp
-    else:
-        session.add(
-            Watermark(rule_id=rule.id, source_key="last_run", last_value=stamp)
-        )

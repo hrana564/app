@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 
 RuleStatus = Literal["draft", "active", "paused", "retired"]
 Severity = Literal["low", "medium", "high", "critical"]
-QueryMode = Literal["DELTA", "SNAPSHOT", "WINDOW"]
+QueryMode = Literal["SNAPSHOT", "WINDOW"]
 RunStatus = Literal["running", "pass", "fail", "error"]
 TicketStatus = Literal["open", "acknowledged", "dismissed"]
 CadenceKind = Literal[

@@ -14,8 +14,7 @@ from sqlalchemy.orm import DeclarativeBase
 
 from app.settings import settings
 
-# Deterministic constraint names. Without this, Alembic autogenerate emits
-# drop_constraint() for unnamed FKs and those migrations fail at runtime.
+# Deterministic constraint names, so DDL is stable and diffable.
 NAMING_CONVENTION = {
     "ix": "ix_%(column_0_label)s",
     "uq": "uq_%(table_name)s_%(column_0_name)s",
@@ -50,37 +49,23 @@ async def get_session() -> AsyncIterator[AsyncSession]:
         yield session
 
 
-async def check_schema() -> tuple[bool, str]:
-    """Verify migrations have been applied. Does NOT create tables.
+async def init_models() -> None:
+    """Create any missing tables. Safe to call on every start."""
+    from app import models  # noqa: F401  (registers the mappers)
 
-    The schema is owned by Alembic. Auto-creating tables at startup was the
-    original shortcut; it let the models and the database drift apart silently
-    and left nobody able to say what the schema actually was. Now a missing
-    migration is a loud failure with the fix in the message.
-    """
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+
+async def table_names() -> list[str]:
+    """Tables currently present, for /health and diagnostics."""
     from sqlalchemy import text
 
-    try:
-        async with engine.connect() as conn:
-            exists = await conn.execute(
-                text("SELECT to_regclass('public.alembic_version') IS NOT NULL")
+    async with engine.connect() as conn:
+        rows = await conn.execute(
+            text(
+                "SELECT tablename FROM pg_tables "
+                "WHERE schemaname = 'public' ORDER BY tablename"
             )
-            if not exists.scalar():
-                return False, (
-                    "schema is not initialised. Run from backend/: "
-                    "  python -m alembic upgrade head"
-                )
-            tables = await conn.execute(
-                text(
-                    "SELECT count(*) FROM information_schema.tables "
-                    "WHERE table_schema = 'public'"
-                )
-            )
-            count = int(tables.scalar() or 0)
-            if count <= 1:  # only alembic_version
-                return False, (
-                    "schema looks empty. Run:  python -m alembic upgrade head"
-                )
-            return True, f"{count} tables present"
-    except Exception as exc:  # noqa: BLE001
-        return False, f"cannot reach the database: {exc}"
+        )
+        return [r[0] for r in rows]

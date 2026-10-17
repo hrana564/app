@@ -140,7 +140,6 @@ def build_views(
 
     SNAPSHOT -> the single day folder for that entity
     WINDOW   -> the last `window_days` day folders
-    DELTA    -> day folder only; the watermark filter is applied by the rule
 
     Returns {datasource_name: row_count}.
     """

@@ -76,7 +76,7 @@ Power Automate ──▶ SourceData/<ENTITY>/<YYYY-MM-DD>/<table>.csv
                         ▼
                   PostgreSQL  ABM_Audit_Portal
                  rules · rule_versions · schedules · runs · tickets
-                 params · datasources · watermarks · users
+                 params · datasources · users
                         │
                         ▼
               React UI  (react-admin)   ──▶  later: Power Apps
@@ -90,7 +90,7 @@ second copy of the client's data to reconcile.
 
 ## 3. Data model
 
-Nine tables in `ABM_Audit_Portal`, owned by **Alembic** (see §7).
+Eight tables in `ABM_Audit_Portal`. Created on startup by `create_all`.
 
 ```
 users          id, username, password_hash, role, is_active
@@ -110,7 +110,6 @@ tickets        id, ticket_no, run_id, rule_id, schedule_id, severity, summary, r
                occurrences, first_run_id, last_run_id, fingerprint, last_seen_at,
                status, acknowledged_by, acknowledged_at, ack_note, created_at
 params         id, key, label, value_numeric, value_text, description, updated_by
-watermarks     id, rule_id, source_key, last_value, updated_at
 ```
 
 ### Key decisions
@@ -386,40 +385,19 @@ python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
 
-### Step 3 — schema migrations
-
-The schema is owned by **Alembic**, not by the app. Apply it:
-
-```bash
-.\.venv\Scripts\python.exe -m alembic upgrade head
-```
-
-| Command | Purpose |
-|---|---|
-| `alembic upgrade head` | Apply all migrations |
-| `alembic downgrade -1` | Roll back one revision |
-| `alembic current` | What is applied |
-| `alembic history` | Full chain |
-| `alembic revision --autogenerate -m "..."` | Draft a new migration |
-
-`env.py` builds the URL from `backend/.env`, so migrations can never drift onto a different
-database than the running app. If migrations have not been applied, the API logs
-`SCHEMA NOT READY` and tells you the command to run — it will **not** silently create tables. That
-auto-create behaviour is what let the models and the database drift apart unnoticed before.
-
-### Step 4 — run
+### Step 3 — run
 
 ```bash
 .\.venv\Scripts\python.exe -m uvicorn app.main:app --reload --port 8000
 ```
 
-Users and baseline parameters are seeded on first start.
+Missing tables are created on startup, and the two users plus baseline parameters are seeded.
 
 - API → http://127.0.0.1:8000
 - Swagger → http://127.0.0.1:8000/docs
-- Health → http://127.0.0.1:8000/health
+- Health → http://127.0.0.1:8000/health (reports the table list)
 
-### Step 5 — sample data
+### Step 4 — sample data
 
 ```bash
 .\.venv\Scripts\python.exe scripts\make_sample_data.py
@@ -438,7 +416,7 @@ Generates `SourceData/` for both entities across 6 days, with **deliberately pla
 
 Without planted breaches you cannot tell a working rule from a broken one.
 
-### Step 6 — frontend
+### Step 5 — frontend
 
 ```bash
 cd frontend
@@ -450,7 +428,7 @@ npm run dev
 
 Vite proxies `/api` to the backend, so the browser sees a single origin in development.
 
-### Step 7 — sign in
+### Step 6 — sign in
 
 | Username | Password | Role |
 |---|---|---|
@@ -470,10 +448,6 @@ app/
 ├── backend/
 │   ├── .env / .env.example
 │   ├── requirements.txt
-│   ├── alembic.ini
-│   ├── migrations/
-│   │   ├── env.py                  URL built from .env, async
-│   │   └── versions/0001_initial_schema.py
 │   ├── app/
 │   │   ├── main.py                 app factory, health, dashboard, user bootstrap
 │   │   ├── settings.py             env config
@@ -673,7 +647,6 @@ Register it via `POST /api/rules` (the server writes the file and creates versio
 |---|---|---|
 | `SNAPSHOT` | one day folder | Most daily controls |
 | `WINDOW` | last `window_days` folders | Ageing: "stock in transit > 5 days" |
-| `DELTA` | one day folder + watermark | Incremental extraction controls |
 
 ---
 
@@ -850,6 +823,7 @@ Honest list of what is **not** done yet:
 
 | Gap | Impact | Notes |
 |---|---|---|
+| **No schema versioning** | Tables come from `create_all` at startup | Fine while the schema is still moving. When it settles, or before a second environment exists, add Alembic — otherwise a rename leaves an orphan table, which is exactly what happened here. |
 | **No process-level sandbox** | LLM-generated Python runs in-process | The AST gate blocks `os`/`subprocess`/`socket`/`open()` statically, but that is **not** a sandbox — a determined rule can still exhaust memory or spin a CPU. Acceptable while your devs write rules. **Mandatory hardening** if auditors type prompts and never read the diff: subprocess isolation, read-only mount, no network, rlimits. RestrictedPython is *not* a substitute — see §13. |
 | **Rules execute synchronously** | A slow rule occupies the API worker | `rule_timeout_seconds` is configured but **not enforced** — needs a subprocess or `anyio` timeout |
 | **No pagination beyond `perPage`** | Large tables return capped pages | Fine for dev volumes |

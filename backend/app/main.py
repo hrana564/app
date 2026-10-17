@@ -10,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api import auth, datasources, params, rules, runs, schedules, tickets
 from app.api.deps import SessionDep
-from app.db import SessionLocal, check_schema
+from app.db import SessionLocal, init_models, table_names
 from app.engine import scheduler
 from app.settings import settings
 
@@ -24,16 +24,7 @@ log = logging.getLogger("abm")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     log.info("starting ABM Audit Portal API")
-    ok, detail = await check_schema()
-    if not ok:
-        # Loud on purpose. Silently creating tables is what let the models and
-        # the database drift apart before.
-        log.error("SCHEMA NOT READY - %s", detail)
-        app.state.schema_ready = False
-    else:
-        log.info("schema ok (%s)", detail)
-        app.state.schema_ready = True
-
+    await init_models()
     await _bootstrap()
     scheduler.start()
     await scheduler.load_all()
@@ -180,6 +171,7 @@ async def health() -> dict:
     return {
         "status": "ok" if db_ok else "degraded",
         "database": db_ok,
+        "tables": await table_names() if db_ok else [],
         "scheduler_running": scheduler.scheduler.running,
         "scheduled_jobs": len(scheduler.status()),
         "sourcedata_dir": str(settings.sourcedata_dir),

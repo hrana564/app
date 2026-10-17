@@ -1,0 +1,67 @@
+[2m7:11:10 PM[22m [31m[1m[vite][22m[39m [31mInternal server error: C:\Users\Administrator\Documents\Projects\ALBoomMarine\intelligent-audit-system\app\frontend\src\resources\Ticket.tsx: Expected corresponding JSX closing tag for <MuiTextField>. (174:6)
+
+[0m [90m 172 |[31m         [33m<[31m[33mMenuItem[31m value[33m=[31m[32m"acknowledged"[31m[33m>[31m[33mAcknowledged[31m[33m<[31m[33m/[31m[33mMenuItem[31m[33m>[31m
+ [90m 173 |[31m         [33m<[31m[33mMenuItem[31m value[33m=[31m[32m"dismissed"[31m[33m>[31m[33mDismissed[31m[33m<[31m[33m/[31m[33mMenuItem[31m[33m>[31m
+[31m[1m>[22m[31m[90m 174 |[31m       [33m<[31m[33m/[31m[33mTextField[31m[33m>[31m
+ [90m     |[31m       [31m[1m^[22m[31m
+ [90m 175 |[31m     [33m<[31m[33m/[31m[33mTopToolbar[31m[33m>[31m
+ [90m 176 |[31m   )[33m;[31m
+ [90m 177 |[31m }[33m;[31m[0m[39m
+  Plugin: [35mvite:react-babel[39m
+  File: [36mC:/Users/Administrator/Documents/Projects/ALBoomMarine/intelligent-audit-system/app/frontend/src/resources/Ticket.tsx[39m:174:6
+[33m  172 |          <MenuItem value="acknowledged">Acknowledged</MenuItem>
+  173 |          <MenuItem value="dismissed">Dismissed</MenuItem>
+  174 |        </TextField>
+      |        ^
+  175 |      </TopToolbar>
+  176 |    );[39m
+      at constructor (C:\Users\Administrator\Documents\Projects\ALBoomMarine\intelligent-audit-system\app\frontend\node_modules\@babel\parser\lib\index.js:369:19)
+      at TypeScriptParserMixin.raise (C:\Users\Administrator\Documents\Projects\ALBoomMarine\intelligent-audit-system\app\frontend\node_modules\@babel\parser\lib\index.js:6622:19)
+      at TypeScriptParserMixin.jsxParseElementAt (C:\Users\Administrator\Documents\Projects\ALBoomMarine\intelligent-audit-system\app\frontend\node_modules\@babel\parser\lib\index.js:4745:16)
+      at TypeScriptParserMixin.jsxParseElementAt (C:\Users\Administrator\Documents\Projects\ALBoomMarine\intelligent-audit-system\app\frontend\node_modules\@babel\parser\lib\index.js:4716:32)
+      at TypeScriptParserMixin.jsxParseElement (C:\Users\Administrator\Documents\Projects\ALBoomMarine\intelligent-audit-system\app\frontend\node_modules\@babel\parser\lib\index.js:4767:17)
+      at TypeScriptParserMixin.parseExprAtom (C:\Users\Administrator\Documents\Projects\ALBoomMarine\intelligent-audit-system\app\frontend\node_modules\@babel\parser\lib\index.js:4777:19)
+      at TypeScriptParserMixin.parseExprSubscripts (C:\Users\Administrator\Documents\Projects\ALBoomMarine\intelligent-audit-system\app\frontend\node_modules\@babel\parser\lib\index.js:11107:23)
+      at TypeScriptParserMixin.parseUpdate (C:\Users\Administrator\Documents\Projects\ALBoomMarine\intelligent-audit-system\app\frontend\node_modules\@babel\parser\lib\index.js:11092:21)
+      at TypeScriptParserMixin.parseMaybeUnary (C:\Users\Administrator\Documents\Projects\ALBoomMarine\intelligent-audit-system\app\frontend\node_modules\@babel\parser\lib\index.js:11072:23)
+      at TypeScriptParserMixin.parseMaybeUnary (C:\Users\Administrator\Documents\Projects\ALBoomMarine\intelligent-audit-system\app\frontend\node_modules\@babel\parser\lib\index.js:9860:18)
+      at TypeScriptParserMixin.parseMaybeUnaryOrPrivate (C:\Users\Administrator\Documents\Projects\ALBoomMarine\intelligent-audit-system\app\frontend\node_modules\@babel\parser\lib\index.js:10925:61)
+      at TypeScriptParserMixin.parseExprOps (C:\Users\Administrator\Documents\Projects\ALBoomMarine\intelligent-audit-system\app\frontend\node_modules\@babel\parser\lib\index.js:10930:23)
+      at TypeScriptParserMixin.parseMaybeConditional (C:\Users\Administrator\Documents\Projects\ALBoomMarine\intelligent-audit-system\app\frontend\node_modules\@babel\parser\lib\index.js:10907:23)
+      at TypeScriptParserMixin.parseMaybeAssign (C:\Users\Administrator\Documents\Projects\ALBoomMarine\intelligent-audit-system\app\frontend\node_modules\@babel\parser\lib\index.js:10857:21)
+      at C:\Users\Administrator\Documents\Projects\ALBoomMarine\intelligent-audit-system\app\frontend\node_modules\@babel\parser\lib\index.js:9798:39
+      at TypeScriptParserMixin.tryParse (C:\Users\Administrator\Documents\Projects\ALBoomMarine\intelligent-audit-system\app\frontend\node_modules\@babel\parser\lib\index.js:6930:20)
+      at TypeScriptParserMixin.parseMaybeAssign (C:\Users\Administrator\Documents\Projects\ALBoomMarine\intelligent-audit-system\app\frontend\node_modules\@babel\parser\lib\index.js:9798:18)
+      at C:\Users\Administrator\Documents\Projects\ALBoomMarine\intelligent-audit-system\app\frontend\node_modules\@babel\parser\lib\index.js:10826:39
+      at TypeScriptParserMixin.allowInAnd (C:\Users\Administrator\Documents\Projects\ALBoomMarine\intelligent-audit-system\app\frontend\node_modules\@babel\parser\lib\index.js:12460:12)
+      at TypeScriptParserMixin.parseMaybeAssignAllowIn (C:\Users\Administrator\Documents\Projects\ALBoomMarine\intelligent-audit-system\app\frontend\node_modules\@babel\parser\lib\index.js:10826:17)
+      at TypeScriptParserMixin.parseMaybeAssignAllowInOrVoidPattern (C:\Users\Administrator\Documents\Projects\ALBoomMarine\intelligent-audit-system\app\frontend\node_modules\@babel\parser\lib\index.js:12527:17)
+      at TypeScriptParserMixin.parseParenAndDistinguishExpression (C:\Users\Administrator\Documents\Projects\ALBoomMarine\intelligent-audit-system\app\frontend\node_modules\@babel\parser\lib\index.js:11706:28)
+      at TypeScriptParserMixin.parseExprAtom (C:\Users\Administrator\Documents\Projects\ALBoomMarine\intelligent-audit-system\app\frontend\node_modules\@babel\parser\lib\index.js:11362:23)
+      at TypeScriptParserMixin.parseExprAtom (C:\Users\Administrator\Documents\Projects\ALBoomMarine\intelligent-audit-system\app\frontend\node_modules\@babel\parser\lib\index.js:4782:20)
+      at TypeScriptParserMixin.parseExprSubscripts (C:\Users\Administrator\Documents\Projects\ALBoomMarine\intelligent-audit-system\app\frontend\node_modules\@babel\parser\lib\index.js:11107:23)
+      at TypeScriptParserMixin.parseUpdate (C:\Users\Administrator\Documents\Projects\ALBoomMarine\intelligent-audit-system\app\frontend\node_modules\@babel\parser\lib\index.js:11092:21)
+      at TypeScriptParserMixin.parseMaybeUnary (C:\Users\Administrator\Documents\Projects\ALBoomMarine\intelligent-audit-system\app\frontend\node_modules\@babel\parser\lib\index.js:11072:23)
+      at TypeScriptParserMixin.parseMaybeUnary (C:\Users\Administrator\Documents\Projects\ALBoomMarine\intelligent-audit-system\app\frontend\node_modules\@babel\parser\lib\index.js:9860:18)
+      at TypeScriptParserMixin.parseMaybeUnaryOrPrivate (C:\Users\Administrator\Documents\Projects\ALBoomMarine\intelligent-audit-system\app\frontend\node_modules\@babel\parser\lib\index.js:10925:61)
+      at TypeScriptParserMixin.parseExprOps (C:\Users\Administrator\Documents\Projects\ALBoomMarine\intelligent-audit-system\app\frontend\node_modules\@babel\parser\lib\index.js:10930:23)
+      at TypeScriptParserMixin.parseMaybeConditional (C:\Users\Administrator\Documents\Projects\ALBoomMarine\intelligent-audit-system\app\frontend\node_modules\@babel\parser\lib\index.js:10907:23)
+      at TypeScriptParserMixin.parseMaybeAssign (C:\Users\Administrator\Documents\Projects\ALBoomMarine\intelligent-audit-system\app\frontend\node_modules\@babel\parser\lib\index.js:10857:21)
+      at TypeScriptParserMixin.parseMaybeAssign (C:\Users\Administrator\Documents\Projects\ALBoomMarine\intelligent-audit-system\app\frontend\node_modules\@babel\parser\lib\index.js:9809:20)
+      at TypeScriptParserMixin.parseExpressionBase (C:\Users\Administrator\Documents\Projects\ALBoomMarine\intelligent-audit-system\app\frontend\node_modules\@babel\parser\lib\index.js:10810:23)
+      at C:\Users\Administrator\Documents\Projects\ALBoomMarine\intelligent-audit-system\app\frontend\node_modules\@babel\parser\lib\index.js:10806:39
+      at TypeScriptParserMixin.allowInAnd (C:\Users\Administrator\Documents\Projects\ALBoomMarine\intelligent-audit-system\app\frontend\node_modules\@babel\parser\lib\index.js:12455:16)
+      at TypeScriptParserMixin.parseExpression (C:\Users\Administrator\Documents\Projects\ALBoomMarine\intelligent-audit-system\app\frontend\node_modules\@babel\parser\lib\index.js:10806:17)
+      at TypeScriptParserMixin.parseReturnStatement (C:\Users\Administrator\Documents\Projects\ALBoomMarine\intelligent-audit-system\app\frontend\node_modules\@babel\parser\lib\index.js:13176:28)
+      at TypeScriptParserMixin.parseStatementContent (C:\Users\Administrator\Documents\Projects\ALBoomMarine\intelligent-audit-system\app\frontend\node_modules\@babel\parser\lib\index.js:12832:21)
+      at TypeScriptParserMixin.parseStatementContent (C:\Users\Administrator\Documents\Projects\ALBoomMarine\intelligent-audit-system\app\frontend\node_modules\@babel\parser\lib\index.js:9531:18)
+      at TypeScriptParserMixin.parseStatementLike (C:\Users\Administrator\Documents\Projects\ALBoomMarine\intelligent-audit-system\app\frontend\node_modules\@babel\parser\lib\index.js:12801:17)
+      at TypeScriptParserMixin.parseStatementListItem (C:\Users\Administrator\Documents\Projects\ALBoomMarine\intelligent-audit-system\app\frontend\node_modules\@babel\parser\lib\index.js:12781:17)
+      at TypeScriptParserMixin.parseBlockOrModuleBlockBody (C:\Users\Administrator\Documents\Projects\ALBoomMarine\intelligent-audit-system\app\frontend\node_modules\@babel\parser\lib\index.js:13350:61)
+      at TypeScriptParserMixin.parseBlockBody (C:\Users\Administrator\Documents\Projects\ALBoomMarine\intelligent-audit-system\app\frontend\node_modules\@babel\parser\lib\index.js:13343:10)
+      at TypeScriptParserMixin.parseBlock (C:\Users\Administrator\Documents\Projects\ALBoomMarine\intelligent-audit-system\app\frontend\node_modules\@babel\parser\lib\index.js:13331:10)
+      at TypeScriptParserMixin.parseFunctionBody (C:\Users\Administrator\Documents\Projects\ALBoomMarine\intelligent-audit-system\app\frontend\node_modules\@babel\parser\lib\index.js:12134:24)
+      at TypeScriptParserMixin.parseArrowExpression (C:\Users\Administrator\Documents\Projects\ALBoomMarine\intelligent-audit-system\app\frontend\node_modules\@babel\parser\lib\index.js:12109:10)
+      at TypeScriptParserMixin.parseParenAndDistinguishExpression (C:\Users\Administrator\Documents\Projects\ALBoomMarine\intelligent-audit-system\app\frontend\node_modules\@babel\parser\lib\index.js:11718:12)
+      at TypeScriptParserMixin.parseExprAtom (C:\Users\Administrator\Documents\Projects\ALBoomMarine\intelligent-audit-system\app\frontend\node_modules\@babel\parser\lib\index.js:11362:23)
+      at TypeScriptParserMixin.parseExprAtom (C:\Users\Administrator\Documents\Projects\ALBoomMarine\intelligent-audit-system\app\frontend\node_modules\@babel\parser\lib\index.js:4782:20)

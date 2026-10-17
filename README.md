@@ -1,0 +1,707 @@
+# ABM Audit Portal
+
+**Intelligent Continuous Auditing — Laduree & Al Boom Marine**
+
+A lightweight continuous-auditing platform. Power Automate extracts from client systems into a
+CSV landing zone; this app runs audit rules against it on a schedule, and raises **tickets** that
+auditors review and acknowledge.
+
+Rules are **plain Python files**. There is no rule DSL, no new language to learn, and no engine
+between you and the data.
+
+---
+
+## Contents
+
+1. [What it does](#1-what-it-does)
+2. [Architecture](#2-architecture)
+3. [Data model](#3-data-model)
+4. [The rule contract](#4-the-rule-contract)
+5. [Datasources & cross-system joins](#5-datasources--cross-system-joins)
+6. [Roles](#6-roles)
+7. [Getting started](#7-getting-started)
+8. [Project layout](#8-project-layout)
+9. [Configuration](#9-configuration)
+10. [API reference](#10-api-reference)
+11. [Writing a rule](#11-writing-a-rule)
+12. [Generating rules from a prompt](#12-generating-rules-from-a-prompt)
+13. [Licensing](#13-licensing)
+14. [Power Apps migration path](#14-power-apps-migration-path)
+15. [Testing](#15-testing)
+16. [Known gaps](#16-known-gaps)
+
+---
+
+## 1. What it does
+
+Four entities, and that is the whole product:
+
+| Entity | Meaning |
+|---|---|
+| **Rules** | An audit control, stored as a Python file + DB metadata |
+| **Schedules** | A cron per rule, registered with APScheduler |
+| **Runs** | One execution of one rule against one data date |
+| **Tickets** | The alert an auditor acknowledges |
+
+The execution model is deliberately trivial:
+
+```
+cron fires
+  -> load rules/rule_<id>.py
+  -> build DuckDB views over SourceData/<ENTITY>/<date>/*.csv
+  -> call run(ctx)
+  -> validate the returned dict
+  -> insert a `runs` row
+  -> if rows_returned, insert a `tickets` row
+```
+
+That is the entire engine. Everything of substance lives in the rule file.
+
+---
+
+## 2. Architecture
+
+```
+LAD  Laduree          iPOS (SaaS)   |  Azure Synapse  |  HRMS
+ABM  Al Boom Marine   iPOS          |  HRMS           |  Business Central
+
+Power Automate ──▶ SourceData/<ENTITY>/<YYYY-MM-DD>/<table>.csv
+                        │
+                        ▼
+              APScheduler (per-rule cron)
+                        │
+                        ▼
+              Python Audit Engine ── DuckDB views over the CSV folders
+                        │
+                        ▼
+                  PostgreSQL  ABM_Audit_Portal
+                 rules · rule_versions · schedules · runs · tickets
+                 params · datasources · watermarks · users
+                        │
+                        ▼
+              React UI  (react-admin)   ──▶  later: Power Apps
+```
+
+**Why DuckDB and not a warehouse?** Because the data is already a set of daily CSV folders.
+DuckDB queries them in place with SQL. Nothing is loaded, nothing is duplicated, and there is no
+second copy of the client's data to reconcile.
+
+---
+
+## 3. Data model
+
+Nine tables in `ABM_Audit_Portal`.
+
+```
+users          id, username, password_hash, role, is_active
+datasources    id, entity, name, system, path_template, grain, columns, derived, is_active
+rules          id, code, entity, name, description, severity, query_mode, window_days,
+               status, source_file, current_version, datasource_hint, origin, created_by
+rule_versions  id, rule_id, version, source_code, change_note, created_by, created_at
+schedules      id, rule_id, cron, timezone, enabled, last_run_at, next_run_at, created_by
+runs           id, rule_id, rule_version, schedule_id, data_date, triggered_by,
+               started_at, finished_at, status, summary, metrics, rows,
+               rows_scanned, is_shadow, error_detail, duration_ms
+tickets        id, ticket_no, run_id, rule_id, schedule_id, severity, summary, rows,
+               status, acknowledged_by, acknowledged_at, ack_note, created_at
+params         id, key, label, value_numeric, value_text, description, updated_by
+watermarks     id, rule_id, source_key, last_value, updated_at
+```
+
+Key decisions:
+
+- **`rule_versions` is append-only.** Rollback never deletes history — it creates a *new* version
+  copied from an old one, so the audit trail is immutable.
+- **`metrics` and `rows` are `JSONB`.** Rule output is free-form; the schema should not constrain it.
+- **`tickets.rows` holds the exact rows that caused the failure**, so an auditor sees the evidence
+  without re-running anything.
+- **`params` exists because most audit thresholds are undefined in the source requirements.**
+  Phrases like *"beyond a specified limit (say 50%)"* appear throughout; those become tunable
+  parameters rather than hardcoded numbers.
+
+---
+
+## 4. The rule contract
+
+Every rule file must define exactly one function:
+
+```python
+def run(ctx) -> dict:
+    ...
+```
+
+and return a dict matching `app.schemas.RuleResult`:
+
+```python
+{
+    "status":  "no_rows_returned" | "rows_returned" | "error",
+    "summary": str,     # one line an auditor reads on the ticket
+    "metrics": dict,    # the numbers behind the verdict
+    "rows":    list,    # the rows that caused the breach -> become the ticket
+    "error":   str,     # only for status == "error"
+}
+```
+
+The runner maps this to a run outcome:
+
+| `status` | `runs.status` | ticket raised? |
+|---|---|---|
+| `no_rows_returned` | `pass` | no |
+| `rows_returned` | `fail` | **yes**, carrying `rows` |
+| `error` / raised exception | `error` | no, traceback stored on the run |
+
+The return value is validated by Pydantic, so a malformed rule fails loudly instead of
+corrupting the ledger. A rule that raises an exception is caught — it records `error` with the
+traceback and never takes down the process.
+
+### What `ctx` gives you
+
+| Member | Purpose |
+|---|---|
+| `ctx.table("ipos_sales")` | Quoted view name for `FROM` / `JOIN`. Works inside SQL strings or from Python. |
+| `ctx.sql(query)` | Run read-only SQL. Returns `Result` (`.all()`, `.one()`, `.scalar()`, `.count()`) |
+| `ctx.date` | The data date being audited |
+| `ctx.params` | Tunable thresholds, e.g. `ctx.params.get("lad.last_hour_ratio", 2.0)` |
+| `ctx.log("...")` | Append a note to the run summary |
+| `ctx.count_rows("name")` | Row count of a view |
+
+`ctx.table("x")` inside a SQL string is rewritten to the quoted view name before DuckDB parses
+it, which is what makes this read naturally:
+
+```python
+ctx.sql("SELECT * FROM ctx.table('ipos_sales')")
+```
+
+Referencing an unregistered datasource raises immediately with the list of valid names.
+
+---
+
+## 5. Datasources & cross-system joins
+
+Each entity has its own registry (`backend/app/engine/datasources.py`). A rule only ever sees its
+own entity's tables, so a Laduree rule cannot accidentally read ABM data.
+
+| Entity | System | Tables |
+|---|---|---|
+| **LAD** | iPOS (SaaS) | `ipos_sales`, `ipos_items`, `ipos_voids` |
+| **LAD** | Azure Synapse | `syn_inventory`, `syn_recipes`, `syn_wastage`, `syn_stock_transfers` |
+| **LAD** | HRMS | `hr_employees`, `hr_attendance` |
+| **ABM** | iPOS | `ipos_sales`, `ipos_price_overrides`, `ipos_discounts` |
+| **ABM** | HRMS | `hr_employees`, `hr_attendance` |
+| **ABM** | Business Central | `bc_purchase_orders`, `bc_goods_receipts`, `bc_vendors`, `bc_customer_credit` |
+
+### The sample data is deliberately relatable
+
+Shared keys, **not** remapped ones — that is what lets one rule join three systems:
+
+| Key | Connects |
+|---|---|
+| `employee_id` | HRMS `hr_employees` ↔ iPOS `ipos_sales.staff_id` ↔ BC `approved_by` |
+| `store_id` | consistent across every system |
+| `sku` | iPOS ↔ Synapse inventory / recipes / wastage |
+| `po_number` | BC `bc_purchase_orders` ↔ BC `bc_goods_receipts` |
+| IBAN | HRMS `hr_employees.bank_iban` ↔ BC `bc_vendors.vendor_bank_iban` |
+
+Two of the four seeded rules prove this works:
+
+- **`ABM-CA-22`** joins HRMS employees to Business Central vendors on the IBAN — a payments-fraud
+  indicator (requirements ABM #22/#23).
+- **`LAD-CA-06`** joins iPOS activity to HRMS employment status to find exited staff still
+  transacting (requirement Laduree #9).
+
+---
+
+## 6. Roles
+
+Two roles, seeded once from `.env` and then bcrypt-hashed into PostgreSQL.
+
+| Capability | `admin_user` | `audit_user` |
+|---|:---:|:---:|
+| View rules / schedules / runs / tickets | ✅ | ✅ |
+| **Acknowledge / dismiss / reopen a ticket** | ✅ | ✅ |
+| Trigger a manual run or re-run | ✅ | ✅ |
+| Create / edit / pause a rule | ✅ | ❌ |
+| Generate a rule from a prompt | ✅ | ❌ |
+| Create / edit a schedule | ✅ | ❌ |
+| Edit parameters | ✅ | ❌ |
+| Manage datasources | ✅ | ❌ |
+
+Clean split: **auditors consume and acknowledge; admins author and govern.** This also satisfies
+requirement ABM #30 — *"regulation detail to be updated in the beginning of the year with
+restricted access to modify."*
+
+Enforced in the backend (`require_admin` → HTTP 403) and mirrored in the navigation.
+
+---
+
+## 7. Getting started
+
+### Prerequisites
+
+| Tool | Version used |
+|---|---|
+| Python | 3.14.7 |
+| Node.js | 24.21.0 |
+| PostgreSQL | 18.6 (running on `localhost:5432`) |
+
+> **Note:** `psql` is not on `PATH`. It lives at
+> `C:\Program Files\PostgreSQL\18\bin\psql.exe`.
+
+### Step 1 — create the database
+
+The database name contains underscores and mixed case, so it **must be quoted** or Postgres will
+fold it to lowercase:
+
+```sql
+CREATE DATABASE "ABM_Audit_Portal";
+```
+
+### Step 2 — backend
+
+```bash
+cd backend
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+```
+
+Tables are created automatically on first start (`init_models()`), along with the two users and
+baseline parameters. Start it:
+
+```bash
+.\.venv\Scripts\python.exe -m uvicorn app.main:app --reload --port 8000
+```
+
+- API → http://127.0.0.1:8000
+- Swagger → http://127.0.0.1:8000/docs
+- Health → http://127.0.0.1:8000/health
+
+### Step 3 — sample data
+
+```bash
+.\.venv\Scripts\python.exe scripts\make_sample_data.py
+```
+
+Generates `SourceData/` for both entities across 6 days, with **deliberately planted breaches**:
+
+| Date | Laduree | Al Boom Marine |
+|---|---|---|
+| 2026-10-15 | clean | vendor/employee bank match |
+| 2026-10-16 | **last-hour spike** (LAD-CA-03) | vendor/employee bank match |
+| 2026-10-17 | **single-staff cash dominance** (LAD-CA-04) | vendor/employee bank match |
+| 2026-10-18 | **both** + ex-staff POS activity (LAD-CA-06) | vendor/employee bank match |
+| 2026-10-19 | clean | vendor/employee bank match |
+| 2026-10-20 | clean | vendor/employee bank match |
+
+Without planted breaches you cannot tell a working rule from a broken one.
+
+### Step 4 — frontend
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+→ http://127.0.0.1:5173
+
+Vite proxies `/api` to the backend, so the browser sees a single origin in development.
+
+### Step 5 — sign in
+
+| Username | Password | Role |
+|---|---|---|
+| `admin_user` | `Admin@2026` | admin |
+| `audit_user` | `Audit@2026` | auditor |
+
+---
+
+## 8. Project layout
+
+```
+app/
+├── README.md
+├── SourceData/                     CSV landing zone (generated; gitignored)
+│   ├── LAD/2026-10-15/ipos_sales.csv ...
+│   └── ABM/2026-10-15/bc_vendors.csv ...
+├── backend/
+│   ├── .env / .env.example
+│   ├── requirements.txt
+│   ├── app/
+│   │   ├── main.py                 app factory, health, dashboard, user bootstrap
+│   │   ├── settings.py             env config
+│   │   ├── db.py                   async engine + session
+│   │   ├── models.py               9 tables
+│   │   ├── schemas.py              API contracts + THE RULE CONTRACT
+│   │   ├── security.py             bcrypt + JWT
+│   │   ├── api/
+│   │   │   ├── deps.py             auth + role gating
+│   │   │   ├── auth.py  rules.py  schedules.py  runs.py  tickets.py
+│   │   │   └── params.py  datasources.py
+│   │   └── engine/
+│   │       ├── datasources.py      per-entity registry
+│   │       ├── ctx.py              RuleContext + DuckDB view builder
+│   │       ├── loader.py           rule file load/save
+│   │       ├── runner.py           THE ENGINE
+│   │       ├── scheduler.py        APScheduler wiring
+│   │       └── rule_generator.py   prompt -> draft rule
+│   ├── rules/
+│   │   ├── _template.py
+│   │   ├── rule_1.py   LAD-CA-03   last-hour trading spike
+│   │   ├── rule_2.py   LAD-CA-04   single-staff cash dominance
+│   │   ├── rule_3.py   ABM-CA-22   vendor/employee bank match
+│   │   └── rule_4.py   LAD-CA-06   ex-staff still transacting
+│   └── scripts/
+│       ├── make_sample_data.py     generate SourceData with planted breaches
+│       ├── smoke_test.py           54-assertion end-to-end test
+│       └── check_licenses.py       license gate
+└── frontend/
+    ├── vite.config.ts              dev proxy to :8000
+    └── src/
+        ├── App.tsx                 Admin + resources
+        ├── dataProvider.ts         the ONLY module that talks to the API
+        ├── authProvider.ts
+        ├── theme.ts
+        ├── components/ui.tsx       chips, JSON block, code block, rows table
+        ├── pages/       Login.tsx  Dashboard.tsx
+        └── resources/   Rule.tsx  Run.tsx  Ticket.tsx  Meta.tsx
+```
+
+---
+
+## 9. Configuration
+
+`backend/.env` (gitignored). `.env.example` is the committed template.
+
+```ini
+# --- Database ---
+POSTGRES_HOST=localhost
+POSTGRES_PORT=5432
+POSTGRES_USER=postgres
+POSTGRES_PASSWORD=postgres
+POSTGRES_DB=ABM_Audit_Portal
+
+# --- Auth ---
+JWT_SECRET=<random>          # auto-generated ephemeral secret if blank
+JWT_ALGORITHM=HS256
+ACCESS_TOKEN_EXPIRE_HOURS=8
+
+# --- Bootstrap users (seeded once) ---
+ADMIN_USERNAME=admin_user
+ADMIN_PASSWORD=Admin@2026
+AUDITOR_USERNAME=audit_user
+AUDITOR_PASSWORD=Audit@2026
+
+# --- LLM for rule generation (any OpenAI-compatible endpoint) ---
+LLM_BASE_URL=                 # blank disables prompt -> rule generation
+LLM_API_KEY=
+LLM_MODEL=
+
+# --- Paths ---
+SOURCEDATA_DIR=../SourceData
+RULES_DIR=./rules
+
+# --- Guardrails ---
+RULE_TIMEOUT_SECONDS=120
+MAX_ROWS_IN_TICKET=500
+
+# --- CORS ---
+CORS_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
+```
+
+---
+
+## 10. API reference
+
+All endpoints except `/health`, `/api/auth/login` and `/api/dashboard` require
+`Authorization: Bearer <token>`.
+
+### Auth
+| Method | Path | Role | Description |
+|---|---|---|---|
+| POST | `/api/auth/login` | — | `{username, password}` → JWT + user |
+| GET | `/api/auth/me` | any | Current user |
+
+### Rules
+| Method | Path | Role | Description |
+|---|---|---|---|
+| GET | `/api/rules` | any | `?page&perPage&sort&order&status&entity&q` |
+| GET | `/api/rules/{id}` | any | One rule |
+| GET | `/api/rules/{id}/source` | any | Python source |
+| GET | `/api/rules/{id}/versions` | any | Version history |
+| POST | `/api/rules` | admin | Create (bumps to v1) |
+| PUT | `/api/rules/{id}` | admin | Update; new `source_code` → new version |
+| POST | `/api/rules/{id}/rollback/{version}` | admin | Roll back = new version from old |
+| DELETE | `/api/rules/{id}` | admin | Delete |
+| POST | `/api/rules/{id}/test` | any | Dry-run against a date (`{data_date, shadow}`) |
+| GET | `/api/rules/generate/status` | any | Is the LLM configured? |
+| GET | `/api/rules/generate/context?entity=LAD` | any | What the LLM would be shown |
+| POST | `/api/rules/generate` | admin | Prompt → **draft** rule |
+
+### Schedules / Runs / Tickets / Params / Datasources
+| Method | Path | Role | Description |
+|---|---|---|---|
+| GET/POST | `/api/schedules` | any / admin | List / create |
+| GET/PUT/DELETE | `/api/schedules/{id}` | any / admin | Read / update / delete |
+| GET | `/api/schedules/cron/jobs` | any | Live APScheduler jobs |
+| GET | `/api/runs` | any | `?status&rule_id&page&perPage` |
+| GET | `/api/runs/summary` | any | Counts by status |
+| GET | `/api/runs/{id}` | any | One run |
+| POST | `/api/runs/{id}/rerun` | any | Re-run same rule + date |
+| GET | `/api/tickets` | any | `?status&severity&rule_id` |
+| GET | `/api/tickets/summary` | any | Counts + open by severity |
+| GET | `/api/tickets/{id}` | any | One ticket |
+| POST | `/api/tickets/{id}/acknowledge` | **any** | `{status, note}` |
+| POST | `/api/tickets/{id}/reopen` | any | Back to open |
+| GET/PUT | `/api/params`, `/api/params/{key}` | any / admin | Tunable thresholds |
+| GET | `/api/params/as-dict` | any | Exactly what `ctx.params` sees |
+| GET | `/api/datasources` | any | Registry (+ `?entity=`) |
+| GET | `/api/datasources/entities` | any | The two entities and their systems |
+| GET | `/api/datasources/available-dates?entity=LAD` | any | Day folders present |
+| GET | `/api/dashboard` | — | Aggregated counters (unauthenticated, for the login screen) |
+
+---
+
+## 11. Writing a rule
+
+Copy `backend/rules/_template.py` to `rules/rule_<id>.py`.
+
+```python
+def run(ctx) -> dict:
+    limit = float(ctx.params.get("lad.last_hour_ratio", 2.0))
+
+    totals = ctx.sql(f"""
+        SELECT sum(invoice_value) FILTER (WHERE hour = 23) AS last_hour,
+               sum(invoice_value) FILTER (WHERE hour < 23)
+                 / nullif(count(DISTINCT hour) FILTER (WHERE hour < 23), 0) AS hourly_avg
+        FROM ctx.table("ipos_sales")
+        WHERE NOT is_void AND item_group IN ('RETAIL','BAR')
+    """).one()
+
+    if not totals or not totals["last_hour"]:
+        return {"status": "no_rows_returned", "summary": "No trading data", "metrics": {}}
+
+    ratio = totals["last_hour"] / totals["hourly_avg"] if totals["hourly_avg"] else 0
+
+    if ratio <= limit:
+        return {"status": "no_rows_returned",
+                "summary": f"Ratio {ratio:.2f}x within limit {limit}x",
+                "metrics": {"ratio": round(ratio, 3)}}
+
+    rows = ctx.sql(f"""
+        SELECT invoice_id, invoice_ts, store_id, staff_id, invoice_value
+        FROM ctx.table("ipos_sales")
+        WHERE hour = 23 AND NOT is_void
+        ORDER BY invoice_value DESC LIMIT 200
+    """).all()
+
+    return {"status": "rows_returned",
+            "summary": f"Last hour {ratio:.2f}x the hourly average",
+            "metrics": {"ratio": round(ratio, 3), "limit": limit},
+            "rows": rows}
+```
+
+Register it via `POST /api/rules` (the server writes the file and creates version 1), or use the
+**Generate rule from prompt** button in the UI.
+
+### Guidelines
+
+- Read thresholds from `ctx.params` so auditors tune without a code change.
+- Guard against a missing day folder — `build_views` registers an empty view, so aggregate
+  functions return `NULL`.
+- Cast numbers before string interpolation (`float(x)`), never raw user input.
+- Only import from `json`, `datetime`, `statistics`, `math`, `decimal`.
+- Never import `os` / `sys` / `subprocess` / `socket`, never call `open()`.
+
+### Query modes
+
+| Mode | Views span | Use for |
+|---|---|---|
+| `SNAPSHOT` | one day folder | Most daily controls |
+| `WINDOW` | last `window_days` folders | Ageing: "stock in transit > 5 days" |
+| `DELTA` | one day folder + watermark | Incremental extraction controls |
+
+---
+
+## 12. Generating rules from a prompt
+
+Admin only. Available from **Rules → Generate rule from prompt**.
+
+1. Pick the client entity (the model only sees that entity's datasources).
+2. Describe the control in plain language.
+3. The model receives the datasource registry **with real column samples from the target date**
+   plus the rule contract and a reference implementation, so it cannot invent columns.
+4. Output is structurally validated (`def run(ctx)` present, both statuses used, no banned
+   imports) and stored as a **draft**.
+5. A human reads the source, runs a test against a real date, then promotes to `active`.
+
+The generated rule is never auto-approved. For audit tooling, a human should read the logic
+before it raises tickets.
+
+Configure any OpenAI-compatible endpoint — Azure AI Foundry, Azure OpenAI, Ollama, MiniMax:
+
+```ini
+LLM_BASE_URL=https://your-endpoint/v1
+LLM_API_KEY=sk-...
+LLM_MODEL=your-model
+```
+
+---
+
+## 13. Licensing
+
+Every dependency is permissively licensed and the rule is **enforced, not asserted**:
+
+```bash
+.\.venv\Scripts\python.exe scripts\check_licenses.py
+```
+
+Current result: **52 permitted, 1 review, 0 unknown, 0 blocked.**
+
+| Layer | Package | License |
+|---|---|---|
+| API | `fastapi` | MIT |
+| | `uvicorn` | BSD-3-Clause |
+| | `pydantic` | MIT |
+| DB | `sqlalchemy` | MIT |
+| | `asyncpg` | **Apache-2.0** |
+| Query | `duckdb` | MIT |
+| Sched | `apscheduler` | MIT |
+| Auth | `pyjwt` | MIT |
+| | `bcrypt` | Apache-2.0 |
+| LLM | `openai` | Apache-2.0 |
+| Misc | `orjson` | Apache-2.0 **or** MIT |
+| | `croniter` | MIT |
+| Frontend | `react`, `react-dom` | MIT |
+| | `react-admin` | MIT |
+| | `@mui/material` | MIT (core only) |
+| | `vite` | MIT |
+| | `typescript` | Apache-2.0 |
+
+### The policy, honestly
+
+A 100% "Apache or MIT only" tree is **not achievable**, and claiming otherwise would be
+misleading. FastAPI transitively requires Starlette (BSD-3-Clause), uvicorn is BSD-3-Clause, and
+`certifi` (via httpx) is MPL-2.0.
+
+BSD-3 and ISC sit in the same permissive tier as MIT — attribution only. The one material
+difference is that Apache-2.0 grants an explicit **patent** licence.
+
+So the enforced policy is:
+
+- **Allowed:** Apache-2.0, MIT, BSD-2/3, ISC, PSF, Zlib
+- **Blocked:** GPL, AGPL, LGPL, SSPL, BUSL, Elastic, proprietary
+- **Review (non-fatal):** MPL-2.0 and anything unclassifiable
+- **Blocked regardless:** anything that relicenses later — the Soda Core / Grafana / n8n trap
+
+This blocks every license that has actually bitten a project. Two real examples this avoids:
+
+- **Soda Core** replaced its Apache-2.0 LICENSE with **Elastic License 2.0** in the v4 release
+  (Jan 2026); v4.21.0 declares itself "Proprietary" on PyPI.
+- **RestrictedPython** (the usual Python sandbox) is **ZPL 2.1**, not Apache/MIT, *and* carries a
+  published RCE (CVE-2023-37271). It is excluded twice over.
+
+`psycopg` is **LGPL-3.0** and was replaced by `asyncpg` (Apache-2.0) purely to satisfy this policy.
+
+---
+
+## 14. Power Apps migration path
+
+The frontend was built with this in mind. Three things are already done:
+
+**1. One API client.** `frontend/src/dataProvider.ts` is the only module that talks to the
+backend. Swapping it later does not touch a single screen.
+
+**2. Single-origin in dev.** Vite proxies `/api` to the backend, so there is one base URL.
+
+**3. REST-only API.** No websocket, no server push, no file upload.
+
+### Option A — Web View control (cheapest, works today)
+
+Host the production build anywhere (Azure Static Web Apps / App Service) and add a Power Apps
+**Web View** control pointing at it. No Power Platform tooling, no connector.
+
+```bash
+cd frontend && npm run build     # -> frontend/dist
+```
+
+### Option B — Custom connector (native galleries and tables)
+
+Add a Power Automate **custom connector** over the same REST API when you need the data inside
+native Power Apps controls. Three constraints must shape the API — they already largely do:
+
+| Constraint | Consequence | Status |
+|---|---|---|
+| Connectors require **Swagger 2.0**, FastAPI emits OpenAPI 3.1 | Convert and commit `swagger.json` (< 1 MB) | ⬜ not done |
+| Power Apps **cannot call your API directly** — every call routes through a Power Automate flow | Design **aggregate** endpoints only, never chatty per-row calls | ✅ `/api/dashboard`, `/api/tickets/summary`, `/api/runs/summary` are aggregates |
+| Connectors **do not support client-credentials** | Use API-key or OAuth 2.0 delegated, or front with API Management | ⬜ decide before prod |
+
+### Option C — PCF React control
+
+Compile components into a native Power Apps control with `pac pcf init`. Best UX, most work, and
+it locks you into Power Platform tooling. Keep in reserve.
+
+---
+
+## 15. Testing
+
+### End-to-end smoke test
+
+With the API running:
+
+```bash
+cd backend
+.\.venv\Scripts\python.exe scripts\smoke_test.py
+```
+
+54 assertions covering: health, both logins, rejection of bad credentials and missing tokens,
+RBAC for all four admin-only endpoints, both entities and their systems, datasource listing,
+parameters, rule registration, source and version round-trip, per-entity isolation,
+clean-day pass / breach-day fail for all four rules, both cross-system joins, ticket numbering,
+JSON serialisation of timestamps, acknowledge → double-ack rejection → reopen, schedule creation
+with RBAC, cron validation, APScheduler job registration, run ledger, dashboard and generation
+status.
+
+```
+RESULT: 54 passed, 0 failed
+```
+
+### License gate
+
+```bash
+.\.venv\Scripts\python.exe scripts\check_licenses.py   # exit 1 on any blocked license
+```
+
+### Frontend
+
+```bash
+cd frontend
+npm run typecheck
+npm run build
+```
+
+---
+
+## 16. Known gaps
+
+Honest list of what is **not** done yet:
+
+| Gap | Impact | Notes |
+|---|---|---|
+| **No schema migrations** | Tables created via `create_all` | Fine in dev; add Alembic before the schema stops moving |
+| **No rule sandbox** | LLM-generated Python runs in-process | Acceptable while only your devs write rules. **Mandatory hardening** if auditors type prompts and never read the diff: subprocess isolation, read-only data mount, no network, CPU/memory/time limits. RestrictedPython is *not* a substitute — see §13. |
+| **No pagination beyond `perPage`** | Large tables return capped pages | Fine for dev volumes |
+| **No rule deletion from the UI** | API supports `DELETE` | Admin button not wired |
+| **No Swagger 2.0 export** | Blocks Power Apps custom connector | §14 option B |
+| **No requirements traceability** | The 129 requirement line items are not seeded | Worth doing — it makes the 78%/93%/95% coverage figures in the architecture docs computable |
+| **`WINDOW` mode untested with data** | Only `SNAPSHOT` is exercised by the sample set | Ageing controls (stock in transit, GRN pending) still need real fixtures |
+| **Single scheduler process** | Running multiple API workers would duplicate jobs | Run **one** API worker, or move to Celery/Redis |
+| **No alert notification** | Tickets only appear in the UI | Email/Teams via Power Automate when needed |
+
+### A note on the original "FSCS" label
+
+The source requirements workbook has an `ABM` sheet and an `FSCS` sheet. The FSCS sheet covers
+*bar items, recipe management, lab production, events and stock counts* — that is a food-service
+audit universe, which matches **Laduree**. This build treats the two client entities as
+`LAD` (Laduree) and `ABM` (Al Boom Marine). If FSCS is in fact a third client, it needs its own
+entry in `REGISTRY_BY_ENTITY` and its own `SourceData/FSCS/` tree — the registry is keyed by
+entity precisely so this is additive.

@@ -1,0 +1,38 @@
+# ---------------------------------------------------------------------------
+# ABM Audit Portal - backend dependencies
+#
+# LICENSE POLICY
+#   Allowed : Apache-2.0, MIT, BSD-2/3-Clause, ISC  (permissive, attribution only)
+#   Blocked : GPL, LGPL, AGPL, SSPL, BUSL, Elastic, and any source-available relicensing
+#
+# Verify with:  python scripts/check_licenses.py
+#
+# NOTE: FastAPI transitively requires Starlette (BSD-3-Clause) and uvicorn is
+#       BSD-3-Clause. BSD-3 is treated as permitted - see README "Licensing".
+# ---------------------------------------------------------------------------
+
+fastapi==0.143.3
+uvicorn[standard]==0.54.0
+pydantic==2.12.4
+pydantic-settings==2.12.0
+
+sqlalchemy[asyncio]==2.1.5
+asyncpg==0.31.0
+
+duckdb==1.5.6
+apscheduler==3.11.3
+croniter==6.0.0
+orjson==3.11.7
+
+pyjwt==2.10.1
+bcrypt==5.0.0
+python-dotenv==1.2.1
+
+# Rule generation via any OpenAI-compatible endpoint (Foundry / Azure / Ollama / MiniMax)
+openai==2.14.0
+
+# --- dev / tooling ---
+# NOTE: pytest-asyncio 1.2.0 requires pytest <9, hence the cap below.
+pytest>=8.3,<9
+pytest-asyncio==1.2.0
+pip-licenses==6.0.0b13

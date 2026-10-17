@@ -1,0 +1,9 @@
+INFO:     Started server process [8084]
+INFO:     Waiting for application startup.
+2026-10-17 18:55:50,497 INFO    abm  starting ABM Audit Portal API
+2026-10-17 18:55:50,619 INFO    apscheduler.scheduler  Scheduler started
+2026-10-17 18:55:50,620 INFO    abm.scheduler  scheduler started
+2026-10-17 18:55:50,624 INFO    abm.scheduler  scheduler loaded 0 job(s)
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
+2026-10-17 19:07:13,429 INFO    apscheduler.scheduler  Added job "run_schedule_job" to job store "default"

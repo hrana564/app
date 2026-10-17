@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+*.egg-info/
+
+# Logs (uvicorn / vite)
+*.log
+
+# Secrets
+.env
+*.env.local
+
+# Node
+node_modules/
+dist/
+.vite/
+npm-debug.log*
+
+# SourceData: keep folder shape, ignore generated CSV payloads
+SourceData/**/*.csv
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

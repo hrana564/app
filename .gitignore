@@ -9,6 +9,7 @@ venv/
 
 # Logs (uvicorn / vite)
 *.log
+*.log.*
 
 # Secrets
 .env

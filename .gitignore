@@ -11,6 +11,11 @@ venv/
 *.log
 *.log.*
 
+# Rules written by the app at runtime (rules/rule_<db_id>.py). The four seed
+# rules rule_1..rule_4 are tracked; anything else here is generated output.
+backend/rules/rule_[0-9][0-9].py
+!backend/rules/rule_[1-4].py
+
 # Secrets
 .env
 *.env.local

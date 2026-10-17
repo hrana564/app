@@ -217,8 +217,41 @@ export const api = {
       body: JSON.stringify({ prompt, entity }),
     }),
 
+  updateRule: (id: number, payload: Record<string, unknown>) =>
+    request<any>(`/api/rules/${id}`, { method: "PUT", body: JSON.stringify(payload) }),
+
   entities: () => request<any>("/api/datasources/entities"),
   availableDates: (entity: string) =>
     request<any>(`/api/datasources/available-dates?entity=${entity}`),
-  schedulerJobs: () => request<any>("/api/schedules/cron/jobs"),
+
+  // --- rule schedules (friendly cadence, never raw cron) ---
+  cadenceOptions: () => request<any>("/api/rule-schedules/cadence-options"),
+  cadencePreview: (payload: {
+    kind: string;
+    config: Record<string, any>;
+    timezone: string;
+    count?: number;
+  }) =>
+    request<any>("/api/rule-schedules/cadence-preview", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  listSchedules: (ruleId: number) =>
+    request<{ data: any[] }>(`/api/rule-schedules?rule_id=${ruleId}`),
+  createSchedule: (payload: any) =>
+    request<any>("/api/rule-schedules", { method: "POST", body: JSON.stringify(payload) }),
+  updateSchedule: (id: number, payload: any) =>
+    request<any>(`/api/rule-schedules/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    }),
+  deleteSchedule: (id: number) =>
+    request<void>(`/api/rule-schedules/${id}`, { method: "DELETE" }),
+  schedulerJobs: () => request<any>("/api/rule-schedules/cron/jobs"),
+
+  // --- rule lifecycle ---
+  validateRule: (id: number) =>
+    request<any>(`/api/rules/${id}/validate`, { method: "POST" }),
+  validationReport: (id: number) =>
+    request<any>(`/api/rules/${id}/validate-report`),
 };

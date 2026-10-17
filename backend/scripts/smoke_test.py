@@ -12,6 +12,7 @@ Usage:  python scripts/smoke_test.py [base_url]
 from __future__ import annotations
 
 import sys
+from datetime import datetime
 from pathlib import Path
 
 import httpx
@@ -80,6 +81,10 @@ def check(label: str, ok: bool, detail: str = "") -> None:
     else:
         failures += 1
         print(f"  FAIL  {label}  {detail}")
+
+
+def section(title: str) -> None:
+    print(f"\n[{title}]")
 
 
 def main() -> int:
@@ -201,6 +206,24 @@ def main() -> int:
             print("\nAborting: could not register all rules.")
             return 1
 
+        # --- validate + activate ------------------------------------------
+        # A rule cannot be activated until it passes validation, and only active
+        # rules get their schedules registered with APScheduler.
+        section("validate and activate")
+        for code, rid in rule_ids.items():
+            rep = c.post(f"/api/rules/{rid}/validate", headers=ah).json()
+            check(
+                f"{code} passes validation",
+                rep["status"] == "valid",
+                f"{rep['status']}: {rep['errors']}"[:160],
+            )
+            a = c.put(f"/api/rules/{rid}", headers=ah, json={"status": "active"})
+            check(
+                f"{code} activated",
+                a.status_code == 200 and a.json()["status"] == "active",
+                f"{a.status_code} {a.text[:120]}",
+            )
+
         r = c.get(f"/api/rules/{rule_ids['LAD-CA-03']}/source", headers=ud)
         check("source readable", r.status_code == 200 and "def run(ctx)" in r.json()["source_code"])
         r = c.get(f"/api/rules/{rule_ids['LAD-CA-03']}/versions", headers=ud)
@@ -306,44 +329,216 @@ def main() -> int:
             r = c.post(f"/api/tickets/{open_ticket['id']}/reopen", headers=ud)
             check("reopen works", r.status_code == 200 and r.json()["status"] == "open")
 
-        # --- schedules ----------------------------------------------------------
-        print("\n[schedules]")
+        # --- friendly cadence (no raw cron anywhere in the UI) ---------------
+        section("friendly cadence")
+        opts = c.get("/api/rule-schedules/cadence-options", headers=ud).json()
+        check("cadence options exposed", len(opts["presets"]) > 0 and len(opts["kinds"]) == 6)
+        check("monthly capped at day 28", opts["max_day_of_month"] == 28)
+        check("hourly intervals limited", opts["hourly_intervals"] == [1, 2, 3, 4, 6, 8, 12])
+
         r = c.post(
-            "/api/schedules", headers=ud,
-            json={"rule_id": rule_ids["LAD-CA-03"], "cron": "30 6 * * *", "enabled": True},
+            "/api/rule-schedules/cadence-preview", headers=ud,
+            json={"kind": "DAILY", "config": {"time_of_day": "06:30"},
+                  "timezone": "Asia/Dubai", "count": 3},
+        ).json()
+        check("preview derives cron from friendly config", r["ok"] and r["cron"] == "30 06 * * *", str(r))
+        check("preview label is plain English", r["cadence_label"] == "Daily at 06:30", r["cadence_label"])
+        check("preview returns real fire times", len(r["upcoming"]) == 3, str(r.get("upcoming"))[:120])
+        first = datetime.fromisoformat(r["upcoming"][0])
+        check("preview respects the timezone", str(first.utcoffset()) == "4:00:00", str(first))
+
+        for bad_kind, bad_cfg, why in [
+            ("MONTHLY", {"time_of_day": "07:00", "day_of_month": 31}, "day 31 must be rejected"),
+            ("WEEKLY", {"time_of_day": "07:00", "days_of_week": [9]}, "out-of-range weekday rejected"),
+            ("HOURLY", {"time_of_day": "00:00", "interval_hours": 7}, "non-dividing interval rejected"),
+            ("CUSTOM", {"cron_override": "not a cron"}, "garbage cron rejected"),
+        ]:
+            r = c.post(
+                "/api/rule-schedules/cadence-preview", headers=ud,
+                json={"kind": bad_kind, "config": bad_cfg},
+            ).json()
+            check(why, r["ok"] is False and r["problems"], str(r)[:140])
+
+        # --- multiple schedules per rule ---------------------------------------
+        section("multiple schedules per rule")
+        r03 = rule_ids["LAD-CA-03"]
+        existing = c.get("/api/rule-schedules", headers=ud, params={"rule_id": r03}).json()["data"]
+        for s in existing:
+            c.delete(f"/api/rule-schedules/{s['id']}", headers=ah)
+
+        created = []
+        for label, kind, cfg in [
+            ("Daily control", "DAILY", {"time_of_day": "06:30"}),
+            ("Intraday sweep", "HOURLY", {"time_of_day": "00:00", "interval_hours": 6}),
+            ("Month-end deep dive", "MONTHLY", {"time_of_day": "07:00", "day_of_month": 28}),
+        ]:
+            r = c.post(
+                "/api/rule-schedules", headers=ah,
+                json={"rule_id": r03, "label": label, "kind": kind, "config": cfg,
+                      "timezone": "Asia/Dubai", "data_lag_days": 1},
+            )
+            if r.status_code == 201:
+                created.append(r.json())
+        check("three cadences on one rule", len(created) == 3, f"got {len(created)}")
+        if len(created) == 3:
+            check(
+                "cadence labels are human readable",
+                {s["cadence_label"] for s in created} == {
+                    "Daily at 06:30", "Every 6 hours",
+                    "Monthly on day 28 (last day of month) at 07:00",
+                },
+                str([s["cadence_label"] for s in created]),
+            )
+            check("each has its own next run", len({s["next_run_at"] for s in created}) == 3)
+
+            jobs = c.get("/api/rule-schedules/cron/jobs", headers=ud).json()["jobs"]
+            registered = {j["id"] for j in jobs}
+            check(
+                "every schedule registered with APScheduler",
+                all(f"rule_schedule_{s['id']}" in registered for s in created),
+                str(sorted(registered))[:200],
+            )
+
+            r = c.post(
+                "/api/rule-schedules", headers=ah,
+                json={"rule_id": r03, "kind": "DAILY", "config": {"time_of_day": "06:30"}},
+            )
+            check("duplicate cadence rejected (409)", r.status_code == 409, f"got {r.status_code}")
+
+        r = c.post(
+            "/api/rule-schedules", headers=ud,
+            json={"rule_id": r03, "kind": "DAILY", "config": {"time_of_day": "06:30"}},
         )
         check("auditor CANNOT create schedules", r.status_code == 403, f"got {r.status_code}")
 
-        existing_sched = c.get(
-            "/api/schedules", headers=ud, params={"rule_id": rule_ids["LAD-CA-03"]}
-        ).json()["data"]
-        r = c.post(
-            "/api/schedules", headers=ah,
-            json={"rule_id": rule_ids["LAD-CA-03"], "cron": "30 6 * * *", "enabled": True},
+        r = c.put(f"/api/rules/{r03}", headers=ah, json={"status": "paused"})
+        check("rule paused", r.status_code == 200 and r.json()["status"] == "paused")
+        jobs = c.get("/api/rule-schedules/cron/jobs", headers=ud).json()["jobs"]
+        check(
+            "pausing the rule deregisters its schedules",
+            not any(j["id"].startswith("rule_schedule_") for j in jobs),
+            str([j["id"] for j in jobs])[:200],
         )
-        if r.status_code == 201:
-            sched = r.json()
-            check(
-                f"schedule created cron='{sched['cron']}' next={sched['next_run_at']}",
-                sched["enabled"],
-            )
-            jobs = c.get("/api/schedules/cron/jobs", headers=ud).json()
-            check(
-                "job registered with APScheduler",
-                any(j["id"] == f"schedule_{sched['id']}" for j in jobs["jobs"]),
-                str(jobs)[:200],
-            )
-            r = c.post(
-                "/api/schedules", headers=ah,
-                json={"rule_id": rule_ids["LAD-CA-04"], "cron": "not a cron"},
-            )
-            check("invalid cron rejected", r.status_code == 400, f"got {r.status_code}")
-            r = c.put(f"/api/schedules/{sched['id']}", headers=ah, json={"enabled": False})
-            check("schedule disabled", r.status_code == 200 and not r.json()["enabled"])
-        elif existing_sched and r.status_code == 409:
-            check("schedule already exists (409 duplicate guard)", True)
+        c.put(f"/api/rules/{r03}", headers=ah, json={"status": "active"})
+        jobs = c.get("/api/rule-schedules/cron/jobs", headers=ud).json()["jobs"]
+        check(
+            "reactivating re-registers them",
+            sum(1 for j in jobs if j["id"].startswith("rule_schedule_")) >= 3,
+            str([j["id"] for j in jobs])[:200],
+        )
+
+        # --- validation gate --------------------------------------------------
+        section("validation gate")
+        for code, rid in rule_ids.items():
+            rep = c.get(f"/api/rules/{rid}/validate-report", headers=ud).json()
+            check(f"{code} is validated", rep["status"] == "valid", str(rep)[:140])
+
+        bad_rule = "import os\ndef run(ctx):\n    return {'status':'no_rows_returned'}\n"
+        r = c.post(
+            "/api/rules", headers=ah,
+            json={"code": "SMOKE-BAD-1", "name": "banned import", "entity": "LAD",
+                  "source_code": bad_rule, "status": "draft"},
+        )
+        bad_id = r.json()["id"]
+        rep = c.post(f"/api/rules/{bad_id}/validate", headers=ud).json()
+        check("banned import rejected", rep["status"] == "invalid" and rep["errors"], str(rep)[:160])
+        r = c.put(f"/api/rules/{bad_id}", headers=ah, json={"status": "active"})
+        check("invalid rule cannot be activated", r.status_code == 409, f"got {r.status_code}")
+
+        cross = (
+            'def run(ctx):\n'
+            '    rows = ctx.sql(\'SELECT * FROM ctx.table("bc_vendors")\').all()\n'
+            '    return {"status": "no_rows_returned", "rows": []}\n'
+        )
+        r = c.put(f"/api/rules/{bad_id}", headers=ah,
+                  json={"source_code": cross, "change_note": "cross-entity table"})
+        rep = c.post(f"/api/rules/{bad_id}/validate", headers=ud).json()
+        check(
+            "cross-entity table reference caught inside an SQL string",
+            rep["status"] == "invalid"
+            and any("bc_vendors" in e for e in rep["errors"]),
+            str(rep)[:200],
+        )
+        c.delete(f"/api/rules/{bad_id}", headers=ah)
+
+        # --- alert policy + dedup ---------------------------------------------
+        section("alert policy and deduplication")
+        c.put(f"/api/rules/{r03}", headers=ah,
+              json={"ticket_mode": "ONE_PER_RUN", "dedupe_mode": "PER_DATA_DATE",
+                    "alerting_enabled": True})
+
+        def ticket_count() -> int:
+            return c.get("/api/tickets", headers=ud,
+                         params={"rule_id": r03, "perPage": 200}).json()["total"]
+
+        # Asserted on ticket IDENTITY, not on absolute counts, so the suite is
+        # re-runnable: a previous run may already have opened a ticket for this
+        # data date, in which case this run bumps it instead of creating one.
+        DEDUPE_DAY = "2026-10-18"
+
+        def ticket_ids() -> set:
+            return {
+                t["id"] for t in c.get("/api/tickets", headers=ud,
+                                       params={"rule_id": r03, "perPage": 200}).json()["data"]
+            }
+
+        ids_before = ticket_ids()
+        c.post(f"/api/rules/{r03}/test", headers=ud, json={"data_date": DEDUPE_DAY})
+        ids_after_first = ticket_ids()
+
+        new_first = ids_after_first - ids_before
+        if new_first:
+            check("first failing run raises a new ticket", True)
         else:
-            check("schedule created", False, f"{r.status_code} {r.text[:200]}")
+            # Already-open ticket for this date from an earlier suite run: the
+            # run must have bumped it instead. Verify the bump happened.
+            bumped_id = max(ids_after_first) if ids_after_first else None
+            t = next((x for x in c.get("/api/tickets", headers=ud,
+                                       params={"rule_id": r03, "perPage": 200}).json()["data"]
+                      if x["id"] == bumped_id), None)
+            check("run bumps the existing ticket rather than duplicating it",
+                  bool(t) and t["occurrences"] >= 2,
+                  str(t)[:160] if t else "no ticket")
+
+        ids_before_repeat = ticket_ids()
+        c.post(f"/api/rules/{r03}/test", headers=ud, json={"data_date": DEDUPE_DAY})
+        check("repeat on same data date does NOT add a ticket",
+              ticket_ids() == ids_before_repeat,
+              f"new ids: {sorted(ticket_ids() - ids_before_repeat)}")
+
+        rows = c.get("/api/tickets", headers=ud,
+                     params={"rule_id": r03, "perPage": 10}).json()["data"]
+        bumped = next((t for t in rows if t["occurrences"] >= 2), None)
+        check("repeat bumps the occurrence count", bumped is not None,
+              str([(t['ticket_no'], t['occurrences']) for t in rows])[:160])
+
+        if bumped:
+            c.post(f"/api/tickets/{bumped['id']}/acknowledge", headers=ud,
+                   json={"status": "acknowledged", "note": "smoke"})
+            ids_before_new = ticket_ids()
+            c.post(f"/api/rules/{r03}/test", headers=ud, json={"data_date": DEDUPE_DAY})
+            check(
+                "a breach that persists after acknowledgement opens a NEW ticket",
+                bool(ticket_ids() - ids_before_new),
+                "no new ticket after acknowledging",
+            )
+
+        c.put(f"/api/rules/{r03}", headers=ah, json={"dedupe_mode": "NONE"})
+        before_none = ticket_count()
+        c.post(f"/api/rules/{r03}/test", headers=ud, json={"data_date": DEDUPE_DAY})
+        c.post(f"/api/rules/{r03}/test", headers=ud, json={"data_date": DEDUPE_DAY})
+        check("dedupe NONE always adds a ticket",
+              ticket_count() == before_none + 2, f"{before_none} -> {ticket_count()}")
+
+        c.put(f"/api/rules/{r03}", headers=ah,
+              json={"dedupe_mode": "PER_DATA_DATE", "alerting_enabled": False})
+        before_mute = ticket_count()
+        run = c.post(f"/api/rules/{r03}/test", headers=ud,
+                     json={"data_date": DEDUPE_DAY}).json()
+        check("alerting muted: run still executes", run["status"] == "fail", run.get("status"))
+        check("alerting muted: no ticket raised",
+              ticket_count() == before_mute, f"{before_mute} -> {ticket_count()}")
+        c.put(f"/api/rules/{r03}", headers=ah, json={"alerting_enabled": True})
 
         # --- runs + dashboard ----------------------------------------------------
         print("\n[runs ledger and dashboard]")

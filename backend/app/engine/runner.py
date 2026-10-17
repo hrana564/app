@@ -18,9 +18,12 @@ import time
 import traceback
 # `time` is aliased because a bare `from datetime import time` would shadow the
 # stdlib `time` module and break time.perf_counter() below.
+import logging
 from datetime import date, datetime, time as dt_time, timezone
 from decimal import Decimal
 from typing import Any
+
+log = logging.getLogger("abm.runner")
 
 import duckdb
 from sqlalchemy import select
@@ -29,7 +32,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.engine.ctx import RuleContext, build_views
 from app.engine.datasources import registry_for
 from app.engine.loader import load_rule
-from app.models import Param, Rule, Run, Schedule, Ticket, Watermark
+from app.engine.ticketing import raise_tickets
+from app.models import Param, Rule, Run, Ticket, Watermark
 from app.schemas import RuleResult
 from app.settings import settings
 
@@ -162,24 +166,21 @@ async def execute_rule(
     run.finished_at = datetime.now(timezone.utc)
     run.duration_ms = int((time.perf_counter() - started) * 1000)
 
-    # A failing rule raises a ticket, unless this was a shadow run.
-    if run.status == "fail" and not shadow:
-        ticket = Ticket(
-            ticket_no=_pending_ticket_no(session),
-            run_id=run.id,
-            rule_id=rule.id,
-            schedule_id=schedule_id,
-            severity=rule.severity,
-            summary=run.summary,
-            rows=run.rows,
-            status="open",
-        )
-        session.add(ticket)
-        await session.flush()
-        ticket.ticket_no = f"ABM-TKT-{ticket.id:05d}"
+    # A failing run raises tickets - but grouping, dedupe and the
+    # acknowledgement policy all live in app.engine.ticketing.
+    if run.status == "fail":
+        try:
+            await raise_tickets(
+                session, rule=rule, run=run, schedule_id=schedule_id
+            )
+        except Exception:  # noqa: BLE001
+            # Never lose the run record because ticketing failed.
+            log.exception("failed to raise tickets for rule %s", rule.code)
 
     if schedule_id:
-        sched = await session.get(Schedule, schedule_id)
+        from app.models import RuleSchedule
+
+        sched = await session.get(RuleSchedule, schedule_id)
         if sched:
             sched.last_run_at = run.finished_at
             await _advance_watermark(session, rule, run)
@@ -193,11 +194,6 @@ def _default_summary(result: RuleResult) -> str:
     if result.status == "no_rows_returned":
         return "Rule passed - no exception rows"
     return f"{len(result.rows)} exception row(s)"
-
-
-def _pending_ticket_no(session: AsyncSession) -> str:
-    """Placeholder; overwritten with the real number once the row has an id."""
-    return "ABM-TKT-PENDING"
 
 
 async def _run_in_thread(fn):

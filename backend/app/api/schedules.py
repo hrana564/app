@@ -1,119 +1,276 @@
-"""Schedules: one cron per rule."""
+"""
+Rule schedules - friendly cadence only.
+
+Nothing here accepts or returns a user-typed cron as the primary interface.
+`cron` appears in the response for engineers debugging the scheduler, but the
+UI works entirely from `kind` + `config` + `cadence_label` + `upcoming_runs`.
+"""
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, Query
 from sqlalchemy import select
+from sqlalchemy.orm import selectinload
 
 from app.api.deps import AdminUser, CurrentUser, SessionDep
 from app.engine import scheduler
-from app.models import Schedule
-from app.schemas import ScheduleCreate, ScheduleOut, ScheduleUpdate
+from app.engine.frequency import (
+    ALL_KINDS,
+    Cadence,
+    CadenceError,
+    MAX_DAY_OF_MONTH,
+    PRESET_CHOICES,
+    VALID_HOURLY_INTERVALS,
+    WEEKDAY_NAMES,
+    describe,
+    next_runs,
+    relative_time,
+    to_cron,
+)
+from app.engine.scheduler import cadence_of, cron_for
+from app.models import Rule, RuleSchedule
+from app.schemas import (
+    CadenceOption,
+    CadencePreviewRequest,
+    CadencePreviewResponse,
+    RuleStatus,
+    ScheduleCreate,
+    ScheduleOut,
+    ScheduleUpdate,
+)
 
-router = APIRouter(prefix="/api/schedules", tags=["schedules"])
+log = logging.getLogger("abm.api.schedules")
+
+router = APIRouter(prefix="/api/rule-schedules", tags=["rule schedules"])
 
 
+def _to_out(schedule: RuleSchedule) -> ScheduleOut:
+    """Shape a row for the API, adding the human labels the UI needs."""
+    cadence = Cadence.from_dict(schedule.config)
+    upcoming: list[datetime] = []
+    try:
+        upcoming = next_runs(cadence, schedule.timezone or "UTC", count=3)
+    except CadenceError:
+        upcoming = []
+
+    data = ScheduleOut.model_validate(schedule)
+    data.cadence_label = describe(cadence)
+    data.upcoming_runs = upcoming
+    data.next_run_relative = (
+        relative_time(upcoming[0]) if upcoming else None
+    )
+    return data
+
+
+# ---------------------------------------------------------------------------
+# The vocabulary the UI builds its picker from
+# ---------------------------------------------------------------------------
+@router.get("/cadence-options", response_model=dict)
+async def cadence_options(_user: CurrentUser) -> dict:
+    """Everything the frequency picker needs, in one call."""
+    return {
+        "presets": [CadenceOption(**p).model_dump(mode="json") for p in PRESET_CHOICES],
+        "kinds": ALL_KINDS,
+        "weekday_names": WEEKDAY_NAMES,
+        "hourly_intervals": VALID_HOURLY_INTERVALS,
+        "max_day_of_month": MAX_DAY_OF_MONTH,
+        "rule_statuses": ["draft", "active", "paused", "retired"],
+    }
+
+
+@router.post("/cadence-preview", response_model=CadencePreviewResponse)
+async def cadence_preview(
+    payload: CadencePreviewRequest, _user: CurrentUser
+) -> CadencePreviewResponse:
+    """Show the derived cron and the real fire times BEFORE saving.
+
+    This is the guardrail against a schedule that is accepted by the database
+    but silently never fires.
+    """
+    cadence = Cadence.from_dict({"kind": payload.kind, **payload.config})
+    try:
+        expr = to_cron(cadence)
+        upcoming = next_runs(cadence, payload.timezone, count=payload.count)
+        return CadencePreviewResponse(
+            ok=True, cadence_label=describe(cadence), cron=expr, upcoming=upcoming
+        )
+    except CadenceError as exc:
+        return CadencePreviewResponse(
+            ok=False, cadence_label=describe(cadence), problems=[str(exc)]
+        )
+
+
+# ---------------------------------------------------------------------------
+# Used by the rules API when a rule is activated or paused
+# ---------------------------------------------------------------------------
+async def sync_schedules_for_rule(session, rule: Rule) -> int:
+    """(Re)register or remove every schedule belonging to a rule.
+
+    `rules.status` is the single switch, so changing it must be reflected in
+    APScheduler immediately - otherwise a paused rule keeps firing overnight.
+    """
+    rows = (
+        await session.execute(
+            select(RuleSchedule)
+            .options(selectinload(RuleSchedule.rule))
+            .where(RuleSchedule.rule_id == rule.id)
+        )
+    ).scalars().unique().all()
+
+    registered = 0
+    for sched in rows:
+        try:
+            if await scheduler.sync_schedule(sched) is not None:
+                registered += 1
+        except CadenceError as exc:
+            log.error(
+                "schedule %s of rule %s has an invalid cadence and was skipped: %s",
+                sched.id, rule.code, exc,
+            )
+    return registered
+
+
+# ---------------------------------------------------------------------------
+# CRUD
+# ---------------------------------------------------------------------------
 @router.get("", response_model=dict)
 async def list_schedules(
     session: SessionDep,
     _user: CurrentUser,
-    page: int = Query(1, ge=1),
-    perPage: int = Query(25, ge=1, le=500),
     rule_id: int | None = None,
-    enabled: bool | None = None,
 ) -> dict:
-    stmt = select(Schedule)
+    stmt = select(RuleSchedule)
     if rule_id is not None:
-        stmt = stmt.where(Schedule.rule_id == rule_id)
-    if enabled is not None:
-        stmt = stmt.where(Schedule.enabled.is_(enabled))
-    stmt = stmt.order_by(Schedule.id).offset((page - 1) * perPage).limit(perPage)
+        stmt = stmt.where(RuleSchedule.rule_id == rule_id)
+    # selectinload: sync_schedule touches .rule, and a lazy load is impossible
+    # in an async context.
+    stmt = stmt.options(selectinload(RuleSchedule.rule)).order_by(RuleSchedule.id)
 
     rows = (await session.execute(stmt)).scalars().all()
-    return {"data": [ScheduleOut.model_validate(r).model_dump(mode="json") for r in rows]}
+    return {"data": [_to_out(r).model_dump(mode="json") for r in rows]}
 
 
 @router.get("/{schedule_id}", response_model=ScheduleOut)
 async def get_schedule(
     schedule_id: int, session: SessionDep, _user: CurrentUser
 ) -> ScheduleOut:
-    sched = await session.get(Schedule, schedule_id)
+    sched = await session.get(RuleSchedule, schedule_id)
     if sched is None:
         raise HTTPException(status_code=404, detail="Schedule not found")
-    return ScheduleOut.model_validate(sched)
+    return _to_out(sched)
 
 
 @router.post("", response_model=ScheduleOut, status_code=201)
 async def create_schedule(
     payload: ScheduleCreate, session: SessionDep, admin: AdminUser
 ) -> ScheduleOut:
+    cadence = Cadence.from_dict({"kind": payload.kind, **payload.config})
     try:
-        scheduler.validate_cron(payload.cron)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=f"Invalid cron '{payload.cron}': {exc}") from exc
+        expr = to_cron(cadence)
+    except CadenceError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    dup = (
+    rule = await session.get(Rule, payload.rule_id)
+    if rule is None:
+        raise HTTPException(status_code=404, detail="Rule not found")
+
+    label = (payload.label or "").strip() or describe(cadence)
+
+    # Duplicate detection on the DERIVED CRON, not on the JSONB config column.
+    # Comparing a JSONB column to a Python dict through asyncpg is unreliable,
+    # and the stored config embeds `kind`, so a raw-config comparison never
+    # matches. The cron is the semantic identity of a schedule.
+    existing_rows = (
         await session.execute(
-            select(Schedule).where(
-                Schedule.rule_id == payload.rule_id, Schedule.cron == payload.cron
+            select(RuleSchedule)
+            .options(selectinload(RuleSchedule.rule))
+            .where(RuleSchedule.rule_id == payload.rule_id)
+        )
+    ).scalars().unique().all()
+    for other in existing_rows:
+        try:
+            same = cron_for(other) == expr
+        except CadenceError:
+            continue
+        if same:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"This rule already has a '{describe(cadence_of(other))}' "
+                    f"schedule (#{other.id})"
+                ),
             )
-        )
-    ).scalar_one_or_none()
-    if dup:
-        raise HTTPException(
-            status_code=409, detail="This rule already has a schedule with that cron"
-        )
 
-    sched = Schedule(
+    sched = RuleSchedule(
         rule_id=payload.rule_id,
-        cron=payload.cron,
+        label=label,
+        kind=cadence.kind,
+        config=cadence.to_dict(),
+        cron=expr,
         timezone=payload.timezone,
-        enabled=payload.enabled,
+        data_lag_days=payload.data_lag_days,
         created_by=admin.username,
     )
     session.add(sched)
     await session.flush()
+    # `sched.rule` is needed by sync_schedule; the relationship was populated
+    # via `rule = await session.get(Rule, ...)` above.
+    sched.rule = rule
 
+    # Register with APScheduler only if the rule is already active; otherwise
+    # it is stored and picked up when the rule activates.
     await scheduler.sync_schedule(sched)
     await session.commit()
     await session.refresh(sched)
-    return ScheduleOut.model_validate(sched)
+    return _to_out(sched)
 
 
 @router.put("/{schedule_id}", response_model=ScheduleOut)
 async def update_schedule(
     schedule_id: int, payload: ScheduleUpdate, session: SessionDep, admin: AdminUser
 ) -> ScheduleOut:
-    sched = await session.get(Schedule, schedule_id)
+    sched = await session.get(RuleSchedule, schedule_id)
     if sched is None:
         raise HTTPException(status_code=404, detail="Schedule not found")
+    # sync_schedule touches .rule - load it eagerly.
+    await session.refresh(sched, ["rule"])
 
-    if payload.cron is not None:
-        try:
-            scheduler.validate_cron(payload.cron)
-        except ValueError as exc:
-            raise HTTPException(
-                status_code=400, detail=f"Invalid cron '{payload.cron}': {exc}"
-            ) from exc
-        sched.cron = payload.cron
+    kind_changed = False
+    if payload.kind is not None and payload.kind != sched.kind:
+        sched.kind = payload.kind
+        kind_changed = True
+    if payload.config is not None:
+        sched.config = payload.config
+        kind_changed = True
+    if payload.label is not None:
+        sched.label = payload.label
     if payload.timezone is not None:
         sched.timezone = payload.timezone
-    if payload.enabled is not None:
-        sched.enabled = payload.enabled
+    if payload.data_lag_days is not None:
+        sched.data_lag_days = payload.data_lag_days
+
+    cadence = Cadence.from_dict(sched.config)
+    try:
+        sched.cron = to_cron(cadence)
+    except CadenceError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if kind_changed and not payload.label:
+        sched.label = describe(cadence)
 
     await scheduler.sync_schedule(sched)
     await session.commit()
     await session.refresh(sched)
-    return ScheduleOut.model_validate(sched)
+    return _to_out(sched)
 
 
 @router.delete("/{schedule_id}", status_code=204)
 async def delete_schedule(
     schedule_id: int, session: SessionDep, admin: AdminUser
 ) -> None:
-    sched = await session.get(Schedule, schedule_id)
+    sched = await session.get(RuleSchedule, schedule_id)
     if sched is None:
         raise HTTPException(status_code=404, detail="Schedule not found")
     await scheduler.remove_schedule(schedule_id)
@@ -123,5 +280,8 @@ async def delete_schedule(
 
 @router.get("/cron/jobs")
 async def live_jobs(_user: CurrentUser) -> dict:
-    """What APScheduler currently has loaded - useful for debugging schedules."""
-    return {"jobs": scheduler.status(), "now": datetime.now(timezone.utc).isoformat()}
+    """What APScheduler currently holds. For debugging schedules."""
+    return {
+        "jobs": scheduler.status(),
+        "now": datetime.now(timezone.utc).isoformat(),
+    }

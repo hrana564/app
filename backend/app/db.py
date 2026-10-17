@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 
+from sqlalchemy import MetaData
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
     async_sessionmaker,
@@ -13,9 +14,19 @@ from sqlalchemy.orm import DeclarativeBase
 
 from app.settings import settings
 
+# Deterministic constraint names. Without this, Alembic autogenerate emits
+# drop_constraint() for unnamed FKs and those migrations fail at runtime.
+NAMING_CONVENTION = {
+    "ix": "ix_%(column_0_label)s",
+    "uq": "uq_%(table_name)s_%(column_0_name)s",
+    "ck": "ck_%(table_name)s_%(constraint_name)s",
+    "fk": "fk_%(table_name)s_%(column_0_name)s_%(referred_table_name)s",
+    "pk": "pk_%(table_name)s",
+}
+
 
 class Base(DeclarativeBase):
-    pass
+    metadata = MetaData(naming_convention=NAMING_CONVENTION)
 
 
 engine = create_async_engine(
@@ -39,13 +50,37 @@ async def get_session() -> AsyncIterator[AsyncSession]:
         yield session
 
 
-async def init_models() -> None:
-    """Create tables if they do not exist.
+async def check_schema() -> tuple[bool, str]:
+    """Verify migrations have been applied. Does NOT create tables.
 
-    Alembic is intentionally not used yet - the schema is still moving. See
-    README 'Schema management' for when to introduce it.
+    The schema is owned by Alembic. Auto-creating tables at startup was the
+    original shortcut; it let the models and the database drift apart silently
+    and left nobody able to say what the schema actually was. Now a missing
+    migration is a loud failure with the fix in the message.
     """
-    from app import models  # noqa: F401  (register mappers)
+    from sqlalchemy import text
 
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+    try:
+        async with engine.connect() as conn:
+            exists = await conn.execute(
+                text("SELECT to_regclass('public.alembic_version') IS NOT NULL")
+            )
+            if not exists.scalar():
+                return False, (
+                    "schema is not initialised. Run from backend/: "
+                    "  python -m alembic upgrade head"
+                )
+            tables = await conn.execute(
+                text(
+                    "SELECT count(*) FROM information_schema.tables "
+                    "WHERE table_schema = 'public'"
+                )
+            )
+            count = int(tables.scalar() or 0)
+            if count <= 1:  # only alembic_version
+                return False, (
+                    "schema looks empty. Run:  python -m alembic upgrade head"
+                )
+            return True, f"{count} tables present"
+    except Exception as exc:  # noqa: BLE001
+        return False, f"cannot reach the database: {exc}"

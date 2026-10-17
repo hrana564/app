@@ -10,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api import auth, datasources, params, rules, runs, schedules, tickets
 from app.api.deps import SessionDep
-from app.db import SessionLocal, init_models
+from app.db import SessionLocal, check_schema
 from app.engine import scheduler
 from app.settings import settings
 
@@ -24,7 +24,16 @@ log = logging.getLogger("abm")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     log.info("starting ABM Audit Portal API")
-    await init_models()
+    ok, detail = await check_schema()
+    if not ok:
+        # Loud on purpose. Silently creating tables is what let the models and
+        # the database drift apart before.
+        log.error("SCHEMA NOT READY - %s", detail)
+        app.state.schema_ready = False
+    else:
+        log.info("schema ok (%s)", detail)
+        app.state.schema_ready = True
+
     await _bootstrap()
     scheduler.start()
     await scheduler.load_all()
@@ -184,7 +193,7 @@ async def dashboard(session: SessionDep) -> dict:
     """One aggregated payload for the landing screen."""
     from sqlalchemy import func, select
 
-    from app.models import Rule, Run, Schedule, Ticket
+    from app.models import Rule, RuleSchedule, Run, Ticket
 
     async def count(model, *where) -> int:
         stmt = select(func.count()).select_from(model)
@@ -192,14 +201,27 @@ async def dashboard(session: SessionDep) -> dict:
             stmt = stmt.where(clause)
         return (await session.execute(stmt)).scalar_one()
 
+    active_rules = await count(Rule, Rule.status == "active")
+    total_rules = await count(Rule)
+    total_schedules = await count(RuleSchedule)
+
     return {
         "rules": {
-            "total": await count(Rule),
-            "active": await count(Rule, Rule.status == "active"),
+            "total": total_rules,
+            "active": active_rules,
             "draft": await count(Rule, Rule.status == "draft"),
             "paused": await count(Rule, Rule.status == "paused"),
+            "validated": await count(Rule, Rule.validation_status == "valid"),
         },
-        "schedules": {"total": await count(Schedule), "enabled": await count(Schedule, Schedule.enabled.is_(True))},
+        "schedules": {
+            "total": total_schedules,
+            # A schedule runs iff its rule is active, so this is the count that
+            # actually matters operationally.
+            "live": await count(
+                RuleSchedule,
+                RuleSchedule.rule_id.in_(select(Rule.id).where(Rule.status == "active")),
+            ),
+        },
         "runs": {
             "total": await count(Run),
             "pass": await count(Run, Run.status == "pass"),

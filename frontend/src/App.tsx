@@ -14,7 +14,7 @@ import { authProvider } from "./authProvider";
 import { Login } from "./pages/Login";
 import { Dashboard } from "./pages/Dashboard";
 import { RuleList, RuleShow } from "./resources/Rule";
-import { RunList, RunShow, ScheduleList, ScheduleShow } from "./resources/Run";
+import { RunList, RunShow } from "./resources/Run";
 import { TicketList, TicketShow } from "./resources/Ticket";
 import { DatasourceList, ParamList } from "./resources/Meta";
 
@@ -61,13 +61,6 @@ export const App = () => (
       show={RuleShow}
       icon={RuleIcon}
       options={{ label: "Rules" }}
-    />
-    <Resource
-      name="schedules"
-      list={ScheduleList}
-      show={ScheduleShow}
-      icon={ScheduleIcon}
-      options={{ label: "Schedules" }}
     />
     <Resource
       name="runs"

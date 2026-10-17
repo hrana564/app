@@ -12,8 +12,8 @@ import { api } from "../dataProvider";
 import { severityColor } from "../theme";
 
 interface Dashboard {
-  rules: { total: number; active: number; draft: number; paused: number };
-  schedules: { total: number; enabled: number };
+  rules: { total: number; active: number; draft: number; paused: number; validated: number };
+  schedules: { total: number; live: number };
   runs: { total: number; pass: number; fail: number; error: number };
   tickets: { total: number; open: number; acknowledged: number; dismissed: number };
   scheduler: { running: boolean; jobs: number };
@@ -92,14 +92,14 @@ export const Dashboard = () => {
         <Grid size={{ xs: 12, sm: 6, lg: 3 }}>
           <Stat
             title="RULES" value={data.rules.total} color="#123a63" to="/rules"
-            caption={`${data.rules.active} active · ${data.rules.draft} draft · ${data.rules.paused} paused`}
+            caption={`${data.rules.active} active · ${data.rules.draft} draft · ${data.rules.validated ?? 0} validated`}
             icon={<RuleIcon />}
           />
         </Grid>
         <Grid size={{ xs: 12, sm: 6, lg: 3 }}>
           <Stat
             title="SCHEDULES" value={data.schedules.total} color="#0f8a80" to="/schedules"
-            caption={`${data.schedules.enabled} enabled · scheduler ${data.scheduler.running ? "running" : "stopped"}`}
+            caption={`${data.schedules.live} firing · scheduler ${data.scheduler.running ? "running" : "stopped"}`}
             icon={<ScheduleIcon />}
           />
         </Grid>

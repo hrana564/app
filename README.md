@@ -90,34 +90,54 @@ second copy of the client's data to reconcile.
 
 ## 3. Data model
 
-Nine tables in `ABM_Audit_Portal`.
+Nine tables in `ABM_Audit_Portal`, owned by **Alembic** (see §7).
 
 ```
 users          id, username, password_hash, role, is_active
 datasources    id, entity, name, system, path_template, grain, columns, derived, is_active
 rules          id, code, entity, name, description, severity, query_mode, window_days,
-               status, source_file, current_version, datasource_hint, origin, created_by
+               status, validation_status, validation_messages, validated_at, validated_by,
+               ticket_mode, group_by, dedupe_mode, dedupe_window_hours, alerting_enabled,
+               declared_params, declared_datasources, declared_alert,
+               source_file, current_version, datasource_hint, origin, created_by
 rule_versions  id, rule_id, version, source_code, change_note, created_by, created_at
-schedules      id, rule_id, cron, timezone, enabled, last_run_at, next_run_at, created_by
+rule_schedules id, rule_id, label, kind, config, cron, timezone, data_lag_days,
+               last_run_at, next_run_at, created_by
 runs           id, rule_id, rule_version, schedule_id, data_date, triggered_by,
                started_at, finished_at, status, summary, metrics, rows,
                rows_scanned, is_shadow, error_detail, duration_ms
 tickets        id, ticket_no, run_id, rule_id, schedule_id, severity, summary, rows,
+               occurrences, first_run_id, last_run_id, fingerprint, last_seen_at,
                status, acknowledged_by, acknowledged_at, ack_note, created_at
 params         id, key, label, value_numeric, value_text, description, updated_by
 watermarks     id, rule_id, source_key, last_value, updated_at
 ```
 
-Key decisions:
+### Key decisions
 
-- **`rule_versions` is append-only.** Rollback never deletes history — it creates a *new* version
-  copied from an old one, so the audit trail is immutable.
-- **`metrics` and `rows` are `JSONB`.** Rule output is free-form; the schema should not constrain it.
+- **A rule is the aggregate root.** Schedules, code versions, runs and alerts all hang off it.
+
+- **`rule_versions` is append-only.** Rollback creates a *new* version copied from an old one, so the
+  audit trail is never rewritten.
+
+- **`rules.status` is the only run switch.** There is deliberately no `enabled` on `rule_schedules`.
+  Two switches that could disagree were the original defect — the scheduler silently preferred
+  `rules.status` with nothing telling the operator. Now: one truth.
+
+- **`metrics` and `rows` are `JSONB`.** Rule output is free-form; the schema shouldn't constrain it.
+
 - **`tickets.rows` holds the exact rows that caused the failure**, so an auditor sees the evidence
   without re-running anything.
-- **`params` exists because most audit thresholds are undefined in the source requirements.**
-  Phrases like *"beyond a specified limit (say 50%)"* appear throughout; those become tunable
-  parameters rather than hardcoded numbers.
+
+- **`occurrences` / `first_run_id` / `last_run_id`** record how many times one ongoing breach was
+  observed, so a rule with three cadences doesn't flood the inbox with three identical tickets.
+
+- **`params` exists because most thresholds are undefined in the source requirements.** Phrases like
+  *"beyond a specified limit (say 50%)"* appear throughout; those become tunable parameters rather
+  than hardcoded numbers.
+
+- **`rule_schedules.cron` is derived, never authored.** `kind` + `config` are what a user fills in.
+  See §4a.
 
 ---
 
@@ -173,6 +193,108 @@ ctx.sql("SELECT * FROM ctx.table('ipos_sales')")
 ```
 
 Referencing an unregistered datasource raises immediately with the list of valid names.
+
+---
+
+## 4a. Schedules — friendly cadence, never cron
+
+A rule can have **many** schedules. A regulatory area may need "06:30 daily" *and* "month-end at
+07:00" — requirement ABM #30 says regulation detail is updated "in the beginning of the year",
+which is a monthly cadence on the same rule that also runs daily.
+
+Users never see a cron expression. `app/engine/frequency.py` is the only module that knows cron.
+
+| You pick | Shows as | Derived cron |
+|---|---|---|
+| Every N hours | "Every 6 hours" | `00 */6 * * *` |
+| Daily + time | "Daily at 06:30" | `30 06 * * *` |
+| Weekdays + time | "Weekdays at 06:30" | `30 06 * * 1-5` |
+| Weekly + days + time | "Mon, Wed, Fri at 07:00" | `00 07 * * 1,3,5` |
+| Monthly + day + time | "Monthly on day 28 at 07:00" | `00 07 28 * *` |
+| Advanced | raw, behind a disclosure | as entered |
+
+### Constraints that are enforced, with reasons shown in the UI
+
+| Rule | Why |
+|---|---|
+| **Monthly capped at day 28** | Cron can't express "last day of month", and days 29–31 **silently skip months**. A month-end control that skips 11 months of the year is worse than useless — it looks like it ran. Verified: day 28 fires in all 12 months. |
+| **Hourly intervals limited to 1,2,3,4,6,8,12** | Anything else drifts — "every 7 hours" gives some days three runs and others none, and stays permanently unaligned to the clock. |
+| **Weekdays must be 0–6** | Range-checked *before* any modulo, so `9` is rejected rather than silently becoming Tuesday. |
+| **`CUSTOM` is parsed, not trusted** | `croniter.is_valid` is lenient about malformed input, so we construct an iterator and demand a next value. |
+
+### Preview before you save
+
+`POST /api/rule-schedules/cadence-preview` returns the derived cron **and the real next fire
+times**, so nobody discovers a bad schedule by waiting a week for it:
+
+```
+Daily at 06:30 (Asia/Dubai)
+  next: Sun 18 Oct 06:30 · Mon 19 Oct 06:30 · Tue 20 Oct 06:30
+```
+
+---
+
+## 4b. Validation gate
+
+A rule must pass static validation before it can be activated, so a broken rule never reaches an
+unattended 06:30 scheduled run.
+
+```
+draft ──validate──▶ valid ──activate──▶ active ──pause──▶ paused
+  ▲                                                  │
+  └──────────── edit (new version) ──────────────────┘
+```
+
+Editing the source resets `validation_status` to `unvalidated` — the old verdict no longer applies.
+Activation returns **409** until validation passes.
+
+Validation is static and cheap, so it runs on every save:
+
+| Check | How |
+|---|---|
+| Module imports and compiles | `importlib` + `ast.parse` |
+| Defines `run(ctx)` | module attribute |
+| No banned imports / calls | **AST scan** — `os`, `sys`, `subprocess`, `socket`, `open()`, `eval` |
+| Every table exists for this entity | union of declared `DATASOURCES` **and** every `ctx.table("x")` found in the source |
+| Declared params exist | warn only — `ctx.params.get()` falls back to the rule's default |
+
+> The `ctx.table("x")` check needs a **regex pass as well as the AST**, because the normal
+> authoring style puts the call *inside an SQL string*, where it is just text to the parser. The AST
+> alone silently let a LAD rule reference `bc_vendors` (an ABM table).
+
+---
+
+## 4c. Alert policy and deduplication
+
+| Column | Values | Meaning |
+|---|---|---|
+| `ticket_mode` | `ONE_PER_RUN` \| `ONE_PER_GROUP` \| `ONE_PER_ROW` | One ticket per run, or split by `group_by` |
+| `group_by` | column name | For `ONE_PER_GROUP` — e.g. group by `store_id` |
+| `dedupe_mode` | `NONE` \| `PER_DATA_DATE` \| `FINGERPRINT` | Suppression policy |
+| `alerting_enabled` | bool | Mute alerts **without** pausing the rule |
+
+**`PER_DATA_DATE` is the default.** Same rule, same `data_date`, second trigger → increments
+`occurrences` and repoints `last_run_id` rather than creating a duplicate.
+
+**What happens if the breach continues after an auditor acknowledged it?** A **new ticket opens**,
+referencing the predecessor. This is a product decision, not a technical one: an auditor has already
+looked at it, so silently keeping it on the same ticket would hide that it is still breaching every
+day. That is exactly what `occurrences` + a fresh ticket is for.
+
+`ONE_PER_ROW` is capped at 50 tickets per run, so a badly written rule cannot flood the inbox.
+
+### Rule file metadata
+
+```python
+NAME        = "LAD-CA-03 Last-hour of trading value spike"
+ENTITY      = "LAD"
+DATASOURCES = ["ipos_sales"]
+PARAMS      = ["lad.last_hour_ratio"]
+ALERT       = {"severity": "high", "ticket_mode": "ONE_PER_GROUP", "group_by": "store_id"}
+```
+
+Declared dependencies are surfaced in the UI, so *"this rule needs `lad.last_hour_ratio`, which does
+not exist"* is a warning **before** a scheduled run silently defaults it.
 
 ---
 
@@ -264,18 +386,40 @@ python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
 
-Tables are created automatically on first start (`init_models()`), along with the two users and
-baseline parameters. Start it:
+### Step 3 — schema migrations
+
+The schema is owned by **Alembic**, not by the app. Apply it:
+
+```bash
+.\.venv\Scripts\python.exe -m alembic upgrade head
+```
+
+| Command | Purpose |
+|---|---|
+| `alembic upgrade head` | Apply all migrations |
+| `alembic downgrade -1` | Roll back one revision |
+| `alembic current` | What is applied |
+| `alembic history` | Full chain |
+| `alembic revision --autogenerate -m "..."` | Draft a new migration |
+
+`env.py` builds the URL from `backend/.env`, so migrations can never drift onto a different
+database than the running app. If migrations have not been applied, the API logs
+`SCHEMA NOT READY` and tells you the command to run — it will **not** silently create tables. That
+auto-create behaviour is what let the models and the database drift apart unnoticed before.
+
+### Step 4 — run
 
 ```bash
 .\.venv\Scripts\python.exe -m uvicorn app.main:app --reload --port 8000
 ```
 
+Users and baseline parameters are seeded on first start.
+
 - API → http://127.0.0.1:8000
 - Swagger → http://127.0.0.1:8000/docs
 - Health → http://127.0.0.1:8000/health
 
-### Step 3 — sample data
+### Step 5 — sample data
 
 ```bash
 .\.venv\Scripts\python.exe scripts\make_sample_data.py
@@ -294,7 +438,7 @@ Generates `SourceData/` for both entities across 6 days, with **deliberately pla
 
 Without planted breaches you cannot tell a working rule from a broken one.
 
-### Step 4 — frontend
+### Step 6 — frontend
 
 ```bash
 cd frontend
@@ -306,7 +450,7 @@ npm run dev
 
 Vite proxies `/api` to the backend, so the browser sees a single origin in development.
 
-### Step 5 — sign in
+### Step 7 — sign in
 
 | Username | Password | Role |
 |---|---|---|
@@ -326,10 +470,14 @@ app/
 ├── backend/
 │   ├── .env / .env.example
 │   ├── requirements.txt
+│   ├── alembic.ini
+│   ├── migrations/
+│   │   ├── env.py                  URL built from .env, async
+│   │   └── versions/0001_initial_schema.py
 │   ├── app/
 │   │   ├── main.py                 app factory, health, dashboard, user bootstrap
 │   │   ├── settings.py             env config
-│   │   ├── db.py                   async engine + session
+│   │   ├── db.py                   async engine + schema check
 │   │   ├── models.py               9 tables
 │   │   ├── schemas.py              API contracts + THE RULE CONTRACT
 │   │   ├── security.py             bcrypt + JWT
@@ -342,6 +490,9 @@ app/
 │   │       ├── ctx.py              RuleContext + DuckDB view builder
 │   │       ├── loader.py           rule file load/save
 │   │       ├── runner.py           THE ENGINE
+│   │       ├── frequency.py        friendly cadence <-> cron (only place cron exists)
+│   │       ├── validation.py       static validation gate
+│   │       ├── ticketing.py        grouping, dedupe, acknowledgement policy
 │   │       ├── scheduler.py        APScheduler wiring
 │   │       └── rule_generator.py   prompt -> draft rule
 │   ├── rules/
@@ -433,6 +584,8 @@ All endpoints except `/health`, `/api/auth/login` and `/api/dashboard` require
 | POST | `/api/rules/{id}/rollback/{version}` | admin | Roll back = new version from old |
 | DELETE | `/api/rules/{id}` | admin | Delete |
 | POST | `/api/rules/{id}/test` | any | Dry-run against a date (`{data_date, shadow}`) |
+| POST | `/api/rules/{id}/validate` | any | Run the static gate, store the verdict |
+| GET | `/api/rules/{id}/validate-report` | any | Last stored verdict without re-running |
 | GET | `/api/rules/generate/status` | any | Is the LLM configured? |
 | GET | `/api/rules/generate/context?entity=LAD` | any | What the LLM would be shown |
 | POST | `/api/rules/generate` | admin | Prompt → **draft** rule |
@@ -440,9 +593,11 @@ All endpoints except `/health`, `/api/auth/login` and `/api/dashboard` require
 ### Schedules / Runs / Tickets / Params / Datasources
 | Method | Path | Role | Description |
 |---|---|---|---|
-| GET/POST | `/api/schedules` | any / admin | List / create |
-| GET/PUT/DELETE | `/api/schedules/{id}` | any / admin | Read / update / delete |
-| GET | `/api/schedules/cron/jobs` | any | Live APScheduler jobs |
+| GET | `/api/rule-schedules/cadence-options` | any | Everything the frequency picker needs |
+| POST | `/api/rule-schedules/cadence-preview` | any | Derived cron + real fire times, before saving |
+| GET/POST | `/api/rule-schedules` | any / admin | List (`?rule_id=`) / create |
+| GET/PUT/DELETE | `/api/rule-schedules/{id}` | any / admin | Read / update / delete |
+| GET | `/api/rule-schedules/cron/jobs` | any | Live APScheduler jobs |
 | GET | `/api/runs` | any | `?status&rule_id&page&perPage` |
 | GET | `/api/runs/summary` | any | Counts by status |
 | GET | `/api/runs/{id}` | any | One run |
@@ -653,17 +808,25 @@ cd backend
 .\.venv\Scripts\python.exe scripts\smoke_test.py
 ```
 
-54 assertions covering: health, both logins, rejection of bad credentials and missing tokens,
-RBAC for all four admin-only endpoints, both entities and their systems, datasource listing,
-parameters, rule registration, source and version round-trip, per-entity isolation,
-clean-day pass / breach-day fail for all four rules, both cross-system joins, ticket numbering,
-JSON serialisation of timestamps, acknowledge → double-ack rejection → reopen, schedule creation
-with RBAC, cron validation, APScheduler job registration, run ledger, dashboard and generation
-status.
+**94 assertions** covering: health, both logins, rejection of bad credentials and missing tokens,
+RBAC for every admin-only endpoint, both entities and their systems, datasource listing,
+parameters, rule registration, **validate → activate gate**, source and version round-trip,
+per-entity isolation, clean-day pass / breach-day fail for all four rules, both cross-system joins,
+ticket numbering, JSON serialisation of timestamps, acknowledge → double-ack rejection → reopen,
+**friendly cadence** (preview derivation, timezone correctness, and rejection of day 31,
+out-of-range weekdays, non-dividing intervals and garbage cron), **multiple schedules per rule**
+including duplicate detection and pause/reactivate deregistration, **the validation gate**
+(banned imports, activation refusal, cross-entity table reference inside an SQL string), **alert
+policy** (dedupe bump, new ticket after acknowledgement, `NONE` mode, muting), run ledger,
+dashboard and generation status.
 
 ```
-RESULT: 54 passed, 0 failed
+RESULT: 94 passed, 0 failed
 ```
+
+The suite is **idempotent** — run it twice and it still reports 94/94. The deduplication
+assertions work on ticket *identity* rather than absolute counts, so a previous run's tickets don't
+make the next run fail.
 
 ### License gate
 
@@ -687,15 +850,16 @@ Honest list of what is **not** done yet:
 
 | Gap | Impact | Notes |
 |---|---|---|
-| **No schema migrations** | Tables created via `create_all` | Fine in dev; add Alembic before the schema stops moving |
-| **No rule sandbox** | LLM-generated Python runs in-process | Acceptable while only your devs write rules. **Mandatory hardening** if auditors type prompts and never read the diff: subprocess isolation, read-only data mount, no network, CPU/memory/time limits. RestrictedPython is *not* a substitute — see §13. |
+| **No process-level sandbox** | LLM-generated Python runs in-process | The AST gate blocks `os`/`subprocess`/`socket`/`open()` statically, but that is **not** a sandbox — a determined rule can still exhaust memory or spin a CPU. Acceptable while your devs write rules. **Mandatory hardening** if auditors type prompts and never read the diff: subprocess isolation, read-only mount, no network, rlimits. RestrictedPython is *not* a substitute — see §13. |
+| **Rules execute synchronously** | A slow rule occupies the API worker | `rule_timeout_seconds` is configured but **not enforced** — needs a subprocess or `anyio` timeout |
 | **No pagination beyond `perPage`** | Large tables return capped pages | Fine for dev volumes |
 | **No rule deletion from the UI** | API supports `DELETE` | Admin button not wired |
 | **No Swagger 2.0 export** | Blocks Power Apps custom connector | §14 option B |
 | **No requirements traceability** | The 129 requirement line items are not seeded | Worth doing — it makes the 78%/93%/95% coverage figures in the architecture docs computable |
 | **`WINDOW` mode untested with data** | Only `SNAPSHOT` is exercised by the sample set | Ageing controls (stock in transit, GRN pending) still need real fixtures |
-| **Single scheduler process** | Running multiple API workers would duplicate jobs | Run **one** API worker, or move to Celery/Redis |
+| **Single scheduler process** | Multiple API workers would duplicate jobs | Run **one** worker, or move to Celery/Redis |
 | **No alert notification** | Tickets only appear in the UI | Email/Teams via Power Automate when needed |
+| **Auth gaps** | See §16 note | No rate limiting, no MFA, token in `localStorage`, `403` incorrectly logs the user out |
 
 ### A note on the original "FSCS" label
 

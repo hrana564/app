@@ -15,6 +15,7 @@ from app.engine.rule_generator import (
     preview_context,
 )
 from app.engine.runner import execute_rule
+from app.engine.validation import RuleValidator, now
 from app.models import Rule, RuleVersion
 from app.schemas import (
     RuleCreate,
@@ -25,6 +26,7 @@ from app.schemas import (
     RuleUpdate,
     RuleVersionOut,
     RunRequest,
+    ValidationReport,
 )
 from app.settings import settings
 
@@ -185,6 +187,89 @@ async def list_versions(
 
 
 # ---------------------------------------------------------------------------
+# validation gate
+# ---------------------------------------------------------------------------
+@router.post("/{rule_id}/validate", response_model=ValidationReport)
+async def validate_rule(
+    rule_id: int, session: SessionDep, _user: CurrentUser
+) -> ValidationReport:
+    """
+    Static check: compiles the module and inspects what it declares, without
+    touching data. Records the verdict on the rule so the UI can show it and
+    activation can require it.
+    """
+    rule = await session.get(Rule, rule_id)
+    if rule is None:
+        raise HTTPException(status_code=404, detail="Rule not found")
+
+    report = await _validate_and_store(session, rule, username=None)
+    await session.commit()
+    await session.refresh(rule)
+    return report
+
+
+async def _validate_and_store(
+    session, rule: Rule, *, username: str | None
+) -> ValidationReport:
+    validator = RuleValidator(rule.source_file, rule.entity, rules_dir=settings.rules_dir)
+    result = await validator.validate(session)
+
+    # Adopt the file's declared name/description if the DB has none useful.
+    meta = result.metadata or {}
+    if meta.get("name") and (not rule.name or rule.name == rule.code):
+        rule.name = str(meta["name"])[:255]
+    if meta.get("description") and not rule.description:
+        rule.description = str(meta["description"])[:4000]
+
+    rule.validation_status = "valid" if result.ok else "invalid"
+    rule.validation_messages = (
+        [{"level": "error", "message": m} for m in result.errors]
+        + [{"level": "warning", "message": m} for m in result.warnings]
+    )
+    rule.validated_at = now()
+    rule.validated_by = username
+    rule.declared_params = result.declared_params
+    rule.declared_datasources = result.declared_datasources
+    rule.declared_alert = result.declared_alert
+
+    return ValidationReport(
+        status=rule.validation_status,
+        errors=result.errors,
+        warnings=result.warnings,
+        declared_params=result.declared_params,
+        declared_datasources=result.declared_datasources,
+        declared_alert=result.declared_alert,
+        name=meta.get("name"),
+        description=meta.get("description"),
+        can_activate=result.ok,
+    )
+
+
+@router.get("/{rule_id}/validate-report", response_model=ValidationReport)
+async def validation_report(
+    rule_id: int, session: SessionDep, _user: CurrentUser
+) -> ValidationReport:
+    rule = await session.get(Rule, rule_id)
+    if rule is None:
+        raise HTTPException(status_code=404, detail="Rule not found")
+    return ValidationReport(
+        status=rule.validation_status,
+        errors=[
+            m["message"] for m in (rule.validation_messages or [])
+            if m.get("level") == "error"
+        ],
+        warnings=[
+            m["message"] for m in (rule.validation_messages or [])
+            if m.get("level") == "warning"
+        ],
+        declared_params=rule.declared_params or [],
+        declared_datasources=rule.declared_datasources or [],
+        declared_alert=rule.declared_alert or {},
+        can_activate=rule.validation_status == "valid",
+    )
+
+
+# ---------------------------------------------------------------------------
 # create / update / delete  (admin only)
 # ---------------------------------------------------------------------------
 @router.post("", response_model=RuleOut, status_code=201)
@@ -239,13 +324,41 @@ async def update_rule(
         rule.query_mode = payload.query_mode
     if payload.window_days is not None:
         rule.window_days = payload.window_days
-    if payload.status is not None:
-        rule.status = payload.status
+    if payload.ticket_mode is not None:
+        rule.ticket_mode = payload.ticket_mode
+    if payload.group_by is not None:
+        rule.group_by = payload.group_by or None
+    if payload.dedupe_mode is not None:
+        rule.dedupe_mode = payload.dedupe_mode
+    if payload.dedupe_window_hours is not None:
+        rule.dedupe_window_hours = payload.dedupe_window_hours
+    if payload.alerting_enabled is not None:
+        rule.alerting_enabled = payload.alerting_enabled
 
     if payload.source_code is not None:
         _bump_version(
             session, rule, payload.source_code, payload.change_note, admin.username
         )
+        # New code invalidates the old verdict - the gate must be re-run.
+        rule.validation_status = "unvalidated"
+        rule.validated_at = None
+        rule.validated_by = None
+        rule.validation_messages = []
+
+    if payload.status is not None and payload.status != rule.status:
+        if payload.status == "active" and rule.validation_status != "valid":
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "This rule has not passed validation, so it cannot be activated. "
+                    "Run Validate first."
+                ),
+            )
+        rule.status = payload.status
+        # Schedules follow the rule: activating registers them, pausing removes them.
+        from app.api.schedules import sync_schedules_for_rule
+
+        await sync_schedules_for_rule(session, rule)
 
     await session.commit()
     await session.refresh(rule)

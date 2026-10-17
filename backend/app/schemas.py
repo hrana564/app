@@ -12,6 +12,12 @@ Severity = Literal["low", "medium", "high", "critical"]
 QueryMode = Literal["DELTA", "SNAPSHOT", "WINDOW"]
 RunStatus = Literal["running", "pass", "fail", "error"]
 TicketStatus = Literal["open", "acknowledged", "dismissed"]
+CadenceKind = Literal[
+    "HOURLY", "DAILY", "WEEKDAYS", "WEEKLY", "MONTHLY", "CUSTOM"
+]
+TicketMode = Literal["ONE_PER_RUN", "ONE_PER_GROUP", "ONE_PER_ROW"]
+DedupeMode = Literal["NONE", "PER_DATA_DATE", "FINGERPRINT"]
+ValidationStatus = Literal["unvalidated", "valid", "invalid"]
 
 
 # ---------------------------------------------------------------------------
@@ -90,6 +96,18 @@ class RuleOut(BaseModel):
     query_mode: QueryMode
     window_days: int
     status: RuleStatus
+    validation_status: ValidationStatus
+    validation_messages: list[dict[str, Any]]
+    validated_at: datetime | None
+    validated_by: str | None
+    ticket_mode: TicketMode
+    group_by: str | None
+    dedupe_mode: DedupeMode
+    dedupe_window_hours: int
+    alerting_enabled: bool
+    declared_params: list[str]
+    declared_datasources: list[str]
+    declared_alert: dict[str, Any]
     source_file: str
     current_version: int
     datasource_hint: str
@@ -104,7 +122,7 @@ class RuleOut(BaseModel):
 class RuleCreate(BaseModel):
     code: str = Field(min_length=2, max_length=64)
     name: str = Field(min_length=2, max_length=255)
-    entity: str = "ABM"
+    entity: str = "LAD"
     description: str = ""
     severity: Severity = "medium"
     query_mode: QueryMode = "SNAPSHOT"
@@ -112,6 +130,10 @@ class RuleCreate(BaseModel):
     source_code: str
     datasource_hint: str = ""
     status: RuleStatus = "draft"
+    ticket_mode: TicketMode = "ONE_PER_RUN"
+    group_by: str | None = None
+    dedupe_mode: DedupeMode = "PER_DATA_DATE"
+    alerting_enabled: bool = True
 
 
 class RuleUpdate(BaseModel):
@@ -123,6 +145,25 @@ class RuleUpdate(BaseModel):
     status: RuleStatus | None = None
     source_code: str | None = None
     change_note: str = ""
+    ticket_mode: TicketMode | None = None
+    group_by: str | None = None
+    dedupe_mode: DedupeMode | None = None
+    dedupe_window_hours: int | None = None
+    alerting_enabled: bool | None = None
+
+
+class ValidationReport(BaseModel):
+    """Result of the static validation gate for one rule."""
+
+    status: ValidationStatus
+    errors: list[str]
+    warnings: list[str]
+    declared_params: list[str]
+    declared_datasources: list[str]
+    declared_alert: dict[str, Any]
+    name: str | None = None
+    description: str | None = None
+    can_activate: bool = False
 
 
 class RuleVersionOut(BaseModel):
@@ -161,33 +202,72 @@ class RuleTestResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Schedule
+# Rule schedules - friendly cadence, never raw cron in the UI
 # ---------------------------------------------------------------------------
 class ScheduleOut(BaseModel):
     id: int
     rule_id: int
+    label: str
+    kind: CadenceKind
+    config: dict[str, Any]
     cron: str
     timezone: str
-    enabled: bool
+    data_lag_days: int
     last_run_at: datetime | None
     next_run_at: datetime | None
     created_by: str
     created_at: datetime
+
+    # Computed from kind/config by the API layer. Defaults exist so
+    # model_validate() can build the object from the ORM row first; the API
+    # then overwrites them with real values.
+    cadence_label: str = ""
+    next_run_relative: str | None = None
+    upcoming_runs: list[datetime] = Field(default_factory=list)
 
     model_config = {"from_attributes": True}
 
 
 class ScheduleCreate(BaseModel):
     rule_id: int
-    cron: str = Field(min_length=5, max_length=64)
+    label: str = ""
+    kind: CadenceKind = "DAILY"
+    config: dict[str, Any] = Field(default_factory=dict)
     timezone: str = "UTC"
-    enabled: bool = True
+    data_lag_days: int = Field(default=1, ge=0, le=30)
 
 
 class ScheduleUpdate(BaseModel):
-    cron: str | None = None
+    label: str | None = None
+    kind: CadenceKind | None = None
+    config: dict[str, Any] | None = None
     timezone: str | None = None
-    enabled: bool | None = None
+    data_lag_days: int | None = Field(default=None, ge=0, le=30)
+
+
+class CadencePreviewRequest(BaseModel):
+    kind: CadenceKind
+    config: dict[str, Any] = Field(default_factory=dict)
+    timezone: str = "UTC"
+    count: int = Field(default=5, ge=1, le=10)
+
+
+class CadencePreviewResponse(BaseModel):
+    """What the UI shows BEFORE saving: the derived cron plus the real fire times."""
+    ok: bool
+    cadence_label: str
+    cron: str | None = None
+    upcoming: list[datetime] = []
+    problems: list[str] = []
+
+
+class CadenceOption(BaseModel):
+    """One choice in the friendly frequency picker."""
+
+    id: str
+    label: str
+    kind: CadenceKind
+    config: dict[str, Any]
 
 
 # ---------------------------------------------------------------------------
@@ -231,6 +311,10 @@ class TicketOut(BaseModel):
     severity: Severity
     summary: str
     rows: list[dict[str, Any]]
+    occurrences: int
+    first_run_id: int | None
+    last_run_id: int | None
+    last_seen_at: datetime | None
     status: TicketStatus
     acknowledged_by: str | None
     acknowledged_at: datetime | None

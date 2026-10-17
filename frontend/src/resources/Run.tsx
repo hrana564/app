@@ -1,16 +1,14 @@
 import { useEffect, useState } from "react";
 import {
-  Datagrid, DateField, EditButton, List, Pagination, ShowBase,
+  Datagrid, DateField, List, Pagination, ShowBase,
   TextField, useNotify, useRecordContext,
 } from "react-admin";
 import {
-  Alert, Box, Button, Card, CardContent, Chip, Stack, Typography,
+  Alert, Box, Button, Card, CardContent, Chip, CircularProgress, Stack, Typography,
 } from "@mui/material";
 import ReplayIcon from "@mui/icons-material/Replay";
 import { api } from "../dataProvider";
-import {
-  BooleanDotField, IdField, JsonBlock, RowsTable, StatusField,
-} from "../components/ui";
+import { IdField, JsonBlock, RowsTable, StatusField } from "../components/ui";
 
 /* ================= Runs ================= */
 const RerunButton = () => {
@@ -59,6 +57,11 @@ export const RunList = () => (
 
 const RunDetails = () => {
   const record = useRecordContext<any>();
+
+  useEffect(() => {
+    if (record?.id) document.title = `Run #${record.id} · ABM Audit Portal`;
+  }, [record?.id]);
+
   if (!record) return null;
   return (
     <Box>
@@ -115,80 +118,108 @@ export const RunShow = () => (
   </ShowBase>
 );
 
-/* ================= Schedules ================= */
+/* ================= Schedules (read-only overview across all rules) ========= */
 export const ScheduleList = () => (
-  <List pagination={<Pagination rowsPerPageOptions={[10, 25, 50]} />}>
-    <Datagrid rowClick="show" bulkActionButtons={false}>
-      <IdField source="id" />
-      <TextField source="rule_id" label="Rule" />
-      <TextField source="cron" label="Cron" />
-      <TextField source="timezone" label="Timezone" />
-      <BooleanDotField source="enabled" />
-      <DateField source="last_run_at" label="Last run" showTime />
-      <DateField source="next_run_at" label="Next run" showTime />
-      <EditButton />
-    </Datagrid>
-  </List>
+  <ScheduleOverview />
 );
 
-const ScheduleDetails = () => {
-  const record = useRecordContext<any>();
-  const [jobs, setJobs] = useState<any[] | null>(null);
+/**
+ * A flat view of every schedule in the system, grouped by cadence label.
+ * Editing happens on the rule page, where the cadence editor lives.
+ */
+const ScheduleOverview = () => {
+  const [rows, setRows] = useState<any[] | null>(null);
+  const [jobs, setJobs] = useState<string[]>([]);
+  const [rules, setRules] = useState<Record<number, any>>({});
+  const notify = useNotify();
 
   useEffect(() => {
+    const headers = { Authorization: `Bearer ${localStorage.getItem("abm.token")}` };
+    fetch("/api/rule-schedules", { headers })
+      .then((r) => r.json())
+      .then((d) => setRows(d.data ?? []))
+      .catch(() => setRows([]));
+    fetch("/api/rules?perPage=500", { headers })
+      .then((r) => r.json())
+      .then((d) => {
+        const map: Record<number, any> = {};
+        (d.data ?? []).forEach((x: any) => (map[x.id] = x));
+        setRules(map);
+      })
+      .catch(() => {});
     api.schedulerJobs()
-      .then((j) => setJobs(j.jobs ?? []))
+      .then((j) => setJobs((j.jobs ?? []).map((x: any) => x.id)))
       .catch(() => setJobs([]));
   }, []);
 
-  if (!record) return null;
-  const live = jobs?.find((j) => j.id === `schedule_${record.id}`);
+  if (!rows) return <CircularProgress size={24} />;
+
+  if (rows.length === 0) {
+    return (
+      <Alert severity="info">
+        No schedules configured. Open a rule and add a schedule to have it run
+        automatically.
+      </Alert>
+    );
+  }
 
   return (
-    <Box>
-      <Card>
-        <CardContent>
-          <Stack direction="row" spacing={1} sx={{ mb: 1.5, flexWrap: "wrap", gap: 1 }}>
-            <Chip
-              size="small"
-              label={record.enabled ? "ENABLED" : "DISABLED"}
-              color={record.enabled ? "success" : "default"}
-            />
-            <Chip size="small" variant="outlined" label={record.timezone} />
-          </Stack>
-          <Typography variant="h6">Rule #{record.rule_id} · {record.cron}</Typography>
-          <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 0.5 }}>
-            Created by {record.created_by}
-          </Typography>
-          <Stack direction="row" spacing={3} sx={{ mt: 2 }}>
-            <Box>
-              <Typography variant="caption" color="text.secondary">LAST RUN</Typography>
-              <Typography variant="body2">
-                {record.last_run_at ? new Date(record.last_run_at).toLocaleString() : "never"}
-              </Typography>
-            </Box>
-            <Box>
-              <Typography variant="caption" color="text.secondary">NEXT RUN</Typography>
-              <Typography variant="body2">
-                {record.next_run_at ? new Date(record.next_run_at).toLocaleString() : "—"}
-              </Typography>
-            </Box>
-          </Stack>
-          <Alert severity={live ? "success" : "warning"} sx={{ mt: 2 }}>
-            {jobs === null
-              ? "Checking APScheduler…"
-              : live
-                ? `Job registered with APScheduler. Next fire: ${live.next_run_time}`
-                : "Not currently registered with APScheduler."}
-          </Alert>
-        </CardContent>
-      </Card>
-    </Box>
+    <Stack spacing={1.5}>
+      <Typography variant="body2" color="text.secondary">
+        {rows.length} schedule{rows.length === 1 ? "" : "s"} across{" "}
+        {new Set(rows.map((r) => r.rule_id)).size} rule(s). A schedule only fires
+        while its rule is <strong>active</strong>.
+      </Typography>
+      {rows.map((s) => {
+        const rule = rules[s.rule_id];
+        const live = jobs.includes(`rule_schedule_${s.id}`);
+        return (
+          <Card key={s.id}>
+            <CardContent>
+              <Stack direction="row" justifyContent="space-between" alignItems="center"
+                flexWrap="wrap" gap={1}>
+                <Box>
+                  <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" gap={1}>
+                    <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>
+                      {s.cadence_label}
+                    </Typography>
+                    {rule && (
+                      <Chip size="small" variant="outlined" label={rule.code} />
+                    )}
+                    {rule && (
+                      <Chip
+                        size="small"
+                        label={rule.status.toUpperCase()}
+                        color={rule.status === "active" ? "success" : "default"}
+                      />
+                    )}
+                    <Chip size="small" variant="outlined" label={s.timezone} />
+                    <Chip size="small" variant="outlined"
+                      label={s.data_lag_days === 1 ? "yesterday" : `${s.data_lag_days}d lag`} />
+                    <Chip
+                      size="small"
+                      label={live ? "REGISTERED" : "NOT SCHEDULED"}
+                      color={live ? "success" : "warning"}
+                    />
+                  </Stack>
+                  <Typography variant="caption" color="text.secondary">
+                    next {s.next_run_relative ?? "unknown"}
+                    {s.last_run_at && ` · last ran ${new Date(s.last_run_at).toLocaleString()}`}
+                  </Typography>
+                  <Typography variant="caption" sx={{ display: "block", color: "#8d99ae", fontFamily: "monospace" }}>
+                    cron: {s.cron}
+                  </Typography>
+                </Box>
+                {rule && (
+                  <Button size="small" onClick={() => { window.location.hash = `#/rules/${rule.id}/show`; }}>
+                    Open rule
+                  </Button>
+                )}
+              </Stack>
+            </CardContent>
+          </Card>
+        );
+      })}
+    </Stack>
   );
 };
-
-export const ScheduleShow = () => (
-  <ShowBase>
-    <ScheduleDetails />
-  </ShowBase>
-);

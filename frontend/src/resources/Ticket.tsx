@@ -207,6 +207,11 @@ export const TicketList = () => (
 /* ------------------------------------------------------------------ */
 const TicketDetails = () => {
   const record = useRecordContext<any>();
+
+  useEffect(() => {
+    if (record?.ticket_no) document.title = `${record.ticket_no} · ABM Audit Portal`;
+  }, [record?.ticket_no]);
+
   if (!record) return null;
 
   return (

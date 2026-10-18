@@ -36,9 +36,11 @@ def run(ctx) -> dict:
 
     if not totals or not totals["cash_invoices"]:
         return {
-            "status": "no_rows_returned",
+            "status": "success",
+            "error_message": None,
             "summary": f"No cash invoices in LAD SourceData/{ctx.date}",
             "metrics": {},
+            "rows": [],
         }
 
     cash_invoices = int(totals["cash_invoices"])
@@ -57,12 +59,14 @@ def run(ctx) -> dict:
 
     if not leaders:
         return {
-            "status": "no_rows_returned",
+            "status": "success",
+            "error_message": None,
             "summary": (
                 f"No staff member settled more than {share_limit}% of the "
                 f"{cash_invoices} cash invoices"
             ),
             "metrics": {"cash_invoices": cash_invoices, "share_limit": share_limit},
+            "rows": [],
         }
 
     top = leaders[0]
@@ -80,7 +84,8 @@ def run(ctx) -> dict:
     also = ", ".join(f"{r['staff_id']} ({float(r['share_pct']):.1f}%)" for r in leaders)
 
     return {
-        "status": "rows_returned",
+        "status": "success",
+        "error_message": None,
         "summary": (
             f"Staff {top['staff_id']} settled {top['invoices']} of "
             f"{cash_invoices} cash invoices ({float(top['share_pct']):.1f}%, "

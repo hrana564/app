@@ -135,13 +135,11 @@ async def execute_rule(
         run.metrics = json_safe(result.metrics)
         run.rows = json_safe(result.rows)
 
-        if result.status == "rows_returned":
-            run.status = "fail"
-        elif result.status == "no_rows_returned":
-            run.status = "pass"
+        if result.status == "success":
+            run.status = "fail" if result.rows else "pass"
         else:
             run.status = "error"
-            run.error_detail = result.error or "Rule reported status=error"
+            run.error_detail = result.error_message or "Rule reported status=failed"
 
         if logs:
             run.summary = (run.summary + " | logs: " + "; ".join(logs)).strip()
@@ -180,7 +178,7 @@ async def execute_rule(
 
 
 def _default_summary(result: RuleResult) -> str:
-    if result.status == "no_rows_returned":
+    if not result.rows:
         return "Rule passed - no exception rows"
     return f"{len(result.rows)} exception row(s)"
 

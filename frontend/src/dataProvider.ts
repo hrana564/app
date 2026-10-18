@@ -67,7 +67,9 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   return (await response.json()) as T;
 }
 
-const base = (resource: string) => `/api/${resource}`;
+const API_MAP: Record<string, string> = { runs: "rule-runs" };
+
+const base = (resource: string) => `/api/${API_MAP[resource] ?? resource}`;
 
 /**
  * Rules are addressed by their permanent `code`, not the numeric row id - a

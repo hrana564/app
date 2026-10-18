@@ -48,9 +48,11 @@ def run(ctx) -> dict:
 
     if not totals or not totals["invoice_count"]:
         return {
-            "status": "no_rows_returned",
+            "status": "success",
+            "error_message": None,
             "summary": f"No retail/bar invoices in LAD SourceData/{ctx.date}",
             "metrics": {},
+            "rows": [],
         }
 
     last_hour_value = float(totals["last_hour_value"] or 0)
@@ -59,7 +61,8 @@ def run(ctx) -> dict:
 
     if ratio <= ratio_limit:
         return {
-            "status": "no_rows_returned",
+            "status": "success",
+            "error_message": None,
             "summary": (
                 f"Last hour {last_hour_value:,.0f} AED is {ratio:.2f}x the "
                 f"{hourly_avg:,.0f} AED hourly average (limit {ratio_limit}x)"
@@ -70,6 +73,7 @@ def run(ctx) -> dict:
                 "hourly_avg": round(hourly_avg, 2),
                 "ratio_limit": ratio_limit,
             },
+            "rows": [],
         }
 
     rows = ctx.sql(f"""
@@ -94,7 +98,8 @@ def run(ctx) -> dict:
     top_store = by_store[0]["store_id"] if by_store else "n/a"
 
     return {
-        "status": "rows_returned",
+        "status": "success",
+        "error_message": None,
         "summary": (
             f"Last hour of trading = {last_hour_value:,.0f} AED across "
             f"{totals['last_hour_count']} invoices, {ratio:.2f}x the "

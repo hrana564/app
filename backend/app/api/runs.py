@@ -12,7 +12,7 @@ from app.engine.runner import execute_rule
 from app.models import Run, Rule
 from app.schemas import RunOut
 
-router = APIRouter(prefix="/api/runs", tags=["runs"])
+router = APIRouter(prefix="/api/rule-runs", tags=["rule-runs"])
 
 
 @router.get("", response_model=dict)

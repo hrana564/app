@@ -56,19 +56,22 @@ def run(ctx) -> dict:
 
     if not rows:
         return {
-            "status": "no_rows_returned",
+            "status": "success",
+            "error_message": None,
             "summary": (
                 "No POS activity by exited employees on this date - HR to POS "
                 "access revocation is effective"
             ),
             "metrics": {},
+            "rows": [],
         }
 
     tx_total = sum(int(r["transactions"]) for r in rows)
     value_total = sum(float(r["value"] or 0) for r in rows)
 
     return {
-        "status": "rows_returned",
+        "status": "success",
+        "error_message": None,
         "summary": (
             f"{len(rows)} exited employee(s) settled {tx_total} POS transaction(s) "
             f"worth {value_total:,.0f} AED after leaving. Worst: "

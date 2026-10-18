@@ -42,9 +42,11 @@ def run(ctx) -> dict:
 
     if not counts or not counts["employees"] or not counts["vendors"]:
         return {
-            "status": "no_rows_returned",
+            "status": "failed",
+            "error_message": "Vendor or employee master not available for this date",
             "summary": "Vendor or employee master not available for this date",
             "metrics": {},
+            "rows": [],
         }
 
     # Exact IBAN collision, plus a fuzzy catch on the account-holder name so a
@@ -75,7 +77,8 @@ def run(ctx) -> dict:
 
     if not rows:
         return {
-            "status": "no_rows_returned",
+            "status": "success",
+            "error_message": None,
             "summary": (
                 f"No overlap between {counts['employees']} active HRMS employees "
                 f"and {counts['vendors']} Business Central vendor bank accounts"
@@ -83,6 +86,7 @@ def run(ctx) -> dict:
             "metrics": {
                 "employees_scanned": counts["employees"],
             "vendors_scanned": counts["vendors"],
+            "rows": [],
         },
         }
 
@@ -91,7 +95,8 @@ def run(ctx) -> dict:
     employees_hit = len({r["employee_id"] for r in rows})
 
     return {
-        "status": "rows_returned",
+        "status": "success",
+        "error_message": None,
         "summary": (
             f"{len(exact)} exact IBAN collision(s) between Business Central "
             f"vendors and HRMS employees, covering {vendors_hit} vendor(s) and "

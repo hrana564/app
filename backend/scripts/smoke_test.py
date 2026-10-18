@@ -298,6 +298,21 @@ def main() -> int:
                   r.get("status") == "fail" and len(r.get("rows", [])) > 0,
                   r.get("summary", "")[:110])
 
+        section("rule return contract")
+        # A clean day returns success + empty rows -> run.status=pass, no ticket
+        r = c.post("/api/rules/LAD-CA-03/test", headers=ud,
+                   json={"data_date": "2026-10-19"}).json()
+        check("clean day -> run.status=pass", r.get("status") == "pass", str(r.get("status")))
+        check("clean day -> no rows", len(r.get("rows", [])) == 0)
+        check("clean day -> has summary", bool(r.get("summary")))
+
+        section("rule return contract")
+        r = c.post("/api/rules/LAD-CA-03/test", headers=ud,
+                   json={"data_date": "2026-10-19"}).json()
+        check("clean day -> run.status=pass", r.get("status") == "pass", str(r.get("status")))
+        check("clean day -> no rows", len(r.get("rows", [])) == 0)
+        check("clean day -> has summary", bool(r.get("summary")))
+
         section("cross-system join")
         r = c.post("/api/rules/ABM-CA-22/test", headers=ud,
                    json={"data_date": "2026-10-15"}).json()
@@ -422,11 +437,11 @@ def main() -> int:
             # The probe's delete also removes its schedules and version files, so the
             # repository is left exactly as it was found.
 
-        section("runs ledger and dashboard")
-        runs = c.get("/api/runs", headers=ud, params={"perPage": 200}).json()
-        check("runs recorded", runs["total"] >= 8, f"total={runs['total']}")
-        check("runs carry rule_code", all(x.get("rule_code") for x in runs["data"]))
-        rsum = c.get("/api/runs/summary", headers=ud).json()
+        section("rule_runs ledger and dashboard")
+        runs = c.get("/api/rule-runs", headers=ud, params={"perPage": 200}).json()
+        check("rule_runs recorded", runs["total"] >= 8, f"total={runs['total']}")
+        check("rule_runs carry rule_code", all(x.get("rule_code") for x in runs["data"]))
+        rsum = c.get("/api/rule-runs/summary", headers=ud).json()
         check("run summary has pass+fail", rsum["pass"] > 0 and rsum["fail"] > 0, str(rsum))
 
         dash = c.get("/api/dashboard").json()

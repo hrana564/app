@@ -194,7 +194,7 @@ class Run(Base):
     they never need a join.
     """
 
-    __tablename__ = "runs"
+    __tablename__ = "rule_runs"
 
     id: Mapped[int] = mapped_column(primary_key=True)
     rule_id: Mapped[int] = mapped_column(
@@ -237,7 +237,7 @@ class Ticket(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     ticket_no: Mapped[str] = mapped_column(String(32), unique=True, nullable=False)
     run_id: Mapped[int] = mapped_column(
-        ForeignKey("runs.id", ondelete="CASCADE"), nullable=False, index=True
+        ForeignKey("rule_runs.id", ondelete="CASCADE"), nullable=False, index=True
     )
     rule_id: Mapped[int] = mapped_column(
         ForeignKey("rules_master.id", ondelete="RESTRICT"), nullable=False, index=True

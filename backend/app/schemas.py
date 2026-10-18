@@ -26,18 +26,22 @@ ValidationStatus = Literal["unvalidated", "valid", "invalid"]
 class RuleResult(BaseModel):
     """What every rule .py file must return from run(ctx).
 
-    no_rows_returned -> run.status = pass, no ticket
-    rows_returned    -> run.status = fail, ticket created with `rows`
-    error            -> run.status = error, no ticket, traceback stored
+    status          - did the rule EXECUTE correctly? "success" or "failed"
+    error_message   - if status="failed", a human-readable reason; else None
+    rows            - the findings. Non-empty -> ticket raised. Empty -> no ticket.
+
+    A rule that runs and finds nothing returns {"status": "success", "rows": []}.
+    A rule that cannot run at all (missing data, query error) returns
+    {"status": "failed", "error_message": "...", "rows": []}.
     """
 
-    status: Literal["no_rows_returned", "rows_returned", "error"] = Field(
-        description="no_rows_returned = pass, rows_returned = fail, error = rule bug"
+    status: Literal["success", "failed"] = Field(
+        description="success = rule executed; failed = rule could not run"
     )
+    error_message: str | None = Field(default=None, max_length=4000)
     summary: str = Field(default="", max_length=2000)
     metrics: dict[str, Any] = Field(default_factory=dict)
     rows: list[dict[str, Any]] = Field(default_factory=list)
-    error: str = Field(default="", max_length=4000)
 
 
 # ---------------------------------------------------------------------------

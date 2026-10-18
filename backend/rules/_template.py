@@ -10,10 +10,17 @@ Every rule file must define:
 
 and return a dict matching app.schemas.RuleResult:
 
-    status  : "no_rows_returned" | "rows_returned" | "error"
-    summary : str   - one line an auditor can read on a ticket
-    metrics : dict  - the numbers behind the verdict
-    rows    : list  - the rows that caused the breach (drives the ticket)
+    status        : "success" | "failed"   - did the rule EXECUTE?
+    error_message : str | None             - if "failed", why; else None
+    summary       : str   - one line an auditor can read on a ticket
+    metrics       : dict  - the numbers behind the verdict
+    rows          : list  - the findings. Non-empty -> ticket. Empty -> no ticket.
+
+A rule that runs and finds nothing:
+    return {"status": "success", "error_message": None, "rows": []}
+
+A rule that cannot run (missing data, query error):
+    return {"status": "failed", "error_message": "...", "rows": []}
 
 WHAT ctx GIVES YOU
 ------------------
@@ -57,9 +64,11 @@ def run(ctx) -> dict:
 
     if not totals or not totals["invoice_count"]:
         return {
-            "status": "no_rows_returned",
+            "status": "failed",
+            "error_message": f"No data in SourceData/{ctx.date}",
             "summary": f"No data in SourceData/{ctx.date}",
             "metrics": {},
+            "rows": [],
         }
 
     max_value = float(totals["max_value"] or 0)
@@ -67,7 +76,8 @@ def run(ctx) -> dict:
     # --- 2. Decide ---------------------------------------------------------
     if max_value <= threshold:
         return {
-            "status": "no_rows_returned",
+            "status": "success",
+            "error_message": None,
             "summary": (
                 f"{totals['invoice_count']} invoices scanned, max value "
                 f"{max_value:.2f} within limit {threshold}"
@@ -76,6 +86,7 @@ def run(ctx) -> dict:
                 "invoice_count": totals["invoice_count"],
                 "max_value": max_value,
             },
+            "rows": [],
         }
 
     # --- 3. Return the offending rows (these become the ticket) ------------
@@ -92,7 +103,8 @@ def run(ctx) -> dict:
     summary = f"{len(rows)} invoice(s) above {threshold} AED; largest {max_value:.2f}"
 
     return {
-        "status": "rows_returned",
+        "status": "success",
+        "error_message": None,
         "summary": summary,
         "metrics": {
             "threshold": threshold,

@@ -25,10 +25,13 @@ That is what lets one rule join three systems.
 from __future__ import annotations
 
 import csv
+import hashlib
 import random
 import sys
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
+
+from faker import Faker
 
 APP_ROOT = Path(__file__).resolve().parent.parent.parent
 SOURCEDATA_DIR = APP_ROOT / "mount" / "SourceData"
@@ -82,6 +85,48 @@ def rng_for(entity: str, day: date) -> random.Random:
 
 
 # ---------------------------------------------------------------------------
+# Realistic names
+#
+# An earlier version wrote "Laduree Staff 0042" and "ABM Employee 0007" as
+# names. Every one of those differs from every other by a single digit, which
+# scores 93% under character-similarity - so the ABM-CA-22 name check flagged
+# 87 unrelated pairs and the fixture could not distinguish a working control
+# from a broken one. Real names put the highest-scoring unrelated pair at 81%.
+#
+# Faker is seeded per key so the same person gets the same name on every
+# regeneration: the fixture stays stable across runs, which is what makes the
+# planted breaches assertable.
+# ---------------------------------------------------------------------------
+_NAME_HONORIFICS = ("Mr ", "Mrs ", "Ms ", "Miss ", "Dr ", "Prof ")
+
+
+def _person_name(rng: random.Random, key: str) -> str:
+    """A stable, realistic person name for `key`."""
+    fake = _faker_for(key)
+    name = fake.name().strip()
+    for prefix in _NAME_HONORIFICS:
+        if name.startswith(prefix):
+            name = name[len(prefix):]
+            break
+    return name
+
+
+def _faker_for(key: str) -> Faker:
+    faker = Faker("en_GB")
+    faker.seed_instance(_stable_seed(key))
+    return faker
+
+
+def _stable_seed(key: str) -> int:
+    """A seed derived from `key`, stable across processes and platforms.
+
+    `hash()` is salted per process, so it cannot be used here - regenerating
+    the fixture tomorrow must produce yesterday's names.
+    """
+    return int.from_bytes(hashlib.sha256(key.encode("utf-8")).digest()[:4], "big")
+
+
+# ---------------------------------------------------------------------------
 # Laduree
 # ---------------------------------------------------------------------------
 def lad_employees(rng: random.Random) -> list[dict]:
@@ -93,7 +138,7 @@ def lad_employees(rng: random.Random) -> list[dict]:
         rows.append(
             {
                 "employee_id": emp_id,
-                "full_name": f"Laduree Staff {i:04d}",
+                "full_name": _person_name(rng, f"LAD-{emp_id}"),
                 "nationality": rng.choice(NATIONALITIES),
                 "department": rng.choice(["Retail Ops", "Kitchen", "Bar", "Supply Chain"]),
                 "designation": rng.choice(
@@ -353,7 +398,7 @@ def abm_employees(rng: random.Random, shared_ibans: list[str]) -> list[dict]:
         rows.append(
             {
                 "employee_id": emp_id,
-                "full_name": f"ABM Employee {i:04d}",
+                "full_name": _person_name(rng, f"ABM-{emp_id}"),
                 "nationality": rng.choice(NATIONALITIES),
                 "department": rng.choice(
                     ["Retail", "Distribution", "Finance", "HR", "Buying", "E-Commerce"]
@@ -366,27 +411,36 @@ def abm_employees(rng: random.Random, shared_ibans: list[str]) -> list[dict]:
                 "exit_date": (date(2026, 9, 30).isoformat() if exited else ""),
                 "monthly_salary": f"{rng.randrange(4200, 26000)}",
                 "bank_iban": iban,
-                "bank_account_name": f"ABM Employee {i:04d}",
+                "bank_account_name": _person_name(rng, f"ABM-{emp_id}"),
             }
         )
     return rows
 
 
-def abm_vendors(rng: random.Random, shared_ibans: list[str]) -> list[dict]:
+def abm_vendors(rng: random.Random, shared_ibans: list[str],
+                abm_emp: list[dict]) -> list[dict]:
     rows = []
     for i in range(1, 19):
         vendor_id = f"VND-A{i:04d}"
-        # The first three vendors share the employee bank accounts.
-        iban = shared_ibans[i - 1] if i <= len(shared_ibans) else _iban(rng, f"AE5{i:05d}")
+        fake = _faker_for(f"VND-{vendor_id}")
+        # The first three vendors are held in the bank accounts of the first
+        # three employees: that is the ABM-CA-22 / ABM-CA-23 control breach,
+        # and it is planted on BOTH the IBAN and the account holder name so
+        # either detection path finds it.
+        breach = i <= len(shared_ibans)
+        iban = shared_ibans[i - 1] if breach else _iban(rng, f"AE5{i:05d}")
+        account_name = (
+            abm_emp[i - 1]["bank_account_name"] if breach else fake.company()
+        )
         rows.append(
             {
                 "vendor_id": vendor_id,
-                "vendor_name": f"Vendor {i:03d} Trading LLC",
+                "vendor_name": fake.company(),
                 "vendor_bank_iban": iban,
-                "vendor_account_name": f"ABM Employee {i:04d}"
-                if i <= len(shared_ibans)
-                else f"Vendor {i:03d} Trading LLC",
-                "vendor_address": f"Warehouse {rng.randrange(1, 90)}, Dubai, UAE",
+                "vendor_account_name": account_name,
+                "vendor_address": (
+                    f"Warehouse {rng.randrange(1, 90)}, Dubai, UAE"
+                ),
                 "vendor_phone": f"+9715{rng.randrange(10000000, 99999999)}",
                 "is_active": str(rng.random() > 0.12).lower(),
             }
@@ -567,14 +621,22 @@ def _write(entity: str, day: date, table: str, rows: list[dict]) -> None:
 def main() -> int:
     # --- master data, stable across all days -------------------------------
     master_rng = random.Random("ABM-2026")
-    shared_ibans = [f"AE{random.Random('shared').randrange(10**16):016d}" for _ in range(3)]
+
+    # Seeded ONCE, then drawn three times. This used to be
+    #     [f"AE{random.Random('shared').randrange(...):016d}" for _ in range(3)]
+    # which built a fresh Random seeded 'shared' on every iteration and so
+    # produced the SAME IBAN three times. All six records then shared one
+    # account, and the vendor/employee join returned a 3x3 cross product where
+    # three one-to-one collisions were intended.
+    shared_rng = random.Random("ABM-shared-ibans")
+    shared_ibans = [f"AE{shared_rng.randrange(10**16):016d}" for _ in range(3)]
 
     lad_emp = lad_employees(random.Random("LAD-master"))
     lad_item = lad_items(random.Random("LAD-items"))
     lad_recipe = lad_recipes(random.Random("LAD-recipes"), lad_item)
 
     abm_emp = abm_employees(master_rng, shared_ibans)
-    abm_vendor = abm_vendors(master_rng, shared_ibans)
+    abm_vendor = abm_vendors(master_rng, shared_ibans, abm_emp)
     abm_credit = abm_customer_credit(master_rng)
 
     for day in DAYS:

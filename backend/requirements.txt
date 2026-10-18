@@ -40,3 +40,8 @@ openai==2.14.0
 pytest>=8.3,<9
 pytest-asyncio==1.2.0
 pip-licenses==6.0.0b13
+
+# Sample-data generation only - never imported by the app or by a rule.
+# Pinned because the names it produces are what the planted breaches are
+# asserted against; an unpinned upgrade would silently change the fixture.
+faker==40.43.0

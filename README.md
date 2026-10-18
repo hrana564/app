@@ -519,7 +519,7 @@ Missing tables are created on startup, and the two users plus baseline parameter
 .\.venv\Scripts\python.exe scripts\make_sample_data.py
 ```
 
-Generates `SourceData/` for both entities across 6 days, with **deliberately planted breaches**:
+Generates `mount/SourceData/` for both entities across 6 days, with **deliberately planted breaches**:
 
 | Date | Laduree | Al Boom Marine |
 |---|---|---|
@@ -531,6 +531,18 @@ Generates `SourceData/` for both entities across 6 days, with **deliberately pla
 | 2026-10-20 | clean | vendor/employee bank match |
 
 Without planted breaches you cannot tell a working rule from a broken one.
+
+Person and company names come from Faker (`en_GB`), seeded per key so the same
+record gets the same name on every regeneration. That matters more than it looks:
+an earlier version wrote `ABM Employee 0007` and `Laduree Staff 0042`, which
+differ from one another by a single digit and therefore score **93%** under
+character similarity. `ABM-CA-22` flagged **87 unrelated pairs** against a real
+answer of 3, so the fixture could not tell a working control from a broken one.
+Real names put the highest-scoring unrelated pair at **75%**, and the control now
+returns exactly the 3 planted collisions.
+
+Faker is pinned in `requirements.txt` for the same reason: an unpinned upgrade
+would silently change every name, and with it every planted-breach assertion.
 
 ### Step 5 — frontend
 
@@ -848,6 +860,7 @@ Current result: **52 permitted, 1 review, 0 unknown, 0 blocked.**
 | Misc | `orjson` | Apache-2.0 **or** MIT |
 | | `croniter` | MIT |
 | Rules | `polars` | MIT |
+| Dev | `faker` | MIT (sample data only) |
 | Frontend | `react`, `react-dom` | MIT |
 | | `react-admin` | MIT |
 | | `@mui/material` | MIT (core only) |

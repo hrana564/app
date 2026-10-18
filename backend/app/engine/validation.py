@@ -23,12 +23,10 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.engine.datasources import registry_for
 from app.engine.loader import load_rule
-from app.models import Param
 
 # Imports a rule may legitimately use.
 ALLOWED_IMPORTS = {
@@ -57,7 +55,6 @@ class ValidationResult:
     status: str  # "valid" | "invalid"
     errors: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
-    declared_params: list[str] = field(default_factory=list)
     declared_datasources: list[str] = field(default_factory=list)
     declared_alert: dict[str, Any] = field(default_factory=dict)
     metadata: dict[str, Any] = field(default_factory=dict)
@@ -94,7 +91,6 @@ class RuleValidator:
             "description": getattr(module, "DESCRIPTION", None),
             "entity": getattr(module, "ENTITY", None),
         }
-        result.declared_params = _as_list(getattr(module, "PARAMS", None))
         result.declared_datasources = _as_list(getattr(module, "DATASOURCES", None))
         result.declared_alert = dict(getattr(module, "ALERT", None) or {})
 
@@ -130,18 +126,7 @@ class RuleValidator:
                 result.status = "invalid"
         result.declared_datasources = used
 
-        # --- 5: declared params must exist ---------------------------------
-        if result.declared_params:
-            rows = (await session.execute(select(Param))).scalars().all()
-            existing = {p.key for p in rows}
-            for key in result.declared_params:
-                if key not in existing:
-                    result.warnings.append(
-                        f"PARAMS declares '{key}', which does not exist yet - "
-                        f"ctx.params.get('{key}') will fall back to the rule's default"
-                    )
-
-        # --- 6: declared ENTITY must match the database --------------------
+        # --- 5: declared ENTITY must match the database --------------------
         declared_entity = result.metadata.get("entity")
         if declared_entity and str(declared_entity).upper() != self.entity:
             result.warnings.append(

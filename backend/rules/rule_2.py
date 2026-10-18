@@ -11,8 +11,6 @@ Source requirement (Laduree continuous auditing areas #4 and #6):
      staff member beyond a specified % (say 50%)"
 
 Applied to cash-tendered invoices per the stricter of the two clauses.
-
-Tunable via ctx.params: lad.single_staff_cash_share (default 50.0)
 """
 
 NAME = "LAD-CA-04 Single staff member dominates daily cash settlement"
@@ -23,9 +21,12 @@ DESCRIPTION = (
 ENTITY = "LAD"
 DATASOURCES = ["ipos_sales"]
 
+# One staff member may settle at most this share of the day's cash invoices.
+SINGLE_STAFF_CASH_SHARE_LIMIT = 50.0
+
 
 def run(ctx) -> dict:
-    share_limit = float(ctx.params.get("lad.single_staff_cash_share", 50.0))
+    share_limit = SINGLE_STAFF_CASH_SHARE_LIMIT
 
     totals = ctx.sql("""
         SELECT count(*) AS cash_invoices

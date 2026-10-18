@@ -33,17 +33,9 @@ from app.engine.ctx import RuleContext, build_views
 from app.engine.datasources import registry_for
 from app.engine.loader import load_rule
 from app.engine.ticketing import raise_tickets
-from app.models import Param, Rule, Run, Ticket
+from app.models import Rule, Run, Ticket
 from app.schemas import RuleResult
 from app.settings import settings
-
-
-async def load_params(session: AsyncSession) -> dict[str, Any]:
-    rows = (await session.execute(select(Param))).scalars().all()
-    out: dict[str, Any] = {}
-    for p in rows:
-        out[p.key] = p.value_numeric if p.value_numeric is not None else p.value_text
-    return out
 
 
 def json_safe(value: Any) -> Any:
@@ -96,7 +88,6 @@ async def execute_rule(
     session.add(run)
     await session.flush()
 
-    params = await load_params(session)
     counts: dict[str, int] = {}
     result: RuleResult | None = None
 
@@ -120,7 +111,6 @@ async def execute_rule(
                 ctx = RuleContext(
                     con=con,
                     data_date=data_date,
-                    params=params,
                     query_mode=rule.query_mode,
                     rule_name=rule.name,
                     registered=list(registry_for(rule.entity).keys()),

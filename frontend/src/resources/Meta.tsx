@@ -1,95 +1,9 @@
 import { useEffect, useState } from "react";
-import { Datagrid, List, useNotify, useRefresh } from "react-admin";
 import {
-  Box, Card, CardContent, Chip, Stack, Table, TableBody, TableCell, TableHead,
-  TableRow, Typography,
+  Box, Card, CardContent, Chip, Stack, Typography,
 } from "@mui/material";
 import StorageIcon from "@mui/icons-material/Storage";
-import TuneIcon from "@mui/icons-material/Tune";
-import { api } from "../dataProvider";
 import { EntityChip } from "../components/ui";
-
-/* ================= Parameters ================= */
-export const ParamList = () => {
-  const [rows, setRows] = useState<any[] | null>(null);
-  const notify = useNotify();
-  const refresh = useRefresh();
-
-  const load = () => {
-    fetch("/api/params", {
-      headers: { Authorization: `Bearer ${localStorage.getItem("abm.token")}` },
-    })
-      .then((r) => r.json())
-      .then(setRows)
-      .catch(() => notify("Could not load parameters", { type: "error" }));
-  };
-
-  useEffect(load, []);
-
-  const update = async (key: string, value: number) => {
-    try {
-      await fetch("/api/params", {
-        method: "PUT",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${localStorage.getItem("abm.token")}`,
-        },
-        body: JSON.stringify({ key, value_numeric: value }),
-      });
-      notify(`${key} saved`, { type: "success" });
-      refresh();
-      load();
-    } catch {
-      notify("Could not save parameter", { type: "error" });
-    }
-  };
-
-  if (!rows) return <Typography>Loading…</Typography>;
-
-  return (
-    <Box>
-      <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-        Thresholds are read by rules via <code>ctx.params</code>. Changing one here re-scopes
-        every rule that uses it on its next run - no code change required.
-      </Typography>
-      <Card>
-        <Table size="small">
-          <TableHead>
-            <TableRow>
-              <TableCell>Key</TableCell>
-              <TableCell>Label</TableCell>
-              <TableCell align="right">Value</TableCell>
-              <TableCell>Description</TableCell>
-            </TableRow>
-          </TableHead>
-          <TableBody>
-            {rows.map((p) => (
-              <TableRow key={p.id} hover>
-                <TableCell>
-                  <Typography variant="body2" sx={{ fontFamily: "monospace", fontWeight: 700 }}>
-                    {p.key}
-                  </Typography>
-                </TableCell>
-                <TableCell>{p.label}</TableCell>
-                <TableCell align="right">
-                  <Typography
-                    component="span"
-                    sx={{ fontFamily: "monospace", fontWeight: 700, color: "primary.main" }}
-                  >
-                    {p.value_numeric ?? p.value_text ?? "—"}
-                  </Typography>
-                </TableCell>
-                <TableCell>
-                  <Typography variant="caption" color="text.secondary">{p.description}</Typography>
-                </TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      </Card>
-    </Box>
-  );
-};
 
 /* ================= Datasources ================= */
 export const DatasourceList = () => {

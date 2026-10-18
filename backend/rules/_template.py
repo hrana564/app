@@ -20,13 +20,14 @@ WHAT ctx GIVES YOU
     ctx.table("pos_sales")   -> quoted view name for FROM / JOIN
     ctx.sql(query)           -> Result (.all() / .one() / .scalar() / .count())
     ctx.date                 -> the date being audited
-    ctx.params               -> tunable thresholds, e.g. params["fscs.last_hour_ratio"]
     ctx.log("...")           -> appends a note to the run summary
     ctx.count_rows("name")   -> row count of a view
 
 KEEP RULES DEFENSIVE
 --------------------
-  * Read thresholds from ctx.params so auditors can tune them without a code change.
+  * Declare thresholds as module constants in UPPER_CASE with a comment saying what
+    they measure. Saving the file creates a new rule version, so the change is
+    recorded rather than lost.
   * Guard against empty data - a missing day folder must not crash the run.
   * Interpolate numbers only after casting to float, never raw user strings.
   * Only import from: json, datetime, statistics, math, decimal.
@@ -37,9 +38,13 @@ NAME = "Template rule"
 DESCRIPTION = "Copy me. Replace the SQL and the threshold."
 DATASOURCES = ["pos_sales"]
 
+# Thresholds belong to the rule. Changing one is a code change, which is
+# recorded as a new entry in rule_versions - so the audit trail keeps it.
+VALUE_LIMIT = 10.0
+
 
 def run(ctx) -> dict:
-    threshold = float(ctx.params.get("template.some_threshold", 10))
+    threshold = VALUE_LIMIT
 
     # --- 1. Gather the numbers behind the verdict -------------------------
     totals = ctx.sql("""

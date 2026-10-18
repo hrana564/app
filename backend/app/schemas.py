@@ -105,7 +105,6 @@ class RuleOut(BaseModel):
     dedupe_mode: DedupeMode
     dedupe_window_hours: int
     alerting_enabled: bool
-    declared_params: list[str]
     declared_datasources: list[str]
     declared_alert: dict[str, Any]
     source_file: str
@@ -158,7 +157,6 @@ class ValidationReport(BaseModel):
     status: ValidationStatus
     errors: list[str]
     warnings: list[str]
-    declared_params: list[str]
     declared_datasources: list[str]
     declared_alert: dict[str, Any]
     name: str | None = None
@@ -329,25 +327,3 @@ class TicketAck(BaseModel):
     note: str = Field(default="", max_length=4000)
 
 
-# ---------------------------------------------------------------------------
-# Param
-# ---------------------------------------------------------------------------
-class ParamOut(BaseModel):
-    id: int
-    key: str
-    label: str
-    value_numeric: float | None
-    value_text: str | None
-    description: str
-    updated_by: str
-    updated_at: datetime
-
-    model_config = {"from_attributes": True}
-
-
-class ParamUpsert(BaseModel):
-    key: str = Field(min_length=1, max_length=128)
-    label: str = ""
-    value_numeric: float | None = None
-    value_text: str | None = None
-    description: str = ""

@@ -228,7 +228,6 @@ async def _validate_and_store(
     )
     rule.validated_at = now()
     rule.validated_by = username
-    rule.declared_params = result.declared_params
     rule.declared_datasources = result.declared_datasources
     rule.declared_alert = result.declared_alert
 
@@ -236,7 +235,6 @@ async def _validate_and_store(
         status=rule.validation_status,
         errors=result.errors,
         warnings=result.warnings,
-        declared_params=result.declared_params,
         declared_datasources=result.declared_datasources,
         declared_alert=result.declared_alert,
         name=meta.get("name"),
@@ -262,7 +260,6 @@ async def validation_report(
             m["message"] for m in (rule.validation_messages or [])
             if m.get("level") == "warning"
         ],
-        declared_params=rule.declared_params or [],
         declared_datasources=rule.declared_datasources or [],
         declared_alert=rule.declared_alert or {},
         can_activate=rule.validation_status == "valid",

@@ -1,8 +1,11 @@
 """SQLAlchemy models for the audit control store.
 
-Eight tables, matching the four core entities (rules / schedules / runs /
-tickets) plus users, datasource registry, rule version history and tunable
-parameters.
+Seven tables, matching the four core entities (rules / schedules / runs /
+tickets) plus users, datasource registry and rule version history.
+
+Audit thresholds live in the rule source, not in a table. Changing one is a
+code change, which produces a new entry in rule_versions - so the audit trail
+records the change rather than losing it.
 """
 
 from __future__ import annotations
@@ -111,7 +114,6 @@ class Rule(Base, TimestampMixin):
     alerting_enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
     # --- declared by the rule file ---------------------------------------
-    declared_params: Mapped[list[Any]] = mapped_column(JSONB, default=list, nullable=False)
     declared_datasources: Mapped[list[Any]] = mapped_column(JSONB, default=list, nullable=False)
     declared_alert: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, nullable=False)
 
@@ -252,16 +254,3 @@ class Ticket(Base):
     )
 
 
-# ---------------------------------------------------------------------------
-# Tunable parameters - most audit thresholds are undefined in the source docs
-# ---------------------------------------------------------------------------
-class Param(Base, TimestampMixin):
-    __tablename__ = "params"
-
-    id: Mapped[int] = mapped_column(primary_key=True)
-    key: Mapped[str] = mapped_column(String(128), unique=True, nullable=False)
-    label: Mapped[str] = mapped_column(String(255), default="")
-    value_numeric: Mapped[float | None] = mapped_column()
-    value_text: Mapped[str | None] = mapped_column(Text)
-    description: Mapped[str] = mapped_column(Text, default="")
-    updated_by: Mapped[str] = mapped_column(String(64), default="")

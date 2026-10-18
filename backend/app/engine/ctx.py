@@ -65,14 +65,12 @@ class RuleContext:
         *,
         con: duckdb.DuckDBPyConnection,
         data_date: date,
-        params: dict[str, Any] | None = None,
         query_mode: str = "SNAPSHOT",
         rule_name: str = "",
         registered: list[str] | None = None,
     ):
         self._con = con
         self.date = data_date
-        self.params = params or {}
         self.query_mode = query_mode
         self.rule_name = rule_name
         self._registered = registered or []

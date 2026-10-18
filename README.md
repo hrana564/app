@@ -76,7 +76,7 @@ Power Automate ──▶ SourceData/<ENTITY>/<YYYY-MM-DD>/<table>.csv
                         ▼
                   PostgreSQL  ABM_Audit_Portal
                  rules · rule_versions · schedules · runs · tickets
-                 params · datasources · users
+                 datasources · users
                         │
                         ▼
               React UI  (react-admin)   ──▶  later: Power Apps
@@ -98,7 +98,7 @@ datasources    id, entity, name, system, path_template, grain, columns, derived,
 rules          id, code, entity, name, description, severity, query_mode, window_days,
                status, validation_status, validation_messages, validated_at, validated_by,
                ticket_mode, group_by, dedupe_mode, dedupe_window_hours, alerting_enabled,
-               declared_params, declared_datasources, declared_alert,
+               declared_datasources, declared_alert,
                source_file, current_version, datasource_hint, origin, created_by
 rule_versions  id, rule_id, version, source_code, change_note, created_by, created_at
 rule_schedules id, rule_id, label, kind, config, cron, timezone, data_lag_days,
@@ -109,7 +109,6 @@ runs           id, rule_id, rule_version, schedule_id, data_date, triggered_by,
 tickets        id, ticket_no, run_id, rule_id, schedule_id, severity, summary, rows,
                occurrences, first_run_id, last_run_id, fingerprint, last_seen_at,
                status, acknowledged_by, acknowledged_at, ack_note, created_at
-params         id, key, label, value_numeric, value_text, description, updated_by
 ```
 
 ### Key decisions
@@ -131,9 +130,10 @@ params         id, key, label, value_numeric, value_text, description, updated_b
 - **`occurrences` / `first_run_id` / `last_run_id`** record how many times one ongoing breach was
   observed, so a rule with three cadences doesn't flood the inbox with three identical tickets.
 
-- **`params` exists because most thresholds are undefined in the source requirements.** Phrases like
-  *"beyond a specified limit (say 50%)"* appear throughout; those become tunable parameters rather
-  than hardcoded numbers.
+- **Thresholds live in the rule source, as named constants.** The requirements are full of
+  undefined limits — *"say 50%"*, *"exception threshold to be defined"* — so each rule declares
+  them itself, e.g. `SINGLE_STAFF_CASH_SHARE_LIMIT = 50.0`. Changing one is a code change, which
+  writes a new `rule_versions` row: the audit trail records the change instead of losing it.
 
 - **`rule_schedules.cron` is derived, never authored.** `kind` + `config` are what a user fills in.
   See §4a.
@@ -180,7 +180,6 @@ traceback and never takes down the process.
 | `ctx.table("ipos_sales")` | Quoted view name for `FROM` / `JOIN`. Works inside SQL strings or from Python. |
 | `ctx.sql(query)` | Run read-only SQL. Returns `Result` (`.all()`, `.one()`, `.scalar()`, `.count()`) |
 | `ctx.date` | The data date being audited |
-| `ctx.params` | Tunable thresholds, e.g. `ctx.params.get("lad.last_hour_ratio", 2.0)` |
 | `ctx.log("...")` | Append a note to the run summary |
 | `ctx.count_rows("name")` | Row count of a view |
 
@@ -255,7 +254,7 @@ Validation is static and cheap, so it runs on every save:
 | Defines `run(ctx)` | module attribute |
 | No banned imports / calls | **AST scan** — `os`, `sys`, `subprocess`, `socket`, `open()`, `eval` |
 | Every table exists for this entity | union of declared `DATASOURCES` **and** every `ctx.table("x")` found in the source |
-| Declared params exist | warn only — `ctx.params.get()` falls back to the rule's default |
+| Declared entity matches the DB | warn only |
 
 > The `ctx.table("x")` check needs a **regex pass as well as the AST**, because the normal
 > authoring style puts the call *inside an SQL string*, where it is just text to the parser. The AST
@@ -344,8 +343,6 @@ Two roles, seeded once from `.env` and then bcrypt-hashed into PostgreSQL.
 | Create / edit / pause a rule | ✅ | ❌ |
 | Generate a rule from a prompt | ✅ | ❌ |
 | Create / edit a schedule | ✅ | ❌ |
-| Edit parameters | ✅ | ❌ |
-| Manage datasources | ✅ | ❌ |
 
 Clean split: **auditors consume and acknowledge; admins author and govern.** This also satisfies
 requirement ABM #30 — *"regulation detail to be updated in the beginning of the year with
@@ -458,7 +455,7 @@ app/
 │   │   ├── api/
 │   │   │   ├── deps.py             auth + role gating
 │   │   │   ├── auth.py  rules.py  schedules.py  runs.py  tickets.py
-│   │   │   └── params.py  datasources.py
+│   │   │   └── datasources.py
 │   │   └── engine/
 │   │       ├── datasources.py      per-entity registry
 │   │       ├── ctx.py              RuleContext + DuckDB view builder
@@ -581,8 +578,6 @@ All endpoints except `/health`, `/api/auth/login` and `/api/dashboard` require
 | GET | `/api/tickets/{id}` | any | One ticket |
 | POST | `/api/tickets/{id}/acknowledge` | **any** | `{status, note}` |
 | POST | `/api/tickets/{id}/reopen` | any | Back to open |
-| GET/PUT | `/api/params`, `/api/params/{key}` | any / admin | Tunable thresholds |
-| GET | `/api/params/as-dict` | any | Exactly what `ctx.params` sees |
 | GET | `/api/datasources` | any | Registry (+ `?entity=`) |
 | GET | `/api/datasources/entities` | any | The two entities and their systems |
 | GET | `/api/datasources/available-dates?entity=LAD` | any | Day folders present |
@@ -596,7 +591,7 @@ Copy `backend/rules/_template.py` to `rules/rule_<id>.py`.
 
 ```python
 def run(ctx) -> dict:
-    limit = float(ctx.params.get("lad.last_hour_ratio", 2.0))
+    limit = LAST_HOUR_RATIO_LIMIT   # declared at module level
 
     totals = ctx.sql(f"""
         SELECT sum(invoice_value) FILTER (WHERE hour = 23) AS last_hour,
@@ -634,7 +629,8 @@ Register it via `POST /api/rules` (the server writes the file and creates versio
 
 ### Guidelines
 
-- Read thresholds from `ctx.params` so auditors tune without a code change.
+- Declare thresholds as module constants in UPPER_CASE with a comment saying what they measure.
+  Saving the file creates a new rule version, so a threshold change is recorded rather than lost.
 - Guard against a missing day folder — `build_views` registers an empty view, so aggregate
   functions return `NULL`.
 - Cast numbers before string interpolation (`float(x)`), never raw user input.

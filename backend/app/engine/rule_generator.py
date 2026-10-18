@@ -30,7 +30,6 @@ A rule is a single Python file. It MUST define exactly one function:
     ctx.table("name")  -> quoted view name, usable in FROM / JOIN
     ctx.sql(query)     -> run read-only SQL; returns Result
     ctx.date           -> datetime.date being audited
-    ctx.params         -> dict of tunable parameters (thresholds)
     ctx.log("...")     -> append a note to the run summary
     ctx.count_rows("name") -> row count of a view
 
@@ -51,8 +50,9 @@ The returned dict MUST validate against:
 RULES:
   * Return "rows_returned" with the offending rows when the audit condition is BREACHED.
   * Return "no_rows_returned" when the data is clean. rows may be omitted.
-  * Read thresholds from ctx.params (e.g. ctx.params.get("fscs.last_hour_ratio", 1.5))
-    rather than hardcoding, so auditors can tune them.
+  * Declare every threshold as a module-level constant in UPPER_CASE with a
+    comment saying what it measures, e.g. LAST_HOUR_RATIO_LIMIT = 1.5.
+    Thresholds belong to the rule, not to a runtime configuration table.
   * Cast row values to str/float when embedding them in the summary.
   * Only import from: json, datetime, statistics, math, decimal
   * Do NOT write files, open sockets, or import os/subprocess/sys.
@@ -60,9 +60,13 @@ RULES:
 '''
 
 EXAMPLE_RULE = '''\
+# Last-hour value may not exceed this multiple of the hourly average.
+LAST_HOUR_RATIO_LIMIT = 1.5
+
+
 def run(ctx):
     """FSCS-CA-03  Last-hour invoice value spike."""
-    threshold = float(ctx.params.get("fscs.last_hour_ratio", 1.5))
+    threshold = LAST_HOUR_RATIO_LIMIT
 
     totals = ctx.sql("""
         SELECT

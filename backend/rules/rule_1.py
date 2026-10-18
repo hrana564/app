@@ -10,10 +10,8 @@ Source requirement (Laduree continuous auditing area #3):
      AED 150 / average invoice value during the day."
 
 Applied here as: the value settled in the final trading hour must not exceed
-`lad.last_hour_ratio` times the average hourly value for the day. Retail and
+LAST_HOUR_RATIO_LIMIT times the average hourly value for the day. Retail and
 bar item groups are in scope.
-
-Tunable via ctx.params: lad.last_hour_ratio (default 2.0)
 """
 
 NAME = "LAD-CA-03 Last-hour of trading value spike"
@@ -26,9 +24,12 @@ DATASOURCES = ["ipos_sales"]
 
 LAST_HOUR = 23  # stores trade 10:00-23:59, so the final trading hour is 23
 
+# The last hour may settle at most this multiple of the hourly average.
+LAST_HOUR_RATIO_LIMIT = 2.0
+
 
 def run(ctx) -> dict:
-    ratio_limit = float(ctx.params.get("lad.last_hour_ratio", 2.0))
+    ratio_limit = LAST_HOUR_RATIO_LIMIT
 
     totals = ctx.sql(f"""
         SELECT

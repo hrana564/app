@@ -15,7 +15,7 @@ This is the cross-system proof: one rule, two systems, joined on a shared key
 (the IBAN). It never touches the CSV paths - both tables arrive as DuckDB
 views.
 
-Tunable via ctx.params: abm.bank_match_min_similarity (default 92.0)
+The match threshold lives in this file.
 """
 
 NAME = "ABM-CA-22 Vendor bank details match employee bank details"
@@ -26,9 +26,13 @@ DESCRIPTION = (
 ENTITY = "ABM"
 DATASOURCES = ["hr_employees", "bc_vendors"]
 
+# A vendor bank record must clear this similarity (%) against an employee
+# record before it is treated as a control breach.
+BANK_MATCH_MIN_SIMILARITY = 92.0
+
 
 def run(ctx) -> dict:
-    min_similarity = float(ctx.params.get("abm.bank_match_min_similarity", 92.0))
+    min_similarity = BANK_MATCH_MIN_SIMILARITY
 
     counts = ctx.sql("""
         SELECT

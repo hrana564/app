@@ -8,7 +8,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import auth, datasources, params, rules, runs, schedules, tickets
+from app.api import auth, datasources, rules, runs, schedules, tickets
 from app.api.deps import SessionDep
 from app.db import SessionLocal, init_models, table_names
 from app.engine import scheduler
@@ -37,7 +37,7 @@ async def _bootstrap() -> None:
     """Seed the two bootstrap users and any missing baseline parameters."""
     from sqlalchemy import select
 
-    from app.models import Param, User
+    from app.models import User
     from app.security import ROLE_ADMIN, ROLE_AUDITOR, hash_password
 
     async with SessionLocal() as session:
@@ -77,49 +77,6 @@ async def _bootstrap() -> None:
                 "tokens will not survive a restart"
             )
 
-        defaults = [
-            {
-                "key": "lad.last_hour_ratio",
-                "label": "LAD-CA-03 last-hour ratio limit",
-                "value_numeric": 2.0,
-                "description": "Maximum multiple of the hourly average value allowed "
-                               "in the final hour of Laduree store trading.",
-            },
-            {
-                "key": "lad.single_staff_cash_share",
-                "label": "LAD-CA-04 single-staff cash share limit (%)",
-                "value_numeric": 50.0,
-                "description": "Maximum share of a day's cash-tendered invoices that "
-                               "one staff member may settle at Laduree.",
-            },
-            {
-                "key": "lad.ex_staff_min_days_after_exit",
-                "label": "LAD-CA-06 days after exit before flagging POS activity",
-                "value_numeric": 0.0,
-                "description": "Grace period after an employee exits before POS "
-                               "activity is treated as a control breach.",
-            },
-            {
-                "key": "abm.bank_match_min_similarity",
-                "label": "ABM-CA-22 vendor/employee bank match threshold (%)",
-                "value_numeric": 92.0,
-                "description": "Similarity threshold for matching vendor bank details "
-                               "in Business Central against HRMS employee records.",
-            },
-            {
-                "key": "template.some_threshold",
-                "label": "Template rule threshold",
-                "value_numeric": 10.0,
-                "description": "Placeholder used by rules/_template.py only.",
-            },
-        ]
-        for d in defaults:
-            found = (
-                await session.execute(select(Param).where(Param.key == d["key"]))
-            ).scalar_one_or_none()
-            if not found:
-                session.add(Param(**d, updated_by="system"))
-
         await session.commit()
         if created:
             log.info("seeded users: %s", ", ".join(created))
@@ -150,7 +107,6 @@ app.include_router(rules.router)
 app.include_router(schedules.router)
 app.include_router(runs.router)
 app.include_router(tickets.router)
-app.include_router(params.router)
 app.include_router(datasources.router)
 
 

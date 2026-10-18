@@ -556,10 +556,6 @@ const RuleDetails = () => {
               <Chip size="small" color="secondary"
                 label={`reads: ${record.declared_datasources.join(", ")}`} />
             )}
-            {record.declared_params?.length > 0 && (
-              <Chip size="small" variant="outlined"
-                label={`params: ${record.declared_params.join(", ")}`} />
-            )}
             <Chip size="small" label={`by ${record.created_by}`} />
           </Stack>
 

@@ -12,7 +12,7 @@ HRMS is the reference master and iPOS supplies the activity. The join key is
 ipos_sales.staff_id == hr_employees.employee_id, which is only meaningful
 because the generator used the same key on both sides.
 
-Tunable via ctx.params: lad.ex_staff_min_days_after_exit (default 0)
+The grace period lives in this file.
 """
 
 NAME = "LAD-CA-06 Ex-staff member still transacting in the POS"
@@ -23,9 +23,12 @@ DESCRIPTION = (
 ENTITY = "LAD"
 DATASOURCES = ["ipos_sales", "hr_employees"]
 
+# Days after exit before POS activity counts as a breach.
+EX_STAFF_GRACE_DAYS = 0
+
 
 def run(ctx) -> dict:
-    min_days = float(ctx.params.get("lad.ex_staff_min_days_after_exit", 0))
+    min_days = EX_STAFF_GRACE_DAYS
 
     rows = ctx.sql(f"""
         SELECT

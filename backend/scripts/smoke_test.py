@@ -132,11 +132,6 @@ def main() -> int:
             },
         )
         check("auditor CANNOT create rules", r.status_code == 403, f"got {r.status_code}")
-        r = c.put(
-            "/api/params", headers=ud,
-            json={"key": "rbac.probe", "label": "probe", "value_numeric": 1},
-        )
-        check("auditor CANNOT edit params", r.status_code == 403, f"got {r.status_code}")
         r = c.post(
             "/api/rules/generate", headers=ud, json={"prompt": "flag anything odd"}
         )
@@ -162,11 +157,13 @@ def main() -> int:
             d = c.get("/api/datasources/available-dates", headers=ud, params={"entity": ent}).json()
             check(f"{ent} day folders present", len(d["dates"]) == 6, str(d["dates"]))
 
-        # --- params -------------------------------------------------------
-        print("\n[parameters]")
-        params = c.get("/api/params/as-dict", headers=ud).json()
-        for key in ("lad.last_hour_ratio", "lad.single_staff_cash_share", "abm.bank_match_min_similarity"):
-            check(f"{key} present", key in params)
+        # --- params must be gone entirely ---------------------------------
+        section("params removed")
+        check("GET /api/params returns 404",
+              c.get("/api/params", headers=ud).status_code == 404)
+        check("PUT /api/params returns 404",
+              c.put("/api/params", headers=ah,
+                    json={"key": "x", "value_numeric": 1}).status_code == 404)
 
         # --- register rules -------------------------------------------------
         print("\n[rules]")

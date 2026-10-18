@@ -48,7 +48,6 @@ class Settings(BaseSettings):
     rules_dir: Path = BACKEND_DIR / "rules"
 
     # --- rule execution guardrails --------------------------------------
-    rule_timeout_seconds: int = 120
     max_rows_in_ticket: int = 500
 
     # --- cors (frontend dev server) -------------------------------------

@@ -587,7 +587,6 @@ SOURCEDATA_DIR=../SourceData
 RULES_DIR=./rules
 
 # --- Guardrails ---
-RULE_TIMEOUT_SECONDS=120
 MAX_ROWS_IN_TICKET=500
 
 # --- CORS ---
@@ -885,7 +884,6 @@ Honest list of what is **not** done yet:
 |---|---|---|
 | **No schema versioning** | Tables come from `create_all` at startup | Fine while the schema is still moving. When it settles, or before a second environment exists, add Alembic — otherwise a rename leaves an orphan table, which is exactly what happened here. |
 | **No process-level sandbox** | LLM-generated Python runs in-process | The AST gate blocks `os`/`subprocess`/`socket`/`open()` statically, but that is **not** a sandbox — a determined rule can still exhaust memory or spin a CPU. Acceptable while your devs write rules. **Mandatory hardening** if auditors type prompts and never read the diff: subprocess isolation, read-only mount, no network, rlimits. RestrictedPython is *not* a substitute — see §13. |
-| **Rules execute synchronously** | A slow rule occupies the API worker | `rule_timeout_seconds` is configured but **not enforced** — needs a subprocess or `anyio` timeout |
 | **No pagination beyond `perPage`** | Large tables return capped pages | Fine for dev volumes |
 | **No rule deletion from the UI** | API supports `DELETE` | Admin button not wired |
 | **No Swagger 2.0 export** | Blocks Power Apps custom connector | §14 option B |

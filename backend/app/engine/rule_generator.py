@@ -7,31 +7,29 @@ output is always stored as a DRAFT - it is never auto-approved. A human reads
 the diff and runs it before it goes live.
 
 Provider-agnostic: works with any OpenAI-compatible endpoint (Azure AI Foundry,
-Azure OpenAI, Ollama, MiniMax, ...) via LLM_BASE_URL.
+Azure OpenAI, Ollama, minimax, ...) via LLM_BASE_URL.
 """
 
 from __future__ import annotations
 
+import csv
 from datetime import date
 from typing import Any
 
-import duckdb
-
-from app.engine.ctx import build_views
 from app.engine.datasources import ENTITIES, SYSTEMS_BY_ENTITY, registry_for
 from app.settings import settings
 
-CONTRACT_INSTRUCTIONS = '''\
+CONTRACT_INSTRUCTIONS = """\
 A rule is a single Python file. It MUST define exactly one function:
 
     def run(ctx) -> dict:
 
 `ctx` is provided by the platform and offers:
-    ctx.table("name")  -> quoted view name, usable in FROM / JOIN
+    ctx.table("name")  -> quoted table name, usable in FROM / JOIN
     ctx.sql(query)     -> run read-only SQL; returns Result
     ctx.date           -> datetime.date being audited
     ctx.log("...")     -> append a note to the run summary
-    ctx.count_rows("name") -> row count of a view
+    ctx.count_rows("name") -> row count of a table
 
 Result helpers:
     .all()   -> list[dict]
@@ -41,64 +39,81 @@ Result helpers:
 
 The returned dict MUST validate against:
     {
-      "status": "no_rows_returned" | "rows_returned" | "error",
+      "status": "success" | "failed",
+      "error_message": str | None,
       "summary": str,
       "metrics": {str: number|str},
       "rows": [ {...}, ... ]
     }
 
 RULES:
-  * Return "rows_returned" with the offending rows when the audit condition is BREACHED.
-  * Return "no_rows_returned" when the data is clean. rows may be omitted.
+  * Return "status": "success" with the offending rows when the control is BREACHED.
+  * Return "status": "success" with empty rows when the data is clean.
+  * Return "status": "failed" with error_message when the rule cannot run.
+  * Only reference datasources you are shown. Every column you select must exist.
   * Declare every threshold as a module-level constant in UPPER_CASE with a
     comment saying what it measures, e.g. LAST_HOUR_RATIO_LIMIT = 1.5.
     Thresholds belong to the rule, not to a runtime configuration table.
+  * Compute helper columns (is_cash, is_exited, hour, ...) in your own SQL.
+    They are NOT provided.
   * Cast row values to str/float when embedding them in the summary.
   * Only import from: json, datetime, statistics, math, decimal
   * Do NOT write files, open sockets, or import os/subprocess/sys.
   * Emit ONLY the module source. No markdown fences, no commentary.
-'''
+"""
 
-EXAMPLE_RULE = '''\
+EXAMPLE_RULE = """\
 # Last-hour value may not exceed this multiple of the hourly average.
 LAST_HOUR_RATIO_LIMIT = 1.5
 
 
 def run(ctx):
-    """FSCS-CA-03  Last-hour invoice value spike."""
+    \"\"\"FSCS-CA-03  Last-hour invoice value spike.\"\"\"
     threshold = LAST_HOUR_RATIO_LIMIT
 
-    totals = ctx.sql("""
+    totals = ctx.sql(\"\"\"
         SELECT
             sum(invoice_value) FILTER (WHERE hour = 23)          AS last_hour,
             sum(invoice_value) FILTER (WHERE hour < 23) / 23.0   AS hourly_avg
         FROM ctx.table("pos_sales")
         WHERE NOT is_void
-    """).one()
+    \"\"\").one()
 
     if not totals or not totals["last_hour"]:
-        return {"status": "no_rows_returned", "summary": "No trading data", "metrics": {}}
+        return {
+            "status": "failed",
+            "error_message": "No trading data for this date",
+            "summary": "No trading data",
+            "metrics": {},
+            "rows": [],
+        }
 
     ratio = totals["last_hour"] / totals["hourly_avg"] if totals["hourly_avg"] else 0.0
 
-    rows = ctx.sql("""
+    if ratio < threshold:
+        return {
+            "status": "success",
+            "error_message": None,
+            "summary": (
+                f"Last-hour value {totals['last_hour']:.0f} is {ratio:.2f}x "
+                f"hourly average (limit {threshold})"
+            ),
+            "metrics": {"ratio": round(ratio, 3)},
+            "rows": [],
+        }
+
+    rows = ctx.sql(\"\"\"
         SELECT invoice_id, invoice_ts, staff_id, store_id,
                invoice_value, item_group
         FROM ctx.table("pos_sales")
         WHERE hour = 23 AND NOT is_void
         ORDER BY invoice_value DESC
         LIMIT 50
-    """).all()
-
-    if ratio < threshold:
-        return {
-            "status": "no_rows_returned",
-            "summary": f"Last-hour value {totals['last_hour']:.0f} is {ratio:.2f}x hourly average (limit {threshold})",
-            "metrics": {"ratio": round(ratio, 3)},
-        }
+    \"\"\").all()
 
     return {
-        "status": "rows_returned",
+        "status": "success",
+        "error_message": None,
         "summary": (
             f"Last hour of trading = {totals['last_hour']:.0f} AED, "
             f"{ratio:.2f}x the {totals['hourly_avg']:.0f} hourly average "
@@ -112,50 +127,70 @@ def run(ctx):
         },
         "rows": rows,
     }
-'''
+"""
 
 
 def is_configured() -> bool:
     return bool(settings.llm_base_url and settings.llm_model)
 
 
+def _sample_csv(
+    sourcedata_dir, entity: str, name: str, data_date: date, limit: int
+) -> str:
+    """Render a few real rows straight from the CSV as an aligned table."""
+    path = sourcedata_dir / entity.upper() / data_date.isoformat() / f"{name}.csv"
+    if not path.exists():
+        return ""
+
+    with path.open(newline="", encoding="utf-8") as fh:
+        rows = list(csv.reader(fh))
+
+    if len(rows) <= 1:
+        return ""
+
+    header, data = rows[0], rows[1 : limit + 1]
+    widths = [
+        max(len(str(r[i])) if i < len(r) else 0 for r in [header, *data])
+        for i in range(len(header))
+    ]
+
+    def line(cells: list[str]) -> str:
+        padded = [
+            (cells[i] if i < len(cells) else "").ljust(widths[i])
+            for i in range(len(header))
+        ]
+        return "  " + "  ".join(padded).rstrip()
+
+    return "\n".join([line(header), *(line(r) for r in data)])
+
+
 def sample_datasources(entity: str, data_date: date, limit: int = 3) -> str:
-    """Render real columns + a few sample rows so the LLM cannot invent fields."""
+    """Render declared columns plus real sample rows so the LLM cannot invent fields."""
     registry = registry_for(entity)
     base = settings.sourcedata_dir / entity.upper()
     if not base.exists():
         return "(SourceData not generated yet - run scripts/make_sample_data.py)"
 
-    con = duckdb.connect(":memory:")
-    try:
-        build_views(
-            con,
-            sourcedata_dir=settings.sourcedata_dir,
-            entity=entity,
-            data_date=data_date,
-            query_mode="SNAPSHOT",
+    blocks: list[str] = []
+    for name in sorted(registry):
+        src = registry[name]
+        cols = ", ".join(f"{c} {t}" for c, t in src.columns.items())
+        block = (
+            f"### {name}\n"
+            f"system: {src.system}\n"
+            f"grain: {src.grain}\n"
+            f"columns:\n  {cols}"
         )
-        blocks: list[str] = []
-        for name in sorted(registry):
-            src = registry[name]
-            cols = ", ".join(
-                f"{c} {t}" for c, t in src.columns.items()
+        try:
+            sample = _sample_csv(
+                settings.sourcedata_dir, entity, name, data_date, limit
             )
-            derived = ", ".join(src.derived.keys())
-            block = f"### {name}\nsystem: {src.system}\ngrain: {src.grain}\ncolumns:\n  {cols}"
-            if derived:
-                block += f"\nderived columns: {derived}"
-            try:
-                sample = con.execute(
-                    f'SELECT * FROM "{name}" LIMIT {limit}'
-                ).fetchdf().to_string(index=False, max_colwidth=24)
-                block += f"\nsample rows:\n{sample}"
-            except Exception as exc:  # noqa: BLE001
-                block += f"\n(no rows available: {exc})"
-            blocks.append(block)
-        return "\n\n".join(blocks)
-    finally:
-        con.close()
+            block += f"\nsample rows:\n{sample}" if sample else "\n(no rows available)"
+        except Exception as exc:  # noqa: BLE001
+            block += f"\n(no rows available: {exc})"
+        blocks.append(block)
+
+    return "\n\n".join(blocks)
 
 
 def build_prompt(natural_language: str, entity: str, data_date: date) -> str:
@@ -224,7 +259,7 @@ def generate_rule_source(prompt: str, entity: str, data_date: date) -> dict[str,
             {
                 n
                 for n in registry_for(entity)
-                if f'"{n}"' in source or f"ctx.table(\"{n}\")" in source
+                if f'"{n}"' in source or f'ctx.table("{n}")' in source
             }
         ),
     }
@@ -246,12 +281,16 @@ def _validate_shape(source: str) -> None:
     problems: list[str] = []
     if "def run(" not in source:
         problems.append("missing 'def run(ctx)' function")
-    for status in ("no_rows_returned", "rows_returned"):
+    for status in ("success", "failed"):
         if status not in source:
             problems.append(f"never returns status '{status}'")
     if "ctx." not in source:
         problems.append("does not use the provided ctx object")
-    banned = [m for m in ("import os", "import sys", "import subprocess", "open(", "socket") if m in source]
+    banned = [
+        m
+        for m in ("import os", "import sys", "import subprocess", "open(", "socket")
+        if m in source
+    ]
     if banned:
         problems.append("contains banned constructs: " + ", ".join(banned))
     if problems:
@@ -263,7 +302,7 @@ def _explain_usage(source: str, entity: str) -> str:
         {
             n
             for n in registry_for(entity)
-            if f'"{n}"' in source or f"ctx.table(\"{n}\")" in source
+            if f'"{n}"' in source or f'ctx.table("{n}")' in source
         }
     )
     if not used:
@@ -284,7 +323,6 @@ def preview_context(entity: str, data_date: date) -> dict[str, Any]:
                 "system": src.system,
                 "grain": src.grain,
                 "columns": src.columns,
-                "derived": list(src.derived.keys()),
             }
             for name, src in registry.items()
         },

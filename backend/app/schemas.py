@@ -81,7 +81,6 @@ class DatasourceOut(BaseModel):
     path_template: str
     grain: str
     columns: dict[str, Any]
-    derived: dict[str, str]
     is_active: bool
 
     model_config = {"from_attributes": True}

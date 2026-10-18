@@ -8,7 +8,7 @@ Two client entities, each with its own systems:
 
 Each table is declared once: where its CSVs live, what the columns mean, what
 grain the data is at. Rules never reference a file path - they call
-ctx.table("ipos_sales") and get a DuckDB view scoped to that rule's entity.
+ctx.table("ipos_sales") and get a table scoped to that rule's entity.
 
 CROSS-SYSTEM KEYS are what make the data relatable. A rule can join across
 systems because the keys are shared, not remapped:
@@ -33,7 +33,6 @@ class Source:
     description: str
     grain: str
     columns: dict[str, str]
-    derived: dict[str, str] = field(default_factory=dict)
 
     @property
     def path_template(self) -> str:
@@ -60,10 +59,6 @@ _LAD_IPOS = {
             "invoice_value": "DOUBLE",
             "is_void": "BOOLEAN",
             "guest_count": "INTEGER",
-        },
-        derived={
-            "hour": "CAST(EXTRACT(hour FROM invoice_ts) AS INTEGER)",
-            "is_cash": "CAST(LOWER(tender_type) = 'cash' AS BOOLEAN)",
         },
     ),
     "ipos_items": Source(
@@ -118,7 +113,6 @@ _LAD_SYNAPSE = {
             "last_movement_ts": "TIMESTAMP",
             "age_days": "INTEGER",
         },
-        derived={"stock_value": "on_hand_qty * unit_cost"},
     ),
     "syn_recipes": Source(
         name="syn_recipes",
@@ -165,9 +159,6 @@ _LAD_SYNAPSE = {
             "dispatched_ts": "TIMESTAMP",
             "received_ts": "TIMESTAMP",
         },
-        derived={
-            "transit_days": "DATE_DIFF('day', CAST(dispatched_ts AS DATE), CAST(received_ts AS DATE))"
-        },
     ),
 }
 
@@ -193,7 +184,6 @@ _LAD_HRMS = {
             "monthly_salary": "DOUBLE",
             "bank_iban": "VARCHAR",
         },
-        derived={"is_exited": "CAST(LOWER(employment_status) = 'exited' AS BOOLEAN)"},
     ),
     "hr_attendance": Source(
         name="hr_attendance",
@@ -235,10 +225,6 @@ _ABM_IPOS = {
             "invoice_value": "DOUBLE",
             "is_void": "BOOLEAN",
         },
-        derived={
-            "hour": "CAST(EXTRACT(hour FROM invoice_ts) AS INTEGER)",
-            "is_cash": "CAST(LOWER(tender_type) = 'cash' AS BOOLEAN)",
-        },
     ),
     "ipos_price_overrides": Source(
         name="ipos_price_overrides",
@@ -256,12 +242,6 @@ _ABM_IPOS = {
             "list_price": "DOUBLE",
             "sold_price": "DOUBLE",
             "quantity": "INTEGER",
-        },
-        derived={
-            "discount_pct": (
-                "CASE WHEN list_price > 0 "
-                "THEN (list_price - sold_price) / list_price * 100.0 ELSE 0 END"
-            )
         },
     ),
     "ipos_discounts": Source(
@@ -306,7 +286,6 @@ _ABM_HRMS = {
             "bank_iban": "VARCHAR",      # joins to bc_vendors.vendor_bank_iban
             "bank_account_name": "VARCHAR",
         },
-        derived={"is_exited": "CAST(LOWER(employment_status) = 'exited' AS BOOLEAN)"},
     ),
     "hr_attendance": Source(
         name="hr_attendance",

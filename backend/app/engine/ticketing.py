@@ -57,7 +57,7 @@ def fingerprint(rows: list[dict[str, Any]]) -> str:
     """Stable hash of an exception set.
 
     Rows are sorted by their canonical JSON so key ordering in the dict (which
-    DuckDB may vary) cannot change the hash.
+    the query engine may vary) cannot change the hash.
     """
     canonical = sorted(
         json.dumps(row, sort_keys=True, default=str) for row in (rows or [])

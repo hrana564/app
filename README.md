@@ -48,14 +48,30 @@ The execution model is deliberately trivial:
 ```
 cron fires
   -> load rules/<CODE>_v<version>.py
-  -> build DuckDB views over SourceData/<ENTITY>/<date>/*.csv
   -> call run(ctx)
   -> validate the returned dict
-  -> insert a `runs` row
-  -> if rows_returned, insert a `tickets` row
+  -> insert a `rule_runs` row
+  -> if the rule returned rows, insert a `tickets` row
 ```
 
 That is the entire engine. Everything of substance lives in the rule file.
+
+> **⚠ The query engine is not wired.** DuckDB was removed and the replacement
+> is still an open decision. `ctx.sql()` currently raises `NotImplementedError`,
+> so every rule errors at execution time — the rules themselves are untouched
+> and will work unchanged once an engine is behind `ctx`. The four methods below
+> are the whole contract a rule sees, so nothing inside a rule file moves:
+>
+> ```
+> ctx.table("name")   quoted table name for FROM / JOIN
+> ctx.sql("SELECT ...")   Result (.all() / .one() / .scalar() / .count())
+> ctx.date            the date being audited
+> ctx.log("...")      appends a note to the run summary
+> ```
+>
+> Consequence: the 15 rule-execution assertions in `scripts/smoke_test.py` fail
+> until the engine lands. Everything else — registration, validation,
+> versioning, scheduling, the API — passes today.
 
 ---
 
@@ -71,7 +87,7 @@ Power Automate ──▶ SourceData/<ENTITY>/<YYYY-MM-DD>/<table>.csv
               APScheduler (per-rule cron)
                         │
                         ▼
-              Python Audit Engine ── DuckDB views over the CSV folders
+              Python Audit Engine ── ctx.sql() over the CSV folders
                         │
                         ▼
                   PostgreSQL  ABM_Audit_Portal
@@ -82,9 +98,12 @@ Power Automate ──▶ SourceData/<ENTITY>/<YYYY-MM-DD>/<table>.csv
               React UI  (react-admin)   ──▶  later: Power Apps
 ```
 
-**Why DuckDB and not a warehouse?** Because the data is already a set of daily CSV folders.
-DuckDB queries them in place with SQL. Nothing is loaded, nothing is duplicated, and there is no
-second copy of the client's data to reconcile.
+**The query engine is an open decision.** The data is a set of daily CSV folders,
+and rules want to join across them with SQL, so whatever sits behind `ctx.sql()`
+needs to answer SQL over `SourceData/<ENTITY>/<date>/*.csv`. DuckDB filled that
+role and has been removed; the candidates are PostgreSQL (load the folders into
+real tables), a lighter in-process engine, or pandas. Nothing above this line
+depends on the choice.
 
 ---
 
@@ -247,7 +266,7 @@ traceback and never takes down the process.
 | `ctx.log("...")` | Append a note to the run summary |
 | `ctx.count_rows("name")` | Row count of a view |
 
-`ctx.table("x")` inside a SQL string is rewritten to the quoted view name before DuckDB parses
+`ctx.table("x")` inside a SQL string is rewritten to the quoted table name before the engine parses
 it, which is what makes this read naturally:
 
 ```python
@@ -522,7 +541,7 @@ app/
 │   │   │   └── datasources.py
 │   │   └── engine/
 │   │       ├── datasources.py      per-entity registry
-│   │       ├── ctx.py              RuleContext + DuckDB view builder
+│   │       ├── ctx.py              RuleContext + query seam
 │   │       ├── loader.py           rule file load/save
 │   │       ├── runner.py           THE ENGINE
 │   │       ├── frequency.py        friendly cadence <-> cron (only place cron exists)
@@ -751,7 +770,6 @@ Current result: **52 permitted, 1 review, 0 unknown, 0 blocked.**
 | | `pydantic` | MIT |
 | DB | `sqlalchemy` | MIT |
 | | `asyncpg` | **Apache-2.0** |
-| Query | `duckdb` | MIT |
 | Sched | `apscheduler` | MIT |
 | Auth | `pyjwt` | MIT |
 | | `bcrypt` | Apache-2.0 |

@@ -3,11 +3,10 @@ Rule runner - the entire execution engine.
 
     fire (cron or manual)
       -> load rule .py
-      -> build DuckDB views for the run's date
       -> call run(ctx)
       -> validate the returned dict against RuleResult
-      -> insert a runs row
-      -> if rows_returned, insert a ticket
+      -> insert a rule_runs row
+      -> if the rule returned rows, insert a ticket
 
 There is deliberately no more logic than that.
 """
@@ -25,11 +24,10 @@ from typing import Any
 
 log = logging.getLogger("abm.runner")
 
-import duckdb
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.engine.ctx import RuleContext, build_views
+from app.engine.ctx import RuleContext
 from app.engine.datasources import registry_for
 from app.engine.loader import load_rule
 from app.engine.ticketing import raise_tickets
@@ -96,29 +94,14 @@ async def execute_rule(
         fn = module.run
 
         def work() -> tuple[dict[str, Any], dict[str, int], list[str]]:
-            # A private in-memory DuckDB per execution: no state bleed between
-            # concurrent rules, and nothing survives the run.
-            con = duckdb.connect(":memory:")
-            try:
-                c = build_views(
-                    con,
-                    sourcedata_dir=settings.sourcedata_dir,
-                    entity=rule.entity,
-                    data_date=data_date,
-                    query_mode=rule.query_mode,
-                    window_days=rule.window_days,
-                )
-                ctx = RuleContext(
-                    con=con,
-                    data_date=data_date,
-                    query_mode=rule.query_mode,
-                    rule_name=rule.name,
-                    registered=list(registry_for(rule.entity).keys()),
-                )
-                raw = fn(ctx)
-                return raw, c, ctx.logs
-            finally:
-                con.close()
+            ctx = RuleContext(
+                data_date=data_date,
+                query_mode=rule.query_mode,
+                rule_name=rule.name,
+                registered=list(registry_for(rule.entity).keys()),
+            )
+            raw = fn(ctx)
+            return raw, {}, ctx.logs
 
         raw, counts, logs = await _run_in_thread(work)
         result = RuleResult.model_validate(raw)

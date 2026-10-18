@@ -74,7 +74,6 @@ class Datasource(Base, TimestampMixin):
     path_template: Mapped[str] = mapped_column(String(255), nullable=False)
     grain: Mapped[str] = mapped_column(String(255), default="")
     columns: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, nullable=False)
-    derived: Mapped[dict[str, str]] = mapped_column(JSONB, default=dict, nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
 

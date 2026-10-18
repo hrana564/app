@@ -85,7 +85,6 @@ async def _sync_registry(session) -> None:
                 path_template=src.path_template,
                 grain=src.grain,
                 columns=dict(src.columns),
-                derived=dict(src.derived),
                 is_active=True,
             )
         )

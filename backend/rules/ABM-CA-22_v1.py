@@ -12,8 +12,7 @@ Source requirement (ABM continuous auditing areas #22 and #23):
      with vendor address, employee relative name with vendor name etc.)"
 
 This is the cross-system proof: one rule, two systems, joined on a shared key
-(the IBAN). It never touches the CSV paths - both tables arrive as DuckDB
-views.
+(the IBAN). It never touches the CSV paths - both tables arrive ready to query.
 
 The match threshold lives in this file.
 """

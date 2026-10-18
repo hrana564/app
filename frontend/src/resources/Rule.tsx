@@ -168,9 +168,9 @@ const CadenceCell = () => {
   const [loadedFor, setLoadedFor] = useState<number | null>(null);
 
   useEffect(() => {
-    if (!record?.id || loadedFor === record.id) return;
-    setLoadedFor(record.id);
-    fetch(`/api/rule-schedules?rule_id=${record.id}`, {
+    if (!record?.code || loadedFor === record.code) return;
+    setLoadedFor(record.code);
+    fetch(`/api/rule-schedules?rule_code=${record.code}`, {
       headers: { Authorization: `Bearer ${localStorage.getItem("abm.token")}` },
     })
       .then((r) => r.json())
@@ -225,7 +225,7 @@ const TestRuleButton = () => {
 
   const run = async () => {
     setBusy(true); setError(null);
-    try { setOut(await api.testRule(record.id, day, false)); }
+    try { setOut(await api.testRule(record.code, day, false)); }
     catch (e: any) { setError(e.message); notify(`Run failed: ${e.message}`, { type: "error" }); }
     finally { setBusy(false); }
   };
@@ -293,9 +293,9 @@ const TestRuleButton = () => {
 /* Schedules section                                                   */
 /* ================================================================== */
 const ScheduleDialog = ({
-  ruleId, schedule, onClose,
+  ruleCode, schedule, onClose,
 }: {
-  ruleId: number;
+  ruleCode: string;
   schedule: any | null;
   onClose: () => void;
 }) => {
@@ -313,7 +313,7 @@ const ScheduleDialog = ({
     try {
       const payload = { label, kind, config, timezone, data_lag_days: dataLag };
       if (isEdit) await api.updateSchedule(schedule.id, payload);
-      else await api.createSchedule({ ...payload, rule_id: ruleId });
+      else await api.createSchedule({ ...payload, rule_code: ruleCode });
       notify(isEdit ? "Schedule updated" : "Schedule added", { type: "success" });
       onClose();
     } catch (e: any) {
@@ -355,16 +355,16 @@ const ScheduleDialog = ({
   );
 };
 
-const SchedulesSection = ({ ruleId, isAdmin }: { ruleId: number; isAdmin: boolean }) => {
+const SchedulesSection = ({ ruleCode, isAdmin }: { ruleCode: string; isAdmin: boolean }) => {
   const [schedules, setSchedules] = useState<any[] | null>(null);
   const [editing, setEditing] = useState<any | null>(null);
   const [adding, setAdding] = useState(false);
   const notify = useNotify();
 
   const load = () =>
-    api.listSchedules(ruleId).then((r) => setSchedules(r.data ?? [])).catch(() => setSchedules([]));
+    api.listSchedules(ruleCode).then((r) => setSchedules(r.data ?? [])).catch(() => setSchedules([]));
 
-  useEffect(() => { load(); /* eslint-disable-next-line */ }, [ruleId]);
+  useEffect(() => { load(); /* eslint-disable-next-line */ }, [ruleCode]);
 
   const remove = async (id: number) => {
     try {
@@ -441,7 +441,7 @@ const SchedulesSection = ({ ruleId, isAdmin }: { ruleId: number; isAdmin: boolea
 
         {(adding || editing) && (
           <ScheduleDialog
-            ruleId={ruleId}
+            ruleCode={ruleCode}
             schedule={editing}
             onClose={() => { setAdding(false); setEditing(null); load(); }}
           />
@@ -479,7 +479,7 @@ const RuleDetails = () => {
   const load = () => {
     if (!record?.id) return;
     setLoading(true);
-    Promise.all([api.ruleSource(record.id), api.ruleVersions(record.id), api.validationReport(record.id)])
+    Promise.all([api.ruleSource(record.code), api.ruleVersions(record.code), api.validationReport(record.code)])
       .then(([s, v, r]) => {
         setSource(s.source_code ?? "");
         setVersions(v ?? []);
@@ -489,12 +489,12 @@ const RuleDetails = () => {
       .finally(() => setLoading(false));
   };
 
-  useEffect(load, [record?.id, record?.current_version, record?.validation_status]);
+  useEffect(load, [record?.code, record?.version, record?.validation_status]);
 
   const runValidation = async () => {
     setValidating(true);
     try {
-      const r = await api.validateRule(record.id);
+      const r = await api.validateRule(record.code);
       setReport(r);
       notify(r.status === "valid" ? "Validation passed" : `${r.errors.length} error(s)`,
         { type: r.status === "valid" ? "success" : "error" });
@@ -508,7 +508,7 @@ const RuleDetails = () => {
 
   const setStatus = async (status: string) => {
     try {
-      await api.updateRule(record.id, { status });
+      await api.setRuleStatus(record.code, status);
       notify(`Rule is now ${status}`, { type: "success" });
       refresh();
     } catch (e: any) {
@@ -530,7 +530,7 @@ const RuleDetails = () => {
             <EntityField source="entity" />
             <SeverityField source="severity" />
             <StatusField source="status" />
-            <Chip size="small" label={`v${record.current_version}`} />
+            <Chip size="small" label={`v${record.version}`} />
             <Chip size="small" variant="outlined" label={record.query_mode} />
             <Chip size="small" variant="outlined" label={record.origin} />
             <Chip
@@ -640,7 +640,7 @@ const RuleDetails = () => {
       </Card>
 
       {/* Schedules */}
-      <SchedulesSection ruleId={record.id} isAdmin={isAdmin} />
+      <SchedulesSection ruleCode={record.code} isAdmin={isAdmin} />
 
       {/* Code */}
       <Card>
@@ -659,10 +659,10 @@ const RuleDetails = () => {
               {versions.map((v) => (
                 <Box key={v.id}
                   sx={{ p: 1.25, borderRadius: 1.5, border: "1px solid #e9edf4",
-                        bgcolor: v.version === record.current_version ? "#eef6ff" : "#fafbfe" }}>
+                        bgcolor: v.version === record.version ? "#eef6ff" : "#fafbfe" }}>
                   <Stack direction="row" spacing={1} alignItems="center">
                     <Chip size="small" label={`v${v.version}`}
-                      color={v.version === record.current_version ? "primary" : "default"} />
+                      color={v.version === record.version ? "primary" : "default"} />
                     <Typography variant="body2">{v.change_note || "(no note)"}</Typography>
                   </Stack>
                   <Typography variant="caption" color="text.secondary">
@@ -676,12 +676,12 @@ const RuleDetails = () => {
       )}
 
       {/* Tabs: runs and alerts raised by this rule */}
-      <RuleActivity ruleId={record.id} />
+      <RuleActivity ruleCode={record.code} />
     </Stack>
   );
 };
 
-const RuleActivity = ({ ruleId }: { ruleId: number }) => {
+const RuleActivity = ({ ruleCode }: { ruleCode: string }) => {
   const [tab, setTab] = useState<"runs" | "tickets">("runs");
   return (
     <Card>
@@ -699,7 +699,7 @@ const RuleActivity = ({ ruleId }: { ruleId: number }) => {
             <List
               resource="runs"
               perPage={10}
-              filterDefaultValues={{ rule_id: String(ruleId) }}
+              filterDefaultValues={{ rule_code: ruleCode }}
             >
               <Datagrid bulkActionButtons={false} rowClick="show">
                 <IdField source="id" />
@@ -714,7 +714,7 @@ const RuleActivity = ({ ruleId }: { ruleId: number }) => {
           </Box>
         ) : (
           <Box>
-            <TicketsForRule ruleId={ruleId} />
+            <TicketsForRule ruleCode={ruleCode} />
           </Box>
         )}
       </CardContent>
@@ -722,16 +722,16 @@ const RuleActivity = ({ ruleId }: { ruleId: number }) => {
   );
 };
 
-const TicketsForRule = ({ ruleId }: { ruleId: number }) => {
+const TicketsForRule = ({ ruleCode }: { ruleCode: string }) => {
   const [tickets, setTickets] = useState<any[] | null>(null);
   useEffect(() => {
-    fetch(`/api/tickets?rule_id=${ruleId}&perPage=50`, {
+    fetch(`/api/tickets?rule_code=${ruleCode}&perPage=50`, {
       headers: { Authorization: `Bearer ${localStorage.getItem("abm.token")}` },
     })
       .then((r) => r.json())
       .then((d) => setTickets(d.data ?? []))
       .catch(() => setTickets([]));
-  }, [ruleId]);
+  }, [ruleCode]);
 
   if (!tickets) return <CircularProgress size={22} />;
   if (!tickets.length) {
@@ -775,7 +775,7 @@ export const RuleList = () => (
       <ValidationField source="validation_status" />
       <CadenceCell />
       <StatusField source="status" />
-      <TextField source="current_version" label="v" />
+      <TextField source="version" label="Ver" />
       <ListButton to="/rule-schedules">Schedules</ListButton>
       <TestRuleButton />
     </Datagrid>

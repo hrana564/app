@@ -87,8 +87,13 @@ class DatasourceOut(BaseModel):
 # Rule
 # ---------------------------------------------------------------------------
 class RuleOut(BaseModel):
+    """One VERSION of a rule, as addressed by its permanent code."""
+
     id: int
     code: str
+    version: int
+    is_version_active: bool
+    change_note: str
     name: str
     entity: str
     description: str
@@ -108,7 +113,6 @@ class RuleOut(BaseModel):
     declared_datasources: list[str]
     declared_alert: dict[str, Any]
     source_file: str
-    current_version: int
     datasource_hint: str
     created_by: str
     origin: str
@@ -165,15 +169,25 @@ class ValidationReport(BaseModel):
 
 
 class RuleVersionOut(BaseModel):
-    id: int
-    rule_id: int
+    """One version in a rule's history."""
+
     version: int
+    is_version_active: bool
+    status: str
+    validation_status: str
+    source_file: str
     source_code: str
     change_note: str
     created_by: str
     created_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class RuleStatusUpdate(BaseModel):
+    """Lifecycle only. Never creates a version - pausing is not a logic change."""
+
+    status: RuleStatus
 
 
 class RuleGenerateRequest(BaseModel):
@@ -204,7 +218,7 @@ class RuleTestResponse(BaseModel):
 # ---------------------------------------------------------------------------
 class ScheduleOut(BaseModel):
     id: int
-    rule_id: int
+    rule_code: str
     label: str
     kind: CadenceKind
     config: dict[str, Any]
@@ -227,7 +241,7 @@ class ScheduleOut(BaseModel):
 
 
 class ScheduleCreate(BaseModel):
-    rule_id: int
+    rule_code: str
     label: str = ""
     kind: CadenceKind = "DAILY"
     config: dict[str, Any] = Field(default_factory=dict)
@@ -274,7 +288,7 @@ class CadenceOption(BaseModel):
 class RunOut(BaseModel):
     id: int
     rule_id: int
-    rule_version: int
+    rule_code: str
     schedule_id: int | None
     data_date: date | None
     triggered_by: str
@@ -305,6 +319,7 @@ class TicketOut(BaseModel):
     ticket_no: str
     run_id: int
     rule_id: int
+    rule_code: str
     schedule_id: int | None
     severity: Severity
     summary: str

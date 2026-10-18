@@ -225,7 +225,7 @@ const TicketDetails = () => {
           <Stack direction="row" spacing={1} sx={{ mb: 1.5, flexWrap: "wrap", gap: 1 }}>
             <SeverityField source="severity" />
             <StatusField source="status" />
-            <Chip size="small" variant="outlined" label={`rule #${record.rule_id}`} />
+            <Chip size="small" variant="outlined" label={record.rule_code} />
             <Chip size="small" variant="outlined" label={`run #${record.run_id}`} />
           </Stack>
 

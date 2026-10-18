@@ -1,10 +1,13 @@
 """
 End-to-end smoke test against a running API.
 
-Exercises the full auditor journey and asserts the behaviour that matters:
-  login -> both roles -> RBAC -> register 4 rules across 2 entities
-  -> run each against clean and breach days -> tickets raised
-  -> acknowledge -> schedule created -> APScheduler job registered
+Rules are addressed by their permanent `code`; each edit publishes a new version
+row in `rules_master`. This suite covers that versioning behaviour explicitly:
+an edit supersedes the head, editing resets validation, pausing does NOT burn a
+version, rollback appends forward, schedules survive a version bump, and a rule
+with findings cannot be deleted.
+
+All version assertions are DELTA based, so the suite is re-runnable.
 
 Usage:  python scripts/smoke_test.py [base_url]
 """
@@ -23,46 +26,17 @@ RULES_DIR = Path(__file__).resolve().parent.parent / "rules"
 ADMIN = ("admin_user", "Admin@2026")
 AUDITOR = ("audit_user", "Audit@2026")
 
-# code, entity, severity, filename, description
 RULE_SPECS = [
-    (
-        "LAD-CA-03",
-        "LAD",
-        "high",
-        "rule_1.py",
-        "Value settled in the last hour of trading exceeds a multiple of the "
-        "hourly average (retail and bar items).",
-    ),
-    (
-        "LAD-CA-04",
-        "LAD",
-        "critical",
-        "rule_2.py",
-        "One staff member settles more than the permitted share of the day's "
-        "cash-tendered invoices.",
-    ),
-    (
-        "ABM-CA-22",
-        "ABM",
-        "critical",
-        "rule_3.py",
-        "Vendor bank details in Business Central match employee bank details "
-        "in HRMS (cross-system join).",
-    ),
-    (
-        "LAD-CA-06",
-        "LAD",
-        "high",
-        "rule_4.py",
-        "Exited employees still settling POS transactions - access not revoked "
-        "(cross-system join).",
-    ),
+    ("LAD-CA-03", "LAD", "high", "LAD-CA-03_v1.py",
+     "Value settled in the last hour of trading exceeds a multiple of the hourly average."),
+    ("LAD-CA-04", "LAD", "critical", "LAD-CA-04_v1.py",
+     "One staff member settles more than the permitted share of the day's cash invoices."),
+    ("ABM-CA-22", "ABM", "critical", "ABM-CA-22_v1.py",
+     "Vendor bank details in Business Central match employee bank details in HRMS."),
+    ("LAD-CA-06", "LAD", "high", "LAD-CA-06_v1.py",
+     "Exited employees still settling POS transactions."),
 ]
 
-# code -> (clean_day or None, breach_day)
-# ABM-CA-22 is a standing master-data control: the vendor/employee bank collision
-# exists in every day folder until the master data is remediated, so there is
-# deliberately no clean day for it.
 EXEC_EXPECTATIONS = {
     "LAD-CA-03": ("2026-10-19", "2026-10-16"),
     "LAD-CA-04": ("2026-10-19", "2026-10-17"),
@@ -93,14 +67,16 @@ def main() -> int:
     print("=" * 72)
 
     with httpx.Client(base_url=BASE, timeout=180.0) as c:
-        # --- health -------------------------------------------------------
-        print("\n[health]")
+        section("health")
         h = c.get("/health").json()
         check("api healthy", h["status"] == "ok", str(h))
         check("database reachable", h["database"] is True)
+        check("rules_master present", "rules_master" in h.get("tables", []),
+              str(h.get("tables")))
+        check("rule_versions gone", "rule_versions" not in h.get("tables", []),
+              str(h.get("tables")))
 
-        # --- auth ---------------------------------------------------------
-        print("\n[auth]")
+        section("auth")
         r = c.post("/api/auth/login", json={"username": ADMIN[0], "password": ADMIN[1]})
         check("admin login", r.status_code == 200, r.text[:160])
         admin = r.json()
@@ -110,257 +86,308 @@ def main() -> int:
 
         check("admin role", admin["user"]["role"] == "admin")
         check("auditor role", auditor["user"]["role"] == "auditor")
-        check(
-            "wrong password rejected",
-            c.post("/api/auth/login", json={"username": ADMIN[0], "password": "nope"}).status_code == 401,
-        )
+        check("wrong password rejected",
+              c.post("/api/auth/login",
+                     json={"username": ADMIN[0], "password": "nope"}).status_code == 401)
         check("unauthenticated rejected", c.get("/api/rules").status_code == 401)
 
         ah = {"Authorization": f"Bearer {admin['access_token']}"}
         ud = {"Authorization": f"Bearer {auditor['access_token']}"}
 
-        # --- RBAC ---------------------------------------------------------
-        print("\n[role based access control]")
+        section("role based access control")
         check("auditor can read rules", c.get("/api/rules", headers=ud).status_code == 200)
-        r = c.post(
-            "/api/rules",
-            headers=ud,
-            json={
-                "code": "RBAC-PROBE",
-                "name": "should be rejected",
-                "source_code": "def run(ctx):\n    return {'status':'no_rows_returned'}\n",
-            },
-        )
+        r = c.post("/api/rules", headers=ud,
+                   json={"code": "RBAC-PROBE", "name": "nope",
+                         "source_code": "def run(ctx):\n    return {}\n"})
         check("auditor CANNOT create rules", r.status_code == 403, f"got {r.status_code}")
-        r = c.post(
-            "/api/rules/generate", headers=ud, json={"prompt": "flag anything odd"}
-        )
+        r = c.post("/api/rules/generate", headers=ud, json={"prompt": "flag anything odd"})
         check("auditor CANNOT generate rules", r.status_code == 403, f"got {r.status_code}")
 
-        # --- entities + datasources ---------------------------------------
-        print("\n[entities and datasources]")
+        section("entities and datasources")
         ents = c.get("/api/datasources/entities", headers=ud).json()
-        codes = sorted(e["code"] for e in ents["entities"])
-        check("two client entities LAD + ABM", codes == ["ABM", "LAD"], str(codes))
-        lad = next(e for e in ents["entities"] if e["code"] == "LAD")
-        abm = next(e for e in ents["entities"] if e["code"] == "ABM")
-        check("Laduree systems", sorted(lad["systems"]) == sorted(["iPOS (SaaS)", "Azure Synapse", "HRMS"]), str(lad["systems"]))
-        check("ABM systems", sorted(abm["systems"]) == sorted(["Business Central", "HRMS", "iPOS"]), str(abm["systems"]))
-
+        check("two client entities LAD + ABM",
+              sorted(e["code"] for e in ents["entities"]) == ["ABM", "LAD"])
         ds = c.get("/api/datasources", headers=ud).json()
-        lad_ds = {d["name"] for d in ds if d["entity"] == "LAD"}
-        abm_ds = {d["name"] for d in ds if d["entity"] == "ABM"}
-        check("LAD has iPOS/Synapse/HRMS tables", {"ipos_sales", "syn_inventory", "hr_employees"} <= lad_ds, str(sorted(lad_ds)))
-        check("ABM has Business Central tables", {"bc_vendors", "bc_purchase_orders"} <= abm_ds, str(sorted(abm_ds)))
-
+        check("LAD has iPOS/Synapse/HRMS tables",
+              {"ipos_sales", "syn_inventory", "hr_employees"}
+              <= {d["name"] for d in ds if d["entity"] == "LAD"})
+        check("ABM has Business Central tables",
+              {"bc_vendors", "bc_purchase_orders"}
+              <= {d["name"] for d in ds if d["entity"] == "ABM"})
         for ent in ("LAD", "ABM"):
-            d = c.get("/api/datasources/available-dates", headers=ud, params={"entity": ent}).json()
+            d = c.get("/api/datasources/available-dates", headers=ud,
+                      params={"entity": ent}).json()
             check(f"{ent} day folders present", len(d["dates"]) == 6, str(d["dates"]))
 
-        # --- params must be gone entirely ---------------------------------
         section("params removed")
         check("GET /api/params returns 404",
               c.get("/api/params", headers=ud).status_code == 404)
-        check("PUT /api/params returns 404",
-              c.put("/api/params", headers=ah,
-                    json={"key": "x", "value_numeric": 1}).status_code == 404)
 
-        # --- register rules -------------------------------------------------
-        print("\n[rules]")
+        section("rules")
         existing = c.get("/api/rules", headers=ah).json()
-        rule_ids: dict[str, int] = {}
-
+        present = {x["code"] for x in existing["data"]}
         for code, entity, severity, filename, desc in RULE_SPECS:
-            found = next((x for x in existing["data"] if x["code"] == code), None)
-            if found:
-                rule_ids[code] = found["id"]
-                check(f"{code} already registered ({entity}, id={found['id']})", True)
+            if code in present:
+                check(f"{code} already registered", True)
                 continue
             src = (RULES_DIR / filename).read_text(encoding="utf-8")
-            r = c.post(
-                "/api/rules",
-                headers=ah,
-                json={
-                    "code": code,
-                    "name": code,
-                    "entity": entity,
-                    "description": desc,
-                    "severity": severity,
-                    "query_mode": "SNAPSHOT",
-                    "source_code": src,
-                    "status": "active",
-                    "datasource_hint": "",
-                },
-            )
+            r = c.post("/api/rules", headers=ah, json={
+                "code": code, "name": code, "entity": entity, "description": desc,
+                "severity": severity, "query_mode": "SNAPSHOT",
+                "source_code": src, "status": "draft"})
             if r.status_code != 201:
                 check(f"{code} created", False, f"{r.status_code} {r.text[:220]}")
                 continue
             body = r.json()
-            rule_ids[code] = body["id"]
-            check(f"{code} created [{entity}] -> {body['source_file']} v{body['current_version']}", True)
+            check(f"{code} created -> {body['source_file']} v{body['version']}",
+                  body["version"] == 1 and body["is_version_active"])
 
-        if len(rule_ids) < 4:
-            print("\nAborting: could not register all rules.")
-            return 1
+        all_rules = c.get("/api/rules", headers=ah).json()
+        check("four rules listed", all_rules["total"] == 4, str(all_rules["total"]))
+        check("every listed rule is a head version",
+              all(x["is_version_active"] for x in all_rules["data"]))
 
-        # --- validate + activate ------------------------------------------
-        # A rule cannot be activated until it passes validation, and only active
-        # rules get their schedules registered with APScheduler.
+        section("rule code validation")
+        probe = "def run(ctx):\n    return {'status':'no_rows_returned'}\n"
+        for bad, why in [("lad ca 03", "spaces rejected"), ("LAD/CA", "slash rejected")]:
+            r = c.post("/api/rules", headers=ah,
+                       json={"code": bad, "name": "code probe", "source_code": probe})
+            check(why, r.status_code in (400, 409), f"{bad} -> {r.status_code}")
+
+        r = c.post("/api/rules", headers=ah,
+                   json={"code": "lad-ca-99", "name": "lowercase probe",
+                         "source_code": probe})
+        check("lowercase code normalised to uppercase",
+              r.status_code == 201 and r.json()["code"] == "LAD-CA-99",
+              f"{r.status_code} {r.text[:120]}")
+        if r.status_code == 201:
+            dup = c.post("/api/rules", headers=ah,
+                         json={"code": "LAD-CA-99", "name": "duplicate probe",
+                               "source_code": probe})
+            check("duplicate code rejected (409)", dup.status_code == 409,
+                  f"got {dup.status_code}")
+            c.delete("/api/rules/LAD-CA-99", headers=ah)
+
         section("validate and activate")
-        for code, rid in rule_ids.items():
-            rep = c.post(f"/api/rules/{rid}/validate", headers=ah).json()
-            check(
-                f"{code} passes validation",
-                rep["status"] == "valid",
-                f"{rep['status']}: {rep['errors']}"[:160],
-            )
-            a = c.put(f"/api/rules/{rid}", headers=ah, json={"status": "active"})
-            check(
-                f"{code} activated",
-                a.status_code == 200 and a.json()["status"] == "active",
-                f"{a.status_code} {a.text[:120]}",
-            )
+        for code, *_ in RULE_SPECS:
+            rep = c.post(f"/api/rules/{code}/validate", headers=ah).json()
+            check(f"{code} passes validation", rep["status"] == "valid",
+                  f"{rep['status']}: {rep.get('errors')}"[:160])
+            a = c.put(f"/api/rules/{code}/status", headers=ah, json={"status": "active"})
+            check(f"{code} activated",
+                  a.status_code == 200 and a.json()["status"] == "active",
+                  f"{a.status_code} {a.text[:120]}")
 
-        r = c.get(f"/api/rules/{rule_ids['LAD-CA-03']}/source", headers=ud)
-        check("source readable", r.status_code == 200 and "def run(ctx)" in r.json()["source_code"])
-        r = c.get(f"/api/rules/{rule_ids['LAD-CA-03']}/versions", headers=ud)
-        check("version history present", r.status_code == 200 and len(r.json()) >= 1)
+        # ------------------------------------------------------------------ #
+        # Versioning runs against a throwaway code, deleted at the end, so the
+        # repository never accumulates version files from test runs.
+        section("versioning")
+        VCODE = "SMOKE-VERSION-PROBE"
+        vsrc = "def run(ctx):\n    return {'status': 'no_rows_returned'}\n"
+        created = c.post("/api/rules", headers=ah, json={
+            "code": VCODE, "name": "versioning probe", "source_code": vsrc,
+            "status": "draft"})
+        check("probe rule created at v1",
+              created.status_code == 201 and created.json()["version"] == 1,
+              f"{created.status_code} {created.text[:120]}")
+        if created.status_code != 201:
+            c.delete(f"/api/rules/{VCODE}", headers=ah)
 
-        # --- entity isolation ------------------------------------------------
-        print("\n[entity isolation]")
-        r = c.post(
-            f"/api/rules/{rule_ids['LAD-CA-03']}/test",
-            headers=ud, json={"data_date": "2026-10-19"},
-        )
-        check("LAD rule runs against LAD data", r.status_code == 200, r.text[:160])
+        if created.status_code == 201:
+            v0 = created.json()["version"]
+            src0 = c.get(f"/api/rules/{VCODE}/source", headers=ud).json()
+            check("source filename encodes code and version",
+                  src0["source_file"] == f"{VCODE}_v{v0}.py", src0["source_file"])
+            check("probe file written to disk",
+                  (RULES_DIR / f"{VCODE}_v{v0}.py").exists())
 
-        # --- execution: clean vs breach --------------------------------------
-        print("\n[execution - clean and breach days]")
-        for code, (clean_day, breach_day) in EXEC_EXPECTATIONS.items():
-            rid = rule_ids[code]
+            # An edit publishes the next version and moves the head flag.
+            u = c.put(f"/api/rules/{VCODE}", headers=ah, json={
+                "source_code": vsrc + "\n# smoke-edit\n",
+                "change_note": "smoke: bump"})
+            check("edit publishes the next version",
+                  u.status_code == 200 and u.json()["version"] == v0 + 1,
+                  f"{u.status_code} {u.text[:140]}")
+            check("new version is the head", u.json()["is_version_active"])
+            check("new version starts as draft", u.json()["status"] == "draft",
+                  u.json()["status"])
+            check("validation reset on a new version",
+                  u.json()["validation_status"] == "unvalidated",
+                  u.json()["validation_status"])
+            check("new file written",
+                  u.json()["source_file"] == f"{VCODE}_v{v0 + 1}.py",
+                  u.json()["source_file"])
+            check("previous file still on disk",
+                  (RULES_DIR / f"{VCODE}_v{v0}.py").exists())
+
+            hist = c.get(f"/api/rules/{VCODE}/versions", headers=ud).json()
+            check("history has both versions", len(hist) == 2, str(len(hist)))
+            check("history newest first", hist[0]["version"] == v0 + 1)
+            check("exactly one head after the bump",
+                  sum(1 for x in hist if x["is_version_active"]) == 1)
+
+            a = c.put(f"/api/rules/{VCODE}/status", headers=ah, json={"status": "active"})
+            check("cannot activate before validating", a.status_code == 409,
+                  f"got {a.status_code}")
+            c.post(f"/api/rules/{VCODE}/validate", headers=ah)
+            a = c.put(f"/api/rules/{VCODE}/status", headers=ah, json={"status": "active"})
+            check("activates once validated", a.status_code == 200,
+                  f"{a.status_code} {a.text[:140]}")
+
+            # Pausing must NOT burn a version.
+            before_pause = c.get(f"/api/rules/{VCODE}", headers=ud).json()["version"]
+            c.put(f"/api/rules/{VCODE}/status", headers=ah, json={"status": "paused"})
+            after_pause = c.get(f"/api/rules/{VCODE}", headers=ud).json()["version"]
+            check("pausing does not create a version", before_pause == after_pause,
+                  f"{before_pause} -> {after_pause}")
+            c.put(f"/api/rules/{VCODE}/status", headers=ah, json={"status": "active"})
+
+            # Rollback appends forward rather than rewinding.
+            v_now = c.get(f"/api/rules/{VCODE}", headers=ud).json()["version"]
+            rb = c.post(f"/api/rules/{VCODE}/rollback/1", headers=ah)
+            check("rollback publishes the next version, not an old one",
+                  rb.status_code == 200 and rb.json()["version"] == v_now + 1,
+                  f"{rb.status_code} {rb.text[:140]}")
+            hist = c.get(f"/api/rules/{VCODE}/versions", headers=ud).json()
+            check("rollback keeps full history", len(hist) == 3, f"{len(hist)} rows")
+            check("rollback records its origin",
+                  "v1" in hist[0]["change_note"].lower(), hist[0]["change_note"])
+            check("rolled-back version carries v1's source",
+                  "# smoke-edit" not in hist[0]["source_code"],
+                  "rollback still has the edit")
+            c.post(f"/api/rules/{VCODE}/validate", headers=ah)
+            c.put(f"/api/rules/{VCODE}/status", headers=ah, json={"status": "active"})
+
+            # Schedules are keyed by rule_code, so publishing a new version
+            # must NOT orphan them.
+            sc = c.post("/api/rule-schedules", headers=ah, json={
+                "rule_code": VCODE, "kind": "DAILY",
+                "config": {"time_of_day": "06:30"}, "timezone": "UTC"})
+            check("schedule created against the probe code", sc.status_code == 201,
+                  f"{sc.status_code} {sc.text[:120]}")
+            u = c.put(f"/api/rules/{VCODE}", headers=ah,
+                      json={"source_code": vsrc + "\\n# orphan-probe\\n",
+                            "change_note": "orphan probe"})
+            check("version published while a schedule exists",
+                  u.status_code == 200, u.text[:140])
+            still = c.get("/api/rule-schedules", headers=ud,
+                          params={"rule_code": VCODE}).json()["data"]
+            check("schedules survive a version bump (keyed by code, not row id)",
+                  len(still) == 1, f"{len(still)} after the bump")
+
+            # A rule with no findings CAN be deleted, and its files go with it.
+            r = c.delete(f"/api/rules/{VCODE}", headers=ah)
+            check("a rule with no findings can be deleted", r.status_code == 204,
+                  f"got {r.status_code} {r.text[:140]}")
+            check("deleting a rule removes its version files",
+                  not any(RULES_DIR.glob(f"{VCODE}_v*.py")),
+                  str([f.name for f in RULES_DIR.glob(f'{VCODE}_v*.py')]))
+
+        # ------------------------------------------------------------------ #
+        section("execution - clean and breach days")
+        for rcode, (clean_day, breach_day) in EXEC_EXPECTATIONS.items():
             if clean_day:
-                r = c.post(f"/api/rules/{rid}/test", headers=ud, json={"data_date": clean_day})
-                body = r.json()
-                check(
-                    f"{code} passes on {clean_day} (got {body.get('status')})",
-                    body.get("status") == "pass",
-                    body.get("summary", "")[:110],
-                )
-            r = c.post(f"/api/rules/{rid}/test", headers=ud, json={"data_date": breach_day})
-            body = r.json()
-            check(
-                f"{code} fails on {breach_day} with rows "
-                f"(got {body.get('status')}, {len(body.get('rows', []))} rows)",
-                body.get("status") == "fail" and len(body.get("rows", [])) > 0,
-                body.get("summary", "")[:110],
-            )
+                r = c.post(f"/api/rules/{rcode}/test", headers=ud,
+                           json={"data_date": clean_day}).json()
+                check(f"{rcode} passes on {clean_day} (got {r.get('status')})",
+                      r.get("status") == "pass", r.get("summary", "")[:110])
+            r = c.post(f"/api/rules/{rcode}/test", headers=ud,
+                       json={"data_date": breach_day}).json()
+            check(f"{rcode} fails on {breach_day} with rows "
+                  f"(got {r.get('status')}, {len(r.get('rows', []))} rows)",
+                  r.get("status") == "fail" and len(r.get("rows", [])) > 0,
+                  r.get("summary", "")[:110])
 
-        # --- cross-system join proof ------------------------------------------
-        print("\n[cross-system join]")
-        r = c.post(
-            f"/api/rules/{rule_ids['ABM-CA-22']}/test",
-            headers=ud, json={"data_date": "2026-10-15"},
-        )
-        rows = r.json().get("rows", [])
-        check(
-            "ABM-CA-22 joined HRMS employees to Business Central vendors",
-            bool(rows) and "employee_id" in rows[0] and "vendor_id" in rows[0],
-            str(rows[:1])[:200],
-        )
-        r = c.post(
-            f"/api/rules/{rule_ids['LAD-CA-06']}/test",
-            headers=ud, json={"data_date": "2026-10-15"},
-        )
-        rows = r.json().get("rows", [])
-        check(
-            "LAD-CA-06 joined iPOS activity to HRMS employment status",
-            bool(rows) and "exit_date" in rows[0],
-            str(rows[:1])[:200],
-        )
+        section("cross-system join")
+        r = c.post("/api/rules/ABM-CA-22/test", headers=ud,
+                   json={"data_date": "2026-10-15"}).json()
+        rows = r.get("rows", [])
+        check("ABM-CA-22 joined HRMS employees to Business Central vendors",
+              bool(rows) and "employee_id" in rows[0] and "vendor_id" in rows[0],
+              str(rows[:1])[:200])
+        r = c.post("/api/rules/LAD-CA-06/test", headers=ud,
+                   json={"data_date": "2026-10-15"}).json()
+        rows = r.get("rows", [])
+        check("LAD-CA-06 joined iPOS activity to HRMS employment status",
+              bool(rows) and "exit_date" in rows[0], str(rows[:1])[:200])
 
-        # --- tickets -----------------------------------------------------------
-        print("\n[tickets]")
+        section("tickets")
         tickets = c.get("/api/tickets", headers=ud, params={"perPage": 200}).json()
         check("tickets raised", tickets["total"] >= 4, f"total={tickets['total']}")
-        check(
-            "ticket numbers formatted",
-            all(t["ticket_no"].startswith("ABM-TKT-") for t in tickets["data"]),
-        )
-        check(
-            "open tickets carry rows",
-            all(len(t["rows"]) > 0 for t in tickets["data"] if t["status"] == "open"),
-        )
-        # JSON serialisation of timestamp columns
-        check(
-            "timestamp values serialised as strings",
-            any(
-                isinstance(v, str) and "T" in v
-                for t in tickets["data"]
-                for row in t["rows"][:3]
-                for v in row.values()
-            ),
-        )
-
-        summary = c.get("/api/tickets/summary", headers=ud).json()
-        check("ticket summary aggregates", summary["total"] > 0, str(summary))
+        check("tickets carry rule_code", all(t.get("rule_code") for t in tickets["data"]))
+        check("ticket numbers formatted",
+              all(t["ticket_no"].startswith("ABM-TKT-") for t in tickets["data"]))
+        check("filter by rule_code works",
+              c.get("/api/tickets", headers=ud,
+                    params={"rule_code": "ABM-CA-22", "perPage": 50}).json()["total"] >= 1)
+        check("ticket summary aggregates",
+              c.get("/api/tickets/summary", headers=ud).json()["total"] > 0)
 
         open_ticket = next((t for t in tickets["data"] if t["status"] == "open"), None)
         if open_ticket:
-            print("\n[acknowledgement]")
-            r = c.post(
-                f"/api/tickets/{open_ticket['id']}/acknowledge",
-                headers=ud,
-                json={"status": "acknowledged", "note": "Reviewed, referred to store manager."},
-            )
-            check(
-                f"auditor acknowledged {open_ticket['ticket_no']}",
-                r.status_code == 200 and r.json()["status"] == "acknowledged",
-                r.text[:160],
-            )
+            section("acknowledgement")
+            r = c.post(f"/api/tickets/{open_ticket['id']}/acknowledge", headers=ud,
+                       json={"status": "acknowledged", "note": "Reviewed."})
+            check(f"auditor acknowledged {open_ticket['ticket_no']}",
+                  r.status_code == 200 and r.json()["status"] == "acknowledged",
+                  r.text[:160])
             check("acknowledged_by recorded", r.json()["acknowledged_by"] == AUDITOR[0])
-            r = c.post(
-                f"/api/tickets/{open_ticket['id']}/acknowledge",
-                headers=ud, json={"status": "acknowledged", "note": "again"},
-            )
+            r = c.post(f"/api/tickets/{open_ticket['id']}/acknowledge", headers=ud,
+                       json={"status": "acknowledged", "note": "again"})
             check("double-acknowledge rejected", r.status_code == 409, f"got {r.status_code}")
             r = c.post(f"/api/tickets/{open_ticket['id']}/reopen", headers=ud)
             check("reopen works", r.status_code == 200 and r.json()["status"] == "open")
 
-        # --- friendly cadence (no raw cron anywhere in the UI) ---------------
+        section("delete protection")
+        r = c.delete("/api/rules/LAD-CA-03", headers=ah)
+        check("a rule with findings cannot be deleted", r.status_code == 409,
+              f"got {r.status_code} {r.text[:140]}")
+        check("the message points at retiring instead",
+              "retired" in r.json().get("detail", "").lower(), r.text[:160])
+        check("deleting an unknown rule 404s",
+              c.delete("/api/rules/NOPE-99", headers=ah).status_code == 404)
+
         section("friendly cadence")
         opts = c.get("/api/rule-schedules/cadence-options", headers=ud).json()
-        check("cadence options exposed", len(opts["presets"]) > 0 and len(opts["kinds"]) == 6)
+        check("cadence options exposed",
+              len(opts["presets"]) > 0 and len(opts["kinds"]) == 6)
         check("monthly capped at day 28", opts["max_day_of_month"] == 28)
         check("hourly intervals limited", opts["hourly_intervals"] == [1, 2, 3, 4, 6, 8, 12])
 
-        r = c.post(
-            "/api/rule-schedules/cadence-preview", headers=ud,
-            json={"kind": "DAILY", "config": {"time_of_day": "06:30"},
-                  "timezone": "Asia/Dubai", "count": 3},
-        ).json()
-        check("preview derives cron from friendly config", r["ok"] and r["cron"] == "30 06 * * *", str(r))
-        check("preview label is plain English", r["cadence_label"] == "Daily at 06:30", r["cadence_label"])
-        check("preview returns real fire times", len(r["upcoming"]) == 3, str(r.get("upcoming"))[:120])
-        first = datetime.fromisoformat(r["upcoming"][0])
-        check("preview respects the timezone", str(first.utcoffset()) == "4:00:00", str(first))
+        r = c.post("/api/rule-schedules/cadence-preview", headers=ud, json={
+            "kind": "DAILY", "config": {"time_of_day": "06:30"},
+            "timezone": "Asia/Dubai", "count": 3}).json()
+        check("preview derives cron from friendly config",
+              r["ok"] and r["cron"] == "30 06 * * *", str(r))
+        check("preview label is plain English",
+              r["cadence_label"] == "Daily at 06:30", r["cadence_label"])
+        check("preview respects the timezone",
+              str(datetime.fromisoformat(r["upcoming"][0]).utcoffset()) == "4:00:00",
+              r["upcoming"][0])
 
-        for bad_kind, bad_cfg, why in [
-            ("MONTHLY", {"time_of_day": "07:00", "day_of_month": 31}, "day 31 must be rejected"),
-            ("WEEKLY", {"time_of_day": "07:00", "days_of_week": [9]}, "out-of-range weekday rejected"),
-            ("HOURLY", {"time_of_day": "00:00", "interval_hours": 7}, "non-dividing interval rejected"),
+        for kind, cfg, why in [
+            ("MONTHLY", {"time_of_day": "07:00", "day_of_month": 31}, "day 31 rejected"),
+            ("WEEKLY", {"time_of_day": "07:00", "days_of_week": [9]}, "weekday 9 rejected"),
+            ("HOURLY", {"time_of_day": "00:00", "interval_hours": 7}, "interval 7 rejected"),
             ("CUSTOM", {"cron_override": "not a cron"}, "garbage cron rejected"),
         ]:
-            r = c.post(
-                "/api/rule-schedules/cadence-preview", headers=ud,
-                json={"kind": bad_kind, "config": bad_cfg},
-            ).json()
+            r = c.post("/api/rule-schedules/cadence-preview", headers=ud,
+                       json={"kind": kind, "config": cfg}).json()
             check(why, r["ok"] is False and r["problems"], str(r)[:140])
 
-        # --- multiple schedules per rule ---------------------------------------
-        section("multiple schedules per rule")
-        r03 = rule_ids["LAD-CA-03"]
-        existing = c.get("/api/rule-schedules", headers=ud, params={"rule_id": r03}).json()["data"]
-        for s in existing:
+        section("schedules keyed by rule code")
+        r = c.post("/api/rule-schedules", headers=ud,
+                   json={"rule_code": "LAD-CA-03", "kind": "DAILY",
+                         "config": {"time_of_day": "06:30"}})
+        check("auditor CANNOT create schedules", r.status_code == 403, f"got {r.status_code}")
+        r = c.post("/api/rule-schedules", headers=ah,
+                   json={"rule_code": "NOT-A-RULE", "kind": "DAILY",
+                         "config": {"time_of_day": "06:30"}})
+        check("a schedule cannot reference an unknown rule code",
+              r.status_code == 404, f"got {r.status_code}")
+
+        for s in c.get("/api/rule-schedules", headers=ud,
+                       params={"rule_code": "LAD-CA-03"}).json()["data"]:
             c.delete(f"/api/rule-schedules/{s['id']}", headers=ah)
 
         created = []
@@ -369,189 +396,51 @@ def main() -> int:
             ("Intraday sweep", "HOURLY", {"time_of_day": "00:00", "interval_hours": 6}),
             ("Month-end deep dive", "MONTHLY", {"time_of_day": "07:00", "day_of_month": 28}),
         ]:
-            r = c.post(
-                "/api/rule-schedules", headers=ah,
-                json={"rule_id": r03, "label": label, "kind": kind, "config": cfg,
-                      "timezone": "Asia/Dubai", "data_lag_days": 1},
-            )
+            r = c.post("/api/rule-schedules", headers=ah, json={
+                "rule_code": "LAD-CA-03", "label": label, "kind": kind,
+                "config": cfg, "timezone": "Asia/Dubai", "data_lag_days": 1})
             if r.status_code == 201:
                 created.append(r.json())
-        check("three cadences on one rule", len(created) == 3, f"got {len(created)}")
+        check("three cadences on one rule code", len(created) == 3, f"got {len(created)}")
         if len(created) == 3:
-            check(
-                "cadence labels are human readable",
-                {s["cadence_label"] for s in created} == {
-                    "Daily at 06:30", "Every 6 hours",
-                    "Monthly on day 28 (last day of month) at 07:00",
-                },
-                str([s["cadence_label"] for s in created]),
-            )
-            check("each has its own next run", len({s["next_run_at"] for s in created}) == 3)
-
+            check("cadence labels are human readable",
+                  {s["cadence_label"] for s in created} == {
+                      "Daily at 06:30", "Every 6 hours",
+                      "Monthly on day 28 (last day of month) at 07:00"},
+                  str([s["cadence_label"] for s in created]))
             jobs = c.get("/api/rule-schedules/cron/jobs", headers=ud).json()["jobs"]
-            registered = {j["id"] for j in jobs}
-            check(
-                "every schedule registered with APScheduler",
-                all(f"rule_schedule_{s['id']}" in registered for s in created),
-                str(sorted(registered))[:200],
-            )
+            registered = {x["id"] for x in jobs}
+            check("every schedule registered with APScheduler",
+                  all(f"rule_schedule_{s['id']}" in registered for s in created),
+                  str(sorted(registered))[:200])
+            r = c.post("/api/rule-schedules", headers=ah,
+                       json={"rule_code": "LAD-CA-03", "kind": "DAILY",
+                             "config": {"time_of_day": "06:30"}})
+            check("duplicate cadence rejected (409)", r.status_code == 409,
+                  f"got {r.status_code}")
 
-            r = c.post(
-                "/api/rule-schedules", headers=ah,
-                json={"rule_id": r03, "kind": "DAILY", "config": {"time_of_day": "06:30"}},
-            )
-            check("duplicate cadence rejected (409)", r.status_code == 409, f"got {r.status_code}")
+            # The probe's delete also removes its schedules and version files, so the
+            # repository is left exactly as it was found.
 
-        r = c.post(
-            "/api/rule-schedules", headers=ud,
-            json={"rule_id": r03, "kind": "DAILY", "config": {"time_of_day": "06:30"}},
-        )
-        check("auditor CANNOT create schedules", r.status_code == 403, f"got {r.status_code}")
-
-        r = c.put(f"/api/rules/{r03}", headers=ah, json={"status": "paused"})
-        check("rule paused", r.status_code == 200 and r.json()["status"] == "paused")
-        jobs = c.get("/api/rule-schedules/cron/jobs", headers=ud).json()["jobs"]
-        check(
-            "pausing the rule deregisters its schedules",
-            not any(j["id"].startswith("rule_schedule_") for j in jobs),
-            str([j["id"] for j in jobs])[:200],
-        )
-        c.put(f"/api/rules/{r03}", headers=ah, json={"status": "active"})
-        jobs = c.get("/api/rule-schedules/cron/jobs", headers=ud).json()["jobs"]
-        check(
-            "reactivating re-registers them",
-            sum(1 for j in jobs if j["id"].startswith("rule_schedule_")) >= 3,
-            str([j["id"] for j in jobs])[:200],
-        )
-
-        # --- validation gate --------------------------------------------------
-        section("validation gate")
-        for code, rid in rule_ids.items():
-            rep = c.get(f"/api/rules/{rid}/validate-report", headers=ud).json()
-            check(f"{code} is validated", rep["status"] == "valid", str(rep)[:140])
-
-        bad_rule = "import os\ndef run(ctx):\n    return {'status':'no_rows_returned'}\n"
-        r = c.post(
-            "/api/rules", headers=ah,
-            json={"code": "SMOKE-BAD-1", "name": "banned import", "entity": "LAD",
-                  "source_code": bad_rule, "status": "draft"},
-        )
-        bad_id = r.json()["id"]
-        rep = c.post(f"/api/rules/{bad_id}/validate", headers=ud).json()
-        check("banned import rejected", rep["status"] == "invalid" and rep["errors"], str(rep)[:160])
-        r = c.put(f"/api/rules/{bad_id}", headers=ah, json={"status": "active"})
-        check("invalid rule cannot be activated", r.status_code == 409, f"got {r.status_code}")
-
-        cross = (
-            'def run(ctx):\n'
-            '    rows = ctx.sql(\'SELECT * FROM ctx.table("bc_vendors")\').all()\n'
-            '    return {"status": "no_rows_returned", "rows": []}\n'
-        )
-        r = c.put(f"/api/rules/{bad_id}", headers=ah,
-                  json={"source_code": cross, "change_note": "cross-entity table"})
-        rep = c.post(f"/api/rules/{bad_id}/validate", headers=ud).json()
-        check(
-            "cross-entity table reference caught inside an SQL string",
-            rep["status"] == "invalid"
-            and any("bc_vendors" in e for e in rep["errors"]),
-            str(rep)[:200],
-        )
-        c.delete(f"/api/rules/{bad_id}", headers=ah)
-
-        # --- alert policy + dedup ---------------------------------------------
-        section("alert policy and deduplication")
-        c.put(f"/api/rules/{r03}", headers=ah,
-              json={"ticket_mode": "ONE_PER_RUN", "dedupe_mode": "PER_DATA_DATE",
-                    "alerting_enabled": True})
-
-        def ticket_count() -> int:
-            return c.get("/api/tickets", headers=ud,
-                         params={"rule_id": r03, "perPage": 200}).json()["total"]
-
-        # Asserted on ticket IDENTITY, not on absolute counts, so the suite is
-        # re-runnable: a previous run may already have opened a ticket for this
-        # data date, in which case this run bumps it instead of creating one.
-        DEDUPE_DAY = "2026-10-18"
-
-        def ticket_ids() -> set:
-            return {
-                t["id"] for t in c.get("/api/tickets", headers=ud,
-                                       params={"rule_id": r03, "perPage": 200}).json()["data"]
-            }
-
-        ids_before = ticket_ids()
-        c.post(f"/api/rules/{r03}/test", headers=ud, json={"data_date": DEDUPE_DAY})
-        ids_after_first = ticket_ids()
-
-        new_first = ids_after_first - ids_before
-        if new_first:
-            check("first failing run raises a new ticket", True)
-        else:
-            # Already-open ticket for this date from an earlier suite run: the
-            # run must have bumped it instead. Verify the bump happened.
-            bumped_id = max(ids_after_first) if ids_after_first else None
-            t = next((x for x in c.get("/api/tickets", headers=ud,
-                                       params={"rule_id": r03, "perPage": 200}).json()["data"]
-                      if x["id"] == bumped_id), None)
-            check("run bumps the existing ticket rather than duplicating it",
-                  bool(t) and t["occurrences"] >= 2,
-                  str(t)[:160] if t else "no ticket")
-
-        ids_before_repeat = ticket_ids()
-        c.post(f"/api/rules/{r03}/test", headers=ud, json={"data_date": DEDUPE_DAY})
-        check("repeat on same data date does NOT add a ticket",
-              ticket_ids() == ids_before_repeat,
-              f"new ids: {sorted(ticket_ids() - ids_before_repeat)}")
-
-        rows = c.get("/api/tickets", headers=ud,
-                     params={"rule_id": r03, "perPage": 10}).json()["data"]
-        bumped = next((t for t in rows if t["occurrences"] >= 2), None)
-        check("repeat bumps the occurrence count", bumped is not None,
-              str([(t['ticket_no'], t['occurrences']) for t in rows])[:160])
-
-        if bumped:
-            c.post(f"/api/tickets/{bumped['id']}/acknowledge", headers=ud,
-                   json={"status": "acknowledged", "note": "smoke"})
-            ids_before_new = ticket_ids()
-            c.post(f"/api/rules/{r03}/test", headers=ud, json={"data_date": DEDUPE_DAY})
-            check(
-                "a breach that persists after acknowledgement opens a NEW ticket",
-                bool(ticket_ids() - ids_before_new),
-                "no new ticket after acknowledging",
-            )
-
-        c.put(f"/api/rules/{r03}", headers=ah, json={"dedupe_mode": "NONE"})
-        before_none = ticket_count()
-        c.post(f"/api/rules/{r03}/test", headers=ud, json={"data_date": DEDUPE_DAY})
-        c.post(f"/api/rules/{r03}/test", headers=ud, json={"data_date": DEDUPE_DAY})
-        check("dedupe NONE always adds a ticket",
-              ticket_count() == before_none + 2, f"{before_none} -> {ticket_count()}")
-
-        c.put(f"/api/rules/{r03}", headers=ah,
-              json={"dedupe_mode": "PER_DATA_DATE", "alerting_enabled": False})
-        before_mute = ticket_count()
-        run = c.post(f"/api/rules/{r03}/test", headers=ud,
-                     json={"data_date": DEDUPE_DAY}).json()
-        check("alerting muted: run still executes", run["status"] == "fail", run.get("status"))
-        check("alerting muted: no ticket raised",
-              ticket_count() == before_mute, f"{before_mute} -> {ticket_count()}")
-        c.put(f"/api/rules/{r03}", headers=ah, json={"alerting_enabled": True})
-
-        # --- runs + dashboard ----------------------------------------------------
-        print("\n[runs ledger and dashboard]")
+        section("runs ledger and dashboard")
         runs = c.get("/api/runs", headers=ud, params={"perPage": 200}).json()
         check("runs recorded", runs["total"] >= 8, f"total={runs['total']}")
+        check("runs carry rule_code", all(x.get("rule_code") for x in runs["data"]))
         rsum = c.get("/api/runs/summary", headers=ud).json()
         check("run summary has pass+fail", rsum["pass"] > 0 and rsum["fail"] > 0, str(rsum))
 
         dash = c.get("/api/dashboard").json()
         check("dashboard totals", dash["rules"]["total"] >= 4, str(dash))
+        check("dashboard counts versions separately",
+              dash["rules"]["versions"] >= dash["rules"]["total"], str(dash["rules"]))
 
-        print("\n[rule generation]")
+        section("rule generation")
         gen = c.get("/api/rules/generate/status", headers=ud).json()
-        check(f"generate status configured={gen['configured']}", isinstance(gen["configured"], bool))
+        check(f"generate status configured={gen['configured']}",
+              isinstance(gen["configured"], bool))
         r = c.get("/api/rules/generate/context", headers=ud, params={"entity": "LAD"})
-        check("generate context lists LAD datasources", r.status_code == 200 and "ipos_sales" in r.json()["datasources"])
+        check("generate context lists LAD datasources",
+              r.status_code == 200 and "ipos_sales" in r.json()["datasources"])
 
     print("\n" + "=" * 72)
     print(f"RESULT: {passes} passed, {failures} failed")

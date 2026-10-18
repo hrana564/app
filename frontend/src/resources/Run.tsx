@@ -42,7 +42,7 @@ export const RunList = () => (
   >
     <Datagrid rowClick="show" bulkActionButtons={false}>
       <IdField source="id" />
-      <TextField source="rule_id" label="Rule" />
+      <TextField source="rule_code" label="Rule" />
       <TextField source="data_date" label="Data date" />
       <StatusField source="status" />
       <TextField source="summary" label="Summary" />
@@ -167,11 +167,11 @@ const ScheduleOverview = () => {
     <Stack spacing={1.5}>
       <Typography variant="body2" color="text.secondary">
         {rows.length} schedule{rows.length === 1 ? "" : "s"} across{" "}
-        {new Set(rows.map((r) => r.rule_id)).size} rule(s). A schedule only fires
+        {new Set(rows.map((r) => r.rule_code)).size} rule(s). A schedule only fires
         while its rule is <strong>active</strong>.
       </Typography>
       {rows.map((s) => {
-        const rule = rules[s.rule_id];
+        const rule = rules[s.rule_code];
         const live = jobs.includes(`rule_schedule_${s.id}`);
         return (
           <Card key={s.id}>

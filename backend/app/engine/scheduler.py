@@ -51,6 +51,21 @@ def cron_for(schedule: RuleSchedule) -> str:
     return to_cron(cadence_of(schedule))
 
 
+async def head_of(session, code: str) -> Rule | None:
+    """Resolve a rule code to its live version row.
+
+    A schedule references `rule_code`, not a row id, so publishing a new version
+    can never orphan it. Resolution happens at fire time, which also means a
+    version published between the schedule firing and execution is the one that
+    runs.
+    """
+    return (
+        await session.execute(
+            select(Rule).where(Rule.code == code, Rule.is_version_active.is_(True))
+        )
+    ).scalar_one_or_none()
+
+
 def default_data_date(lag_days: int = 1) -> date:
     """The day folder a schedule should audit.
 
@@ -90,11 +105,17 @@ async def run_schedule_job(schedule_id: int) -> None:
             if sched is None:
                 return
 
-            rule = sched.rule
-            # Single source of truth for "should this run".
-            if rule is None or rule.status != "active":
-                log.debug("schedule %s skipped: rule status is %s",
-                          schedule_id, getattr(rule, "status", "missing"))
+            # Resolve the code to its live version at fire time.
+            rule = await head_of(session, sched.rule_code)
+            if rule is None:
+                log.warning(
+                    "schedule %s skipped: no rule matches code %s",
+                    schedule_id, sched.rule_code,
+                )
+                return
+            if rule.status != "active":
+                log.debug("schedule %s skipped: rule %s is %s",
+                          schedule_id, rule.code, rule.status)
                 return
 
             data_date = default_data_date(sched.data_lag_days)
@@ -119,11 +140,7 @@ async def sync_schedule(schedule: RuleSchedule) -> str | None:
     """Add or replace the live job for one schedule row.
 
     Returns the derived cron, or None if the schedule was not registered
-    because its rule is not active.
-
-    NOTE: `schedule.rule` must already be loaded. Callers load it with
-    selectinload; touching an unloaded relationship here would raise
-    MissingGreenlet under async SQLAlchemy.
+    because its rule has no live, active version.
     """
     jid = job_id(schedule.id)
     try:
@@ -131,9 +148,16 @@ async def sync_schedule(schedule: RuleSchedule) -> str | None:
     except JobLookupError:
         pass
 
-    rule = schedule.rule
-    if rule is None or rule.status != "active":
-        log.debug("schedule %s not registered: rule is not active", schedule.id)
+    async with SessionLocal() as session:
+        rule = await head_of(session, schedule.rule_code)
+
+    if rule is None:
+        log.debug("schedule %s not registered: no rule for code %s",
+                  schedule.id, schedule.rule_code)
+        return None
+    if rule.status != "active":
+        log.debug("schedule %s not registered: rule %s is %s",
+                  schedule.id, rule.code, rule.status)
         return None
 
     try:
@@ -169,34 +193,51 @@ async def remove_schedule(schedule_id: int) -> None:
         pass
 
 
-async def load_all() -> int:
-    """Rehydrate every schedule belonging to an active rule.
+async def load_all() -> dict:
+    """Rehydrate every schedule, resolving rule_code -> live version.
 
-    `selectinload` is mandatory, not an optimisation: touching `sched.rule`
-    later would otherwise trigger a lazy load, which SQLAlchemy cannot perform
-    in an async context (MissingGreenlet).
+    Returns a summary. `unresolved` lists schedules whose rule_code matched no
+    live version. Since `code` is write-once and validated, this should stay
+    empty - but reporting it at startup means a mismatch is visible rather than
+    being a schedule that silently never fires.
     """
     async with SessionLocal() as session:
         rows = (
-            await session.execute(
-                select(RuleSchedule)
-                .options(selectinload(RuleSchedule.rule))
-                .join(RuleSchedule.rule)
-                .where(Rule.status == "active")
-            )
-        ).scalars().unique().all()
+            await session.execute(select(RuleSchedule).order_by(RuleSchedule.id))
+        ).scalars().all()
 
-        loaded, skipped = 0, 0
+        loaded = 0
+        invalid = 0
+        unresolved: list[dict] = []
+
         for sched in rows:
             try:
-                if await sync_schedule(sched) is not None:
-                    loaded += 1
+                registered = await sync_schedule(sched)
             except CadenceError:
-                skipped += 1
+                invalid += 1
+                continue
+
+            if registered is None:
+                rule = await head_of(session, sched.rule_code)
+                if rule is None:
+                    unresolved.append(
+                        {"schedule_id": sched.id, "rule_code": sched.rule_code}
+                    )
+                continue
+            loaded += 1
+
         await session.commit()
 
-    log.info("scheduler loaded %s job(s), skipped %s invalid", loaded, skipped)
-    return loaded
+    log.info(
+        "scheduler loaded %s job(s); %s unresolved, %s invalid",
+        loaded, len(unresolved), invalid,
+    )
+    for item in unresolved:
+        log.warning(
+            "  schedule %s references rule_code %s, which has no live version",
+            item["schedule_id"], item["rule_code"],
+        )
+    return {"loaded": loaded, "invalid": invalid, "unresolved": unresolved}
 
 
 def start() -> None:

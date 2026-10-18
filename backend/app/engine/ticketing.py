@@ -159,6 +159,7 @@ async def _upsert_ticket(
         ticket_no="ABM-TKT-PENDING",
         run_id=run.id,
         rule_id=rule.id,
+        rule_code=rule.code,
         schedule_id=schedule_id,
         severity=rule.severity,
         summary=summary,

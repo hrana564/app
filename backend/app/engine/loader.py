@@ -11,13 +11,15 @@ RULES_DIR = Path(__file__).resolve().parent.parent.parent / "rules"
 
 
 def resolve_rule_path(source_file: str, rules_dir: Path | None = None) -> Path:
-    base = rules_dir or RULES_DIR
-    name = Path(source_file).name
+    base = (rules_dir or RULES_DIR).resolve()
+    # Take only the filename: the DB stores a name, never a path, so a crafted
+    # value like "../../secrets.py" cannot escape the rules directory.
+    name = Path(str(source_file)).name
     path = (base / name).resolve()
-    if not str(path).startswith(str(base.resolve())):
+    if path.parent != base:
         raise ValueError(f"Rule path escapes rules directory: {source_file}")
     if not path.exists():
-        raise FileNotFoundError(f"Rule file not found: {path}")
+        raise FileNotFoundError(f"Rule file not found: {name}")
     return path
 
 
@@ -51,21 +53,19 @@ def read_source(source_file: str, rules_dir: Path | None = None) -> str:
 
 
 def write_source(source_file: str, code: str, rules_dir: Path | None = None) -> Path:
-    """Persist a rule to disk. Filenames are derived from a DB id, never user text."""
-    base = rules_dir or RULES_DIR
+    """Persist a rule to disk. Filenames look like LAD-CA-03_v2.py."""
+    base = (rules_dir or RULES_DIR).resolve()
     base.mkdir(parents=True, exist_ok=True)
-    name = Path(source_file).name
-    if not name.endswith(".py") or not name.startswith("rule_"):
-        raise ValueError("Rule filenames must look like rule_<id>.py")
+    name = Path(str(source_file)).name
+    if not name.endswith(".py") or "_v" not in name:
+        raise ValueError(
+            f"Rule filenames must look like <CODE>_v<version>.py, got {name!r}"
+        )
     path = (base / name).resolve()
-    if not str(path).startswith(str(base.resolve())):
+    if path.parent != base:
         raise ValueError("Refusing to write outside the rules directory")
     path.write_text(code, encoding="utf-8")
     return path
-
-
-def rule_path_for(rule_id: int, rules_dir: Path | None = None) -> str:
-    return f"rule_{rule_id}.py"
 
 
 def describe_module(module: Any) -> dict[str, Any]:

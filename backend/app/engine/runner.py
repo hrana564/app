@@ -78,7 +78,7 @@ async def execute_rule(
 
     run = Run(
         rule_id=rule.id,
-        rule_version=rule.current_version,
+        rule_code=rule.code,
         schedule_id=schedule_id,
         data_date=data_date,
         triggered_by=triggered_by,

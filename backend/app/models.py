@@ -1,11 +1,12 @@
 """SQLAlchemy models for the audit control store.
 
-Seven tables, matching the four core entities (rules / schedules / runs /
-tickets) plus users, datasource registry and rule version history.
+Seven tables. A rule is not one row - `rules_master` holds one row per VERSION
+of a rule, identified by `code`, with exactly one flagged `is_version_active`
+(the head). That single flag is enforced by a partial unique index, so two live
+versions of the same rule are impossible at the database level.
 
-Audit thresholds live in the rule source, not in a table. Changing one is a
-code change, which produces a new entry in rule_versions - so the audit trail
-records the change rather than losing it.
+Thresholds live in the rule source, not in a table. Changing one is a code
+change, which produces a new version row - so the audit trail records it.
 """
 
 from __future__ import annotations
@@ -18,11 +19,13 @@ from sqlalchemy import (
     Date,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -76,13 +79,33 @@ class Datasource(Base, TimestampMixin):
 
 
 # ---------------------------------------------------------------------------
-# Rules - the aggregate root
+# Rules - one row per VERSION
 # ---------------------------------------------------------------------------
 class Rule(Base, TimestampMixin):
-    __tablename__ = "rules"
+    """A single version of a rule.
+
+    `code` identifies the LOGICAL rule and repeats across versions.
+    `is_version_active` marks the head. The partial unique index
+    `uq_rules_master_active_version` guarantees one head per code in the
+    database, not just in application code.
+    """
+
+    __tablename__ = "rules_master"
+    __table_args__ = (
+        UniqueConstraint("code", "version", name="uq_rules_master_code_version"),
+        Index(
+            "uq_rules_master_active_version",
+            "code",
+            unique=True,
+            postgresql_where=text("is_version_active"),
+        ),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    code: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    code: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    is_version_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     entity: Mapped[str] = mapped_column(String(8), nullable=False, index=True)
     description: Mapped[str] = mapped_column(Text, default="")
@@ -102,7 +125,6 @@ class Rule(Base, TimestampMixin):
     validated_by: Mapped[str | None] = mapped_column(String(64))
 
     # --- alert policy ----------------------------------------------------
-    # How a failing run becomes one or more tickets.
     ticket_mode: Mapped[str] = mapped_column(
         String(24), default="ONE_PER_RUN", nullable=False
     )
@@ -118,50 +140,34 @@ class Rule(Base, TimestampMixin):
     declared_alert: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, nullable=False)
 
     source_file: Mapped[str] = mapped_column(String(255), nullable=False)
-    current_version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    change_note: Mapped[str] = mapped_column(Text, default="")
     datasource_hint: Mapped[str] = mapped_column(String(255), default="")
     created_by: Mapped[str] = mapped_column(String(64), default="")
     origin: Mapped[str] = mapped_column(String(16), default="manual", nullable=False)
 
-    versions: Mapped[list["RuleVersion"]] = relationship(
-        back_populates="rule", cascade="all, delete-orphan"
-    )
     schedules: Mapped[list["RuleSchedule"]] = relationship(
-        back_populates="rule", cascade="all, delete-orphan"
+        "RuleSchedule", primaryjoin="foreign(RuleSchedule.rule_code) == Rule.code",
+        viewonly=True,
     )
-
-
-class RuleVersion(Base):
-    """Append-only history. Rollback inserts a new row; it never deletes."""
-
-    __tablename__ = "rule_versions"
-    __table_args__ = (UniqueConstraint("rule_id", "version", name="uq_rule_version"),)
-
-    id: Mapped[int] = mapped_column(primary_key=True)
-    rule_id: Mapped[int] = mapped_column(
-        ForeignKey("rules.id", ondelete="CASCADE"), nullable=False, index=True
-    )
-    version: Mapped[int] = mapped_column(Integer, nullable=False)
-    source_code: Mapped[str] = mapped_column(Text, nullable=False)
-    change_note: Mapped[str] = mapped_column(Text, default="")
-    created_by: Mapped[str] = mapped_column(String(64), default="")
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
-    )
-
-    rule: Mapped[Rule] = relationship(back_populates="versions")
 
 
 # ---------------------------------------------------------------------------
 # Schedules
 # ---------------------------------------------------------------------------
 class RuleSchedule(Base, TimestampMixin):
+    """A cadence for a rule.
+
+    Keyed by `rule_code`, NOT by a row id: a schedule belongs to the logical
+    rule, so a new version can never orphan it. There is no FK - `code` repeats
+    across versions and cannot be unique. The scheduler resolves
+    rule_code -> head version at fire time, and reports any code it cannot
+    resolve at startup rather than silently dropping those schedules.
+    """
+
     __tablename__ = "rule_schedules"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    rule_id: Mapped[int] = mapped_column(
-        ForeignKey("rules.id", ondelete="CASCADE"), nullable=False, index=True
-    )
+    rule_code: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     label: Mapped[str] = mapped_column(String(128), default="")
     kind: Mapped[str] = mapped_column(String(16), default="DAILY", nullable=False)
     config: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, nullable=False)
@@ -176,20 +182,25 @@ class RuleSchedule(Base, TimestampMixin):
     next_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_by: Mapped[str] = mapped_column(String(64), default="")
 
-    rule: Mapped[Rule] = relationship(back_populates="schedules")
-
 
 # ---------------------------------------------------------------------------
 # Runs
 # ---------------------------------------------------------------------------
 class Run(Base):
+    """One execution of one rule version.
+
+    `rule_id` points at the EXACT version row that ran, so "what code produced
+    this run" is a single lookup. `rule_code` is denormalised for list views so
+    they never need a join.
+    """
+
     __tablename__ = "runs"
 
     id: Mapped[int] = mapped_column(primary_key=True)
     rule_id: Mapped[int] = mapped_column(
-        ForeignKey("rules.id", ondelete="CASCADE"), nullable=False, index=True
+        ForeignKey("rules_master.id", ondelete="RESTRICT"), nullable=False, index=True
     )
-    rule_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    rule_code: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     schedule_id: Mapped[int | None] = mapped_column(
         ForeignKey("rule_schedules.id", ondelete="SET NULL"), index=True
     )
@@ -229,8 +240,9 @@ class Ticket(Base):
         ForeignKey("runs.id", ondelete="CASCADE"), nullable=False, index=True
     )
     rule_id: Mapped[int] = mapped_column(
-        ForeignKey("rules.id", ondelete="CASCADE"), nullable=False, index=True
+        ForeignKey("rules_master.id", ondelete="RESTRICT"), nullable=False, index=True
     )
+    rule_code: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     schedule_id: Mapped[int | None] = mapped_column(
         ForeignKey("rule_schedules.id", ondelete="SET NULL")
     )

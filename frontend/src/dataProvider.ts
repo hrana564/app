@@ -69,6 +69,15 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
 
 const base = (resource: string) => `/api/${resource}`;
 
+/**
+ * Rules are addressed by their permanent `code`, not the numeric row id - a
+ * row id identifies one VERSION, while the code identifies the rule. So for the
+ * `rules` resource react-admin's `id` is set to the code, which makes every URL
+ * (getOne, update, delete) resolve with no per-screen special-casing.
+ */
+const identifyRules = (records: any[]) =>
+  records.map((r) => ({ ...r, id: r.code }));
+
 /** react-admin list params -> query string. */
 function listQuery(resource: string, params: Partial<GetListParams>): string {
   const q = new URLSearchParams();
@@ -85,7 +94,7 @@ function listQuery(resource: string, params: Partial<GetListParams>): string {
     if (value === undefined || value === null || value === "") continue;
     if (key === "q") {
       q.set("q", String(value));
-    } else if (["status", "severity", "rule_id", "entity", "enabled"].includes(key)) {
+    } else if (["status", "severity", "rule_code", "entity"].includes(key)) {
       q.set(key, String(value));
     }
   }
@@ -97,15 +106,14 @@ export const dataProvider: DataProvider = {
     const result = await request<{ data: any[]; total?: number }>(
       listQuery(resource, params),
     );
-    return {
-      data: result.data,
-      total: result.total ?? result.data.length,
-    } as GetListResult;
+    const data = resource === "rules" ? identifyRules(result.data) : result.data;
+    return { data, total: result.total ?? data.length } as GetListResult;
   },
 
   getOne: async (resource, params) => {
     const record = await request<any>(`${base(resource)}/${params.id}`);
-    return { data: record };
+    // Rules must report `id` as the code, because that is what was requested.
+    return { data: resource === "rules" ? identifyRules([record])[0] : record };
   },
 
   getMany: async (resource, params) => {
@@ -116,7 +124,8 @@ export const dataProvider: DataProvider = {
       `${base(resource)}?perPage=500`,
     );
     const wanted = new Set(ids.map(String));
-    return { data: result.data.filter((r) => wanted.has(String(r.id))) };
+    const rows = result.data.filter((r) => wanted.has(String(resource === "rules" ? r.code : r.id)));
+    return { data: resource === "rules" ? identifyRules(rows) : rows };
   },
 
   getManyReference: async (resource, params) => {
@@ -131,7 +140,8 @@ export const dataProvider: DataProvider = {
       method: "POST",
       body: JSON.stringify(params.data),
     });
-    return { data: { ...params.data, ...record } };
+    const merged = { ...params.data, ...record };
+    return { data: resource === "rules" ? identifyRules([merged])[0] : merged };
   },
 
   update: async (resource, params) => {
@@ -140,7 +150,8 @@ export const dataProvider: DataProvider = {
       method: "PUT",
       body: JSON.stringify(data),
     });
-    return { data: { ...data, ...record, id } };
+    const merged = { ...data, ...record, id };
+    return { data: resource === "rules" ? identifyRules([merged])[0] : merged };
   },
 
   updateMany: async (resource, params) => {
@@ -194,17 +205,34 @@ export const api = {
   reopenTicket: (id: number | string) =>
     request<any>(`/api/tickets/${id}/reopen`, { method: "POST" }),
 
-  ruleSource: (id: number | string) =>
-    request<any>(`/api/rules/${id}/source`),
+  // --- rules (addressed by code) ----------------------------------------
+  ruleSource: (code: string) => request<any>(`/api/rules/${code}/source`),
 
-  ruleVersions: (id: number | string) =>
-    request<any>(`/api/rules/${id}/versions`),
+  ruleVersions: (code: string) => request<any>(`/api/rules/${code}/versions`),
 
-  testRule: (id: number | string, data_date: string | null, shadow = false) =>
-    request<any>(`/api/rules/${id}/test`, {
+  testRule: (code: string, data_date: string | null, shadow = false) =>
+    request<any>(`/api/rules/${code}/test`, {
       method: "POST",
       body: JSON.stringify({ data_date, shadow }),
     }),
+
+  updateRule: (code: string, payload: Record<string, unknown>) =>
+    request<any>(`/api/rules/${code}`, { method: "PUT", body: JSON.stringify(payload) }),
+
+  setRuleStatus: (code: string, status: string) =>
+    request<any>(`/api/rules/${code}/status`, {
+      method: "PUT",
+      body: JSON.stringify({ status }),
+    }),
+
+  rollbackRule: (code: string, version: number) =>
+    request<any>(`/api/rules/${code}/rollback/${version}`, { method: "POST" }),
+
+  validateRule: (code: string) =>
+    request<any>(`/api/rules/${code}/validate`, { method: "POST" }),
+
+  validationReport: (code: string) =>
+    request<any>(`/api/rules/${code}/validate-report`),
 
   rerun: (id: number | string) => request<any>(`/api/runs/${id}/rerun`, { method: "POST" }),
 
@@ -216,9 +244,6 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ prompt, entity }),
     }),
-
-  updateRule: (id: number, payload: Record<string, unknown>) =>
-    request<any>(`/api/rules/${id}`, { method: "PUT", body: JSON.stringify(payload) }),
 
   entities: () => request<any>("/api/datasources/entities"),
   availableDates: (entity: string) =>
@@ -236,8 +261,8 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
-  listSchedules: (ruleId: number) =>
-    request<{ data: any[] }>(`/api/rule-schedules?rule_id=${ruleId}`),
+  listSchedules: (ruleCode: string) =>
+    request<{ data: any[] }>(`/api/rule-schedules?rule_code=${ruleCode}`),
   createSchedule: (payload: any) =>
     request<any>("/api/rule-schedules", { method: "POST", body: JSON.stringify(payload) }),
   updateSchedule: (id: number, payload: any) =>
@@ -248,10 +273,4 @@ export const api = {
   deleteSchedule: (id: number) =>
     request<void>(`/api/rule-schedules/${id}`, { method: "DELETE" }),
   schedulerJobs: () => request<any>("/api/rule-schedules/cron/jobs"),
-
-  // --- rule lifecycle ---
-  validateRule: (id: number) =>
-    request<any>(`/api/rules/${id}/validate`, { method: "POST" }),
-  validationReport: (id: number) =>
-    request<any>(`/api/rules/${id}/validate-report`),
 };

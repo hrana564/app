@@ -11,9 +11,8 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException
 from sqlalchemy import select
-from sqlalchemy.orm import selectinload
 
 from app.api.deps import AdminUser, CurrentUser, SessionDep
 from app.engine import scheduler
@@ -106,17 +105,15 @@ async def cadence_preview(
 # ---------------------------------------------------------------------------
 # Used by the rules API when a rule is activated or paused
 # ---------------------------------------------------------------------------
-async def sync_schedules_for_rule(session, rule: Rule) -> int:
-    """(Re)register or remove every schedule belonging to a rule.
+async def sync_schedules_for_code(session, code: str) -> int:
+    """(Re)register or remove every schedule for a rule code.
 
-    `rules.status` is the single switch, so changing it must be reflected in
+    `rules.status` is the switch, so changing it must be reflected in
     APScheduler immediately - otherwise a paused rule keeps firing overnight.
     """
     rows = (
         await session.execute(
-            select(RuleSchedule)
-            .options(selectinload(RuleSchedule.rule))
-            .where(RuleSchedule.rule_id == rule.id)
+            select(RuleSchedule).where(RuleSchedule.rule_code == code)
         )
     ).scalars().unique().all()
 
@@ -128,7 +125,7 @@ async def sync_schedules_for_rule(session, rule: Rule) -> int:
         except CadenceError as exc:
             log.error(
                 "schedule %s of rule %s has an invalid cadence and was skipped: %s",
-                sched.id, rule.code, exc,
+                sched.id, code, exc,
             )
     return registered
 
@@ -140,14 +137,12 @@ async def sync_schedules_for_rule(session, rule: Rule) -> int:
 async def list_schedules(
     session: SessionDep,
     _user: CurrentUser,
-    rule_id: int | None = None,
+    rule_code: str | None = None,
 ) -> dict:
     stmt = select(RuleSchedule)
-    if rule_id is not None:
-        stmt = stmt.where(RuleSchedule.rule_id == rule_id)
-    # selectinload: sync_schedule touches .rule, and a lazy load is impossible
-    # in an async context.
-    stmt = stmt.options(selectinload(RuleSchedule.rule)).order_by(RuleSchedule.id)
+    if rule_code is not None:
+        stmt = stmt.where(RuleSchedule.rule_code == rule_code)
+    stmt = stmt.order_by(RuleSchedule.id)
 
     rows = (await session.execute(stmt)).scalars().all()
     return {"data": [_to_out(r).model_dump(mode="json") for r in rows]}
@@ -173,9 +168,23 @@ async def create_schedule(
     except CadenceError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    rule = await session.get(Rule, payload.rule_id)
-    if rule is None:
-        raise HTTPException(status_code=404, detail="Rule not found")
+    code = (payload.rule_code or "").strip().upper()
+    if not code:
+        raise HTTPException(status_code=400, detail="rule_code is required")
+
+    # Validate the code resolves to a live rule, so a schedule is never created
+    # against a typo that would silently never fire.
+    live = (
+        await session.execute(
+            select(Rule.id).where(
+                Rule.code == code, Rule.is_version_active.is_(True)
+            )
+        )
+    ).scalar_one_or_none()
+    if live is None:
+        raise HTTPException(
+            status_code=404, detail=f"No rule with code {code!r}"
+        )
 
     label = (payload.label or "").strip() or describe(cadence)
 
@@ -185,9 +194,7 @@ async def create_schedule(
     # matches. The cron is the semantic identity of a schedule.
     existing_rows = (
         await session.execute(
-            select(RuleSchedule)
-            .options(selectinload(RuleSchedule.rule))
-            .where(RuleSchedule.rule_id == payload.rule_id)
+            select(RuleSchedule).where(RuleSchedule.rule_code == code)
         )
     ).scalars().unique().all()
     for other in existing_rows:
@@ -205,7 +212,7 @@ async def create_schedule(
             )
 
     sched = RuleSchedule(
-        rule_id=payload.rule_id,
+        rule_code=code,
         label=label,
         kind=cadence.kind,
         config=cadence.to_dict(),
@@ -216,9 +223,6 @@ async def create_schedule(
     )
     session.add(sched)
     await session.flush()
-    # `sched.rule` is needed by sync_schedule; the relationship was populated
-    # via `rule = await session.get(Rule, ...)` above.
-    sched.rule = rule
 
     # Register with APScheduler only if the rule is already active; otherwise
     # it is stored and picked up when the rule activates.
@@ -235,8 +239,6 @@ async def update_schedule(
     sched = await session.get(RuleSchedule, schedule_id)
     if sched is None:
         raise HTTPException(status_code=404, detail="Schedule not found")
-    # sync_schedule touches .rule - load it eagerly.
-    await session.refresh(sched, ["rule"])
 
     kind_changed = False
     if payload.kind is not None and payload.kind != sched.kind:

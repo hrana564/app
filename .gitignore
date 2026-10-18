@@ -11,13 +11,10 @@ venv/
 *.log
 *.log.*
 
-# Rules written by the app at runtime (rules/rule_<db_id>.py). The four seed
-# rules rule_1..rule_4 are tracked; anything else here is generated output.
-backend/rules/rule_*.py
-!backend/rules/rule_1.py
-!backend/rules/rule_2.py
-!backend/rules/rule_3.py
-!backend/rules/rule_4.py
+# Rule source lives in git as <CODE>_v<version>.py. Generated drafts from the
+# prompt-to-rule feature are not: they arrive as a draft the user reviews and
+# commits, so v1 of any code is tracked.
+backend/rules/AUTO-*
 
 # Secrets
 .env

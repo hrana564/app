@@ -39,7 +39,7 @@ DESCRIPTION = "Copy me. Replace the SQL and the threshold."
 DATASOURCES = ["pos_sales"]
 
 # Thresholds belong to the rule. Changing one is a code change, which is
-# recorded as a new entry in rule_versions - so the audit trail keeps it.
+# recorded as a new version row - so the audit trail keeps it.
 VALUE_LIMIT = 10.0
 
 

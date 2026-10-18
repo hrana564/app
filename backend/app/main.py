@@ -27,7 +27,15 @@ async def lifespan(app: FastAPI):
     await init_models()
     await _bootstrap()
     scheduler.start()
-    await scheduler.load_all()
+    summary = await scheduler.load_all()
+    if summary.get("unresolved"):
+        # Visible on purpose: a schedule pointing at an unknown code would
+        # otherwise just never fire.
+        log.warning(
+            "scheduler: %s schedule(s) reference an unknown rule code: %s",
+            len(summary["unresolved"]),
+            [u["rule_code"] for u in summary["unresolved"]],
+        )
     yield
     scheduler.shutdown()
     log.info("API stopped")
@@ -149,26 +157,23 @@ async def dashboard(session: SessionDep) -> dict:
             stmt = stmt.where(clause)
         return (await session.execute(stmt)).scalar_one()
 
-    active_rules = await count(Rule, Rule.status == "active")
-    total_rules = await count(Rule)
-    total_schedules = await count(RuleSchedule)
+    head = Rule.is_version_active.is_(True)
+    live = select(Rule.code).where(head, Rule.status == "active")
 
     return {
         "rules": {
-            "total": total_rules,
-            "active": active_rules,
-            "draft": await count(Rule, Rule.status == "draft"),
-            "paused": await count(Rule, Rule.status == "paused"),
-            "validated": await count(Rule, Rule.validation_status == "valid"),
+            # Only head versions count as rules; earlier versions are history.
+            "total": await count(Rule, head),
+            "active": await count(Rule, head, Rule.status == "active"),
+            "draft": await count(Rule, head, Rule.status == "draft"),
+            "paused": await count(Rule, head, Rule.status == "paused"),
+            "validated": await count(Rule, head, Rule.validation_status == "valid"),
+            "versions": await count(Rule),
         },
         "schedules": {
-            "total": total_schedules,
-            # A schedule runs iff its rule is active, so this is the count that
-            # actually matters operationally.
-            "live": await count(
-                RuleSchedule,
-                RuleSchedule.rule_id.in_(select(Rule.id).where(Rule.status == "active")),
-            ),
+            "total": await count(RuleSchedule),
+            # A schedule runs iff its rule code has a live, active head.
+            "live": await count(RuleSchedule, RuleSchedule.rule_code.in_(live)),
         },
         "runs": {
             "total": await count(Run),

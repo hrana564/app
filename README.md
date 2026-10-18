@@ -47,7 +47,7 @@ The execution model is deliberately trivial:
 
 ```
 cron fires
-  -> load rules/rule_<id>.py
+  -> load rules/<CODE>_v<version>.py
   -> build DuckDB views over SourceData/<ENTITY>/<date>/*.csv
   -> call run(ctx)
   -> validate the returned dict
@@ -75,7 +75,7 @@ Power Automate ──▶ SourceData/<ENTITY>/<YYYY-MM-DD>/<table>.csv
                         │
                         ▼
                   PostgreSQL  ABM_Audit_Portal
-                 rules · rule_versions · schedules · runs · tickets
+                 rules_master · rule_schedules · runs · tickets
                  datasources · users
                         │
                         ▼
@@ -95,27 +95,91 @@ Eight tables in `ABM_Audit_Portal`. Created on startup by `create_all`.
 ```
 users          id, username, password_hash, role, is_active
 datasources    id, entity, name, system, path_template, grain, columns, derived, is_active
-rules          id, code, entity, name, description, severity, query_mode, window_days,
-               status, validation_status, validation_messages, validated_at, validated_by,
-               ticket_mode, group_by, dedupe_mode, dedupe_window_hours, alerting_enabled,
-               declared_datasources, declared_alert,
-               source_file, current_version, datasource_hint, origin, created_by
-rule_versions  id, rule_id, version, source_code, change_note, created_by, created_at
-rule_schedules id, rule_id, label, kind, config, cron, timezone, data_lag_days,
-               last_run_at, next_run_at, created_by
-runs           id, rule_id, rule_version, schedule_id, data_date, triggered_by,
-               started_at, finished_at, status, summary, metrics, rows,
-               rows_scanned, is_shadow, error_detail, duration_ms
-tickets        id, ticket_no, run_id, rule_id, schedule_id, severity, summary, rows,
-               occurrences, first_run_id, last_run_id, fingerprint, last_seen_at,
-               status, acknowledged_by, acknowledged_at, ack_note, created_at
+
+rules_master   ONE ROW PER VERSION OF A RULE
+               id, code, version, is_version_active, status, source_file,
+               name, entity, description, severity, query_mode, window_days,
+               validation_status, validation_messages, validated_at, validated_by,
+               ticket_mode, group_by, dedupe_mode, dedupe_window_hours,
+               alerting_enabled, declared_datasources, declared_alert,
+               change_note, datasource_hint, created_by, origin, created_at, updated_at
+
+               UNIQUE (code, version)
+               UNIQUE (code) WHERE is_version_active
+
+rule_schedules id, rule_code, label, kind, config, cron, timezone, data_lag_days,
+               last_run_at, next_run_at, created_by          -- no FK, see below
+
+runs           id, rule_id -> rules_master(id), rule_code, schedule_id, data_date,
+               triggered_by, started_at, finished_at, status, summary, metrics,
+               rows, rows_scanned, is_shadow, error_detail, duration_ms
+
+tickets        id, ticket_no, run_id, rule_id -> rules_master(id), rule_code,
+               schedule_id, severity, summary, rows, occurrences, first_run_id,
+               last_run_id, fingerprint, last_seen_at, status, acknowledged_by,
+               acknowledged_at, ack_note, created_at
 ```
+
+### A rule is a chain of versions
+
+`rules_master` holds **one row per version**, not one row per rule. `code`
+identifies the logical rule and repeats across versions; exactly one row per code
+is flagged `is_version_active` - the **head**.
+
+```
+LAD-CA-03  v1   head=f   LAD-CA-03_v1.py  initial version
+LAD-CA-03  v2   head=f   LAD-CA-03_v2.py  smoke: bump
+LAD-CA-03  v3   head=t   LAD-CA-03_v3.py  rollback to v1
+```
+
+Two database constraints make this safe rather than conventional:
+
+| Constraint | Guarantees |
+|---|---|
+| `uq_rules_master_active_version` - `UNIQUE (code) WHERE is_version_active` | Two live versions of one rule are **impossible** |
+| `uq_rules_master_code_version` - `UNIQUE (code, version)` | A version number can never be reused |
+
+Both are verified directly against Postgres in the smoke test.
+
+**Rules are addressed by `code`, never by row id** - a row id identifies one
+*version*, the code identifies the *rule*. URLs read `/api/rules/LAD-CA-03/...`.
+
+### Behaviour
+
+| Action | Effect |
+|---|---|
+| Edit logic | New row at `version = max+1` + new file `<CODE>_v<n>.py`; the old row loses the head flag. Starts as `draft` with validation reset |
+| `PUT .../status` | Lifecycle only - **no new version**. Pausing is not a logic change |
+| Rollback | Copies an old version's source into a **new** head. Reads as *"v3 restored v1's logic"*; version numbers only move forward |
+| Delete | Refused (409) if any run or ticket references it - findings must not vanish because a rule was deleted. Retire it instead |
+
+### Schedules are keyed by `rule_code`, not a relationship
+
+`rule_schedules` holds `rule_code` with **no foreign key**. `code` repeats across
+versions so it cannot be unique, and a row-id FK would orphan every schedule the
+moment a new version was published. The scheduler resolves
+`rule_code -> head version` **at fire time**, so a version published between the
+schedule firing and execution is the one that runs.
+
+The cost is that `code` must be a stable permanent identifier. It is therefore:
+
+- **write-once** - never edited after creation
+- **validated** `^[A-Z][A-Z0-9]*(-[A-Z0-9]+)*$` and uppercased on create, so it
+  can never produce a hostile filename or collide with an existing code
+
+A schedule pointing at an unknown code is reported as `unresolved` at startup
+rather than silently never firing.
+
+`runs.rule_id` and `tickets.rule_id` **do** keep real foreign keys - to the exact
+version row, so "what code produced this finding" is a single lookup instead of a
+join. `rule_code` is denormalised onto both for list views, which also keeps the
+future Power Apps connector to single flat calls.
 
 ### Key decisions
 
 - **A rule is the aggregate root.** Schedules, code versions, runs and alerts all hang off it.
 
-- **`rule_versions` is append-only.** Rollback creates a *new* version copied from an old one, so the
+- **Every rule version is retained.** Rollback creates a *new* version copied from an old one, so the
   audit trail is never rewritten.
 
 - **`rules.status` is the only run switch.** There is deliberately no `enabled` on `rule_schedules`.
@@ -133,7 +197,7 @@ tickets        id, ticket_no, run_id, rule_id, schedule_id, severity, summary, r
 - **Thresholds live in the rule source, as named constants.** The requirements are full of
   undefined limits — *"say 50%"*, *"exception threshold to be defined"* — so each rule declares
   them itself, e.g. `SINGLE_STAFF_CASH_SHARE_LIMIT = 50.0`. Changing one is a code change, which
-  writes a new `rule_versions` row: the audit trail records the change instead of losing it.
+  writes a new `rules_master` row: the audit trail records the change instead of losing it.
 
 - **`rule_schedules.cron` is derived, never authored.** `kind` + `config` are what a user fills in.
   See §4a.
@@ -549,7 +613,7 @@ All endpoints except `/health`, `/api/auth/login` and `/api/dashboard` require
 | GET | `/api/rules` | any | `?page&perPage&sort&order&status&entity&q` |
 | GET | `/api/rules/{id}` | any | One rule |
 | GET | `/api/rules/{id}/source` | any | Python source |
-| GET | `/api/rules/{id}/versions` | any | Version history |
+| GET | `/api/rules/{code}/versions` | any | Full version history |
 | POST | `/api/rules` | admin | Create (bumps to v1) |
 | PUT | `/api/rules/{id}` | admin | Update; new `source_code` → new version |
 | POST | `/api/rules/{id}/rollback/{version}` | admin | Roll back = new version from old |
@@ -566,14 +630,14 @@ All endpoints except `/health`, `/api/auth/login` and `/api/dashboard` require
 |---|---|---|---|
 | GET | `/api/rule-schedules/cadence-options` | any | Everything the frequency picker needs |
 | POST | `/api/rule-schedules/cadence-preview` | any | Derived cron + real fire times, before saving |
-| GET/POST | `/api/rule-schedules` | any / admin | List (`?rule_id=`) / create |
+| GET/POST | `/api/rule-schedules` | any / admin | List (`?rule_code=`) / create |
 | GET/PUT/DELETE | `/api/rule-schedules/{id}` | any / admin | Read / update / delete |
 | GET | `/api/rule-schedules/cron/jobs` | any | Live APScheduler jobs |
-| GET | `/api/runs` | any | `?status&rule_id&page&perPage` |
+| GET | `/api/runs` | any | `?status&rule_code&page&perPage` |
 | GET | `/api/runs/summary` | any | Counts by status |
 | GET | `/api/runs/{id}` | any | One run |
 | POST | `/api/runs/{id}/rerun` | any | Re-run same rule + date |
-| GET | `/api/tickets` | any | `?status&severity&rule_id` |
+| GET | `/api/tickets` | any | `?status&severity&rule_code` |
 | GET | `/api/tickets/summary` | any | Counts + open by severity |
 | GET | `/api/tickets/{id}` | any | One ticket |
 | POST | `/api/tickets/{id}/acknowledge` | **any** | `{status, note}` |
@@ -587,7 +651,7 @@ All endpoints except `/health`, `/api/auth/login` and `/api/dashboard` require
 
 ## 11. Writing a rule
 
-Copy `backend/rules/_template.py` to `rules/rule_<id>.py`.
+Copy `backend/rules/_template.py` to `rules/<CODE>_v1.py`.
 
 ```python
 def run(ctx) -> dict:

@@ -22,7 +22,7 @@ async def list_runs(
     page: int = Query(1, ge=1),
     perPage: int = Query(25, ge=1, le=500),
     status_: str | None = Query(None, alias="status"),
-    rule_id: int | None = None,
+    rule_code: str | None = None,
     sort: str = "started_at",
     order: str = "DESC",
 ) -> dict:
@@ -32,9 +32,9 @@ async def list_runs(
     if status_:
         stmt = stmt.where(Run.status == status_)
         count_stmt = count_stmt.where(Run.status == status_)
-    if rule_id is not None:
-        stmt = stmt.where(Run.rule_id == rule_id)
-        count_stmt = count_stmt.where(Run.rule_id == rule_id)
+    if rule_code is not None:
+        stmt = stmt.where(Run.rule_code == rule_code)
+        count_stmt = count_stmt.where(Run.rule_code == rule_code)
 
     col = getattr(Run, sort, Run.started_at)
     stmt = stmt.order_by(col.desc() if order.upper() == "DESC" else col.asc())
@@ -79,14 +79,16 @@ async def get_run(run_id: int, session: SessionDep, _user: CurrentUser) -> RunOu
 
 @router.post("/{run_id}/rerun", response_model=RunOut)
 async def rerun(run_id: int, session: SessionDep, user: CurrentUser) -> RunOut:
-    """Re-run the same rule against the same data date."""
+    """Re-run the same rule version against the same data date."""
     previous = await session.get(Run, run_id)
     if previous is None:
         raise HTTPException(status_code=404, detail="Run not found")
 
+    # Use the EXACT version that produced the original run, so a re-run is
+    # comparable. Not the current head.
     rule = await session.get(Rule, previous.rule_id)
     if rule is None:
-        raise HTTPException(status_code=404, detail="Rule no longer exists")
+        raise HTTPException(status_code=404, detail="Rule version no longer exists")
 
     run = await execute_rule(
         session,

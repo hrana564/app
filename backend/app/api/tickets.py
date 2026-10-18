@@ -21,7 +21,7 @@ async def list_tickets(
     page: int = Query(1, ge=1),
     perPage: int = Query(25, ge=1, le=500),
     status_: str | None = Query(None, alias="status"),
-    rule_id: int | None = None,
+    rule_code: str | None = None,
     severity: str | None = None,
     sort: str = "created_at",
     order: str = "DESC",
@@ -33,9 +33,9 @@ async def list_tickets(
         if value:
             stmt = stmt.where(column == value)
             count_stmt = count_stmt.where(column == value)
-    if rule_id is not None:
-        stmt = stmt.where(Ticket.rule_id == rule_id)
-        count_stmt = count_stmt.where(Ticket.rule_id == rule_id)
+    if rule_code is not None:
+        stmt = stmt.where(Ticket.rule_code == rule_code)
+        count_stmt = count_stmt.where(Ticket.rule_code == rule_code)
 
     col = getattr(Ticket, sort, Ticket.created_at)
     stmt = stmt.order_by(col.desc() if order.upper() == "DESC" else col.asc())

@@ -8,7 +8,7 @@ failure you cannot fix.
 
 Every run therefore gets a folder that freezes all three:
 
-    Rules_Executions/000123/
+    mount/Rules_Executions/000123/
         metadata.json    what was staged, with a SHA-256 per file
         rule.py          byte-identical copy of the source that ran
         data/LAD/2026-10-16/hr_employees.csv

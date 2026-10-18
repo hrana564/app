@@ -50,7 +50,7 @@ class Settings(BaseSettings):
 
     # Per-run execution folders. Each holds the exact rule source and the
     # exact CSVs one run read, so a failure can be replayed byte for byte.
-    runs_dir: Path = APP_ROOT / "Rules_Executions"
+    runs_dir: Path = APP_ROOT / "mount" / "Rules_Executions"
 
     rules_dir: Path = BACKEND_DIR / "rules"
 

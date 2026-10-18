@@ -102,7 +102,7 @@ Power Automate ──▶ mount/SourceData/<ENTITY>/<YYYY-MM-DD>/<table>.csv
        Python Audit Engine ── stage the inputs, then polars over them
                         │
                         ▼
-      Rules_Executions/<run_id>/   the exact rule + CSVs that run read
+      mount/Rules_Executions/<run_id>/   the exact rule + CSVs that run read
                         │
                         ▼
                   PostgreSQL  ABM_Audit_Portal
@@ -115,7 +115,7 @@ Power Automate ──▶ mount/SourceData/<ENTITY>/<YYYY-MM-DD>/<table>.csv
 
 **Every run freezes its inputs first.** Before the rule runs, the CSVs it declared
 and the days its `lookback_days` covers are copied into
-`Rules_Executions/<run_id>/` alongside a byte-identical copy of the rule source
+`mount/Rules_Executions/<run_id>/` alongside a byte-identical copy of the rule source
 and a `metadata.json` naming every file with its SHA-256. The rule reads the
 copy, never the mount.
 
@@ -283,7 +283,7 @@ traceback and never takes down the process.
 | `ctx.count_rows("name")` | Row count of a table |
 
 There are no file paths and no query strings. A rule cannot reach anything that
-was not staged for its run, so `Rules_Executions/<run_id>/` is a true record of
+was not staged for its run, so `mount/Rules_Executions/<run_id>/` is a true record of
 what it read rather than a copy made afterwards.
 
 Column types are inferred from the CSV: `invoice_value` arrives as a float,
@@ -558,12 +558,12 @@ Vite proxies `/api` to the backend, so the browser sees a single origin in devel
 ```
 app/
 ├── README.md
-├── mount/                           the mounted landing zone
+├── mount/                           external data: read by the app, never owned
 │   ├── SourceData/                  <ENTITY>/<date>/<table>.csv (generated; gitignored)
 │   │   ├── LAD/2026-10-15/ipos_sales.csv ...
 │   │   └── ABM/2026-10-15/bc_vendors.csv ...
-├── Rules_Executions/                one folder per run (gitignored)
-│   └── 000123/                      rule.py + metadata.json + the CSVs it read
+│   └── Rules_Executions/            one folder per run (gitignored)
+│       └── 000123/                  rule.py + metadata.json + the CSVs it read
 ├── backend/
 │   ├── .env / .env.example
 │   ├── requirements.txt
@@ -644,7 +644,7 @@ LLM_MODEL=
 
 # --- Paths ---
 SOURCEDATA_DIR=../mount/SourceData
-RUNS_DIR=../Rules_Executions
+RUNS_DIR=../mount/Rules_Executions
 RULES_DIR=./rules
 
 # --- Guardrails ---

@@ -2,7 +2,7 @@
 Replay a captured run.
 
     python -m app.engine.replay 123
-    python -m app.engine.replay Rules_Executions/000123
+    python -m app.engine.replay mount/Rules_Executions/000123
     python -m app.engine.replay 123 --save fixed.py
 
 Runs the rule copy and the CSV copies frozen in the run folder. No database, no
@@ -160,7 +160,7 @@ def main(argv: list[str] | None = None) -> int:
         description="Re-run a captured rule execution against its own inputs.",
     )
     parser.add_argument(
-        "run", help="run id (123) or the folder path (Rules_Executions/000123)"
+        "run", help="run id (123) or the folder path (mount/Rules_Executions/000123)"
     )
     parser.add_argument(
         "--save", metavar="PATH",

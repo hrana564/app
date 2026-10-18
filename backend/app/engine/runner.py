@@ -3,7 +3,7 @@ Rule runner - the entire execution engine.
 
     fire (cron or manual)
       -> insert a rule_runs row
-      -> stage the inputs into Rules_Executions/<run_id>/
+      -> stage the inputs into mount/Rules_Executions/<run_id>/
       -> load rule .py
       -> call run(ctx)
       -> validate the returned dict against RuleResult

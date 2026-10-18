@@ -133,7 +133,7 @@ def main() -> int:
             src = (RULES_DIR / filename).read_text(encoding="utf-8")
             r = c.post("/api/rules", headers=ah, json={
                 "code": code, "name": code, "entity": entity, "description": desc,
-                "severity": severity, "query_mode": "SNAPSHOT",
+                "severity": severity,
                 "source_code": src, "status": "draft"})
             if r.status_code != 201:
                 check(f"{code} created", False, f"{r.status_code} {r.text[:220]}")

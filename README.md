@@ -113,15 +113,14 @@ Eight tables in `ABM_Audit_Portal`. Created on startup by `create_all`.
 
 ```
 users          id, username, password_hash, role, is_active
-datasources    id, entity, name, system, path_template, grain, columns, derived, is_active
+datasources    id, entity, name, system, path_template, grain, columns, is_active
 
 rules_master   ONE ROW PER VERSION OF A RULE
                id, code, version, is_version_active, status, source_file,
-               name, entity, description, severity, query_mode, window_days,
+               name, entity, description, severity, lookback_days,
                validation_status, validation_messages, validated_at, validated_by,
-               ticket_mode, group_by, dedupe_mode, dedupe_window_hours,
-               alerting_enabled, declared_datasources, declared_alert,
-               change_note, datasource_hint, created_by, origin, created_at, updated_at
+               declared_datasources,
+               change_note, created_by, origin, created_at, updated_at
 
                UNIQUE (code, version)
                UNIQUE (code) WHERE is_version_active
@@ -134,10 +133,12 @@ runs           id, rule_id -> rules_master(id), rule_code, schedule_id, data_dat
                rows, error_detail, duration_ms
 
 tickets        id, ticket_no, run_id, rule_id -> rules_master(id), rule_code,
-               schedule_id, severity, rows, occurrences, first_run_id,
-               last_run_id, fingerprint, last_seen_at, status, acknowledged_by,
+               schedule_id, severity, rows, status, acknowledged_by,
                acknowledged_at, ack_note, created_at
 ```
+
+`summary` is **not** on `tickets`. It is read from `runs` by join — one source of
+truth, and always the text produced by the run that actually raised it.
 
 ### A rule is a chain of versions
 
@@ -209,9 +210,6 @@ future Power Apps connector to single flat calls.
 
 - **`tickets.rows` holds the exact rows that caused the failure**, so an auditor sees the evidence
   without re-running anything.
-
-- **`occurrences` / `first_run_id` / `last_run_id`** record how many times one ongoing breach was
-  observed, so a rule with three cadences doesn't flood the inbox with three identical tickets.
 
 - **Thresholds live in the rule source, as named constants.** The requirements are full of
   undefined limits — *"say 50%"*, *"exception threshold to be defined"* — so each rule declares
@@ -345,33 +343,48 @@ Validation is static and cheap, so it runs on every save:
 
 ---
 
-## 4c. Alert policy and deduplication
+## 4c. How a run becomes a ticket
 
-| Column | Values | Meaning |
-|---|---|---|
-| `ticket_mode` | `ONE_PER_RUN` \| `ONE_PER_GROUP` \| `ONE_PER_ROW` | One ticket per run, or split by `group_by` |
-| `group_by` | column name | For `ONE_PER_GROUP` — e.g. group by `store_id` |
-| `dedupe_mode` | `NONE` \| `PER_DATA_DATE` \| `FINGERPRINT` | Suppression policy |
-| `alerting_enabled` | bool | Mute alerts **without** pausing the rule |
+There is no delivery policy to configure. The whole rule is one sentence:
 
-**`PER_DATA_DATE` is the default.** Same rule, same `data_date`, second trigger → increments
-`occurrences` and repoints `last_run_id` rather than creating a duplicate.
+```
+rule ran  +  rows returned  ->  one ticket holding those rows
+rule ran  +  no rows        ->  no ticket
+rule failed to run          ->  no ticket, error on the run
+```
 
-**What happens if the breach continues after an auditor acknowledged it?** A **new ticket opens**,
-referencing the predecessor. This is a product decision, not a technical one: an auditor has already
-looked at it, so silently keeping it on the same ticket would hide that it is still breaching every
-day. That is exactly what `occurrences` + a fresh ticket is for.
+Delivery decisions live in the rule file, which is the thing a developer
+actually edits. If a rule wants one ticket per store rather than one per run, it
+groups its own rows and returns a `store_id` column. That keeps `ticketing.py`
+free of any knowledge about rules — it reads a run and nothing else, so it can
+be exercised without a scheduler, a cadence or a rule object.
 
-`ONE_PER_ROW` is capped at 50 tickets per run, so a badly written rule cannot flood the inbox.
+**There is no dedupe.** A breach that is still happening produces another ticket
+on the next run. That is deliberate: *"it is still breaching today"* is the fact
+an auditor needs, and hiding it behind a closed ticket is how a real problem
+stays unfixed. If the volume becomes a problem, the smallest fix is to keep
+`occurrences` and bump it while the previous ticket for that code is still
+`open` — one column, no modes.
 
-### Rule file metadata
+To mute a rule without stopping it, set `status = paused`. That stops the runs
+too, which is the honest behaviour.
+
+### The date range
+
+`lookback_days` is the only range knob, and it is one integer:
+
+| Value | Reads |
+|---|---|
+| `1` | the anchor day only |
+| `5` | T-5 to T |
+
+The **anchor** comes from the schedule (`data_lag_days`, default 1 = yesterday).
+The rule says how far back from that anchor to read. Each number has one job.
 
 ```python
 NAME        = "LAD-CA-03 Last-hour of trading value spike"
 ENTITY      = "LAD"
 DATASOURCES = ["ipos_sales"]
-PARAMS      = ["lad.last_hour_ratio"]
-ALERT       = {"severity": "high", "ticket_mode": "ONE_PER_GROUP", "group_by": "store_id"}
 ```
 
 Declared dependencies are surfaced in the UI, so *"this rule needs `lad.last_hour_ratio`, which does
@@ -546,7 +559,7 @@ app/
 │   │       ├── runner.py           THE ENGINE
 │   │       ├── frequency.py        friendly cadence <-> cron (only place cron exists)
 │   │       ├── validation.py       static validation gate
-│   │       ├── ticketing.py        grouping, dedupe, acknowledgement policy
+│   │       ├── ticketing.py        run -> one ticket. Imports no Rule.
 │   │       ├── scheduler.py        APScheduler wiring
 │   │       └── rule_generator.py   prompt -> draft rule
 │   ├── rules/
@@ -726,6 +739,9 @@ Register it via `POST /api/rules` (the server writes the file and creates versio
 | `SNAPSHOT` | one day folder | Most daily controls |
 | `WINDOW` | last `window_days` folders | Ageing: "stock in transit > 5 days" |
 
+> Superseded: `SNAPSHOT`/`WINDOW` and `window_days` are gone. A rule now carries a
+> single `lookback_days` — `1` for the anchor day, `5` for T-5 to T.
+
 ---
 
 ## 12. Generating rules from a prompt
@@ -867,7 +883,7 @@ ticket numbering, JSON serialisation of timestamps, acknowledge → double-ack r
 out-of-range weekdays, non-dividing intervals and garbage cron), **multiple schedules per rule**
 including duplicate detection and pause/reactivate deregistration, **the validation gate**
 (banned imports, activation refusal, cross-entity table reference inside an SQL string), **alert
-policy** (dedupe bump, new ticket after acknowledgement, `NONE` mode, muting), run ledger,
+policy), run ledger,
 dashboard and generation status.
 
 ```

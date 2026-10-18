@@ -30,7 +30,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.engine.ctx import RuleContext
 from app.engine.datasources import registry_for
 from app.engine.loader import load_rule
-from app.engine.ticketing import raise_tickets
+from app.engine.ticketing import raise_ticket
 from app.models import Rule, Run, Ticket
 from app.schemas import RuleResult
 from app.settings import settings
@@ -93,7 +93,7 @@ async def execute_rule(
         def work() -> tuple[dict[str, Any], list[str]]:
             ctx = RuleContext(
                 data_date=data_date,
-                query_mode=rule.query_mode,
+                lookback_days=rule.lookback_days,
                 rule_name=rule.name,
                 registered=list(registry_for(rule.entity).keys()),
             )
@@ -131,23 +131,16 @@ async def execute_rule(
     run.finished_at = datetime.now(timezone.utc)
     run.duration_ms = int((time.perf_counter() - started) * 1000)
 
-    # A failing run raises tickets - but grouping, dedupe and the
-    # acknowledgement policy all live in app.engine.ticketing.
+    # A failing run with rows opens exactly one ticket. Ticketing reads the run
+    # and nothing else - see app/engine/ticketing.py.
     if run.status == "fail":
         try:
-            await raise_tickets(
-                session, rule=rule, run=run, schedule_id=schedule_id
+            await raise_ticket(
+                session, run=run, severity=rule.severity, schedule_id=schedule_id
             )
         except Exception:  # noqa: BLE001
             # Never lose the run record because ticketing failed.
-            log.exception("failed to raise tickets for rule %s", rule.code)
-
-    if schedule_id:
-        from app.models import RuleSchedule
-
-        sched = await session.get(RuleSchedule, schedule_id)
-        if sched:
-            sched.last_run_at = run.finished_at
+            log.exception("failed to raise ticket for rule %s", rule.code)
 
     await session.commit()
     await session.refresh(run)

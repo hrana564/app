@@ -11,8 +11,8 @@ Checks:
   2. it defines run(ctx)
   3. it does not import banned modules or call open()
   4. every DATASOURCES entry is registered for the rule's entity
-  5. every PARAMS entry exists in the parameter store
-  6. the declared ALERT block agrees with the database columns
+  5. every ctx.table() in the SQL is registered, whether declared or not
+  6. a declared ENTITY matches the one the rule is registered under
 """
 
 from __future__ import annotations
@@ -56,7 +56,6 @@ class ValidationResult:
     errors: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     declared_datasources: list[str] = field(default_factory=list)
-    declared_alert: dict[str, Any] = field(default_factory=dict)
     metadata: dict[str, Any] = field(default_factory=dict)
 
     @property
@@ -92,7 +91,6 @@ class RuleValidator:
             "entity": getattr(module, "ENTITY", None),
         }
         result.declared_datasources = _as_list(getattr(module, "DATASOURCES", None))
-        result.declared_alert = dict(getattr(module, "ALERT", None) or {})
 
         # --- 3: static scan of the source ----------------------------------
         scan_errors, referenced_tables = self._scan_source()

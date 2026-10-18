@@ -55,9 +55,7 @@ router = APIRouter(prefix="/api/rules", tags=["rules"])
 
 # Fields copied forward when a new version is created.
 CARRIED_FIELDS = (
-    "name", "entity", "description", "severity", "query_mode", "window_days",
-    "ticket_mode", "group_by", "dedupe_mode", "dedupe_window_hours",
-    "alerting_enabled", "datasource_hint",
+    "name", "entity", "description", "severity", "lookback_days",
 )
 
 
@@ -124,7 +122,6 @@ async def publish_version(
         validated_at=None,
         validated_by=None,
         declared_datasources=list(source.declared_datasources or []),
-        declared_alert=dict(source.declared_alert or {}),
     )
     for field in CARRIED_FIELDS:
         setattr(nxt, field, getattr(source, field))
@@ -232,12 +229,7 @@ async def generate(
         entity=entity,
         description=payload.prompt.strip()[:2000],
         severity="medium",
-        query_mode="SNAPSHOT",
-        window_days=1,
-        ticket_mode="ONE_PER_RUN",
-        dedupe_mode="PER_DATA_DATE",
-        alerting_enabled=True,
-        datasource_hint=", ".join(generated["datasources_used"]),
+        lookback_days=1,
         change_note=f"generated: {payload.prompt[:200]}",
         created_by=admin.username,
         origin="llm",
@@ -344,13 +336,7 @@ async def create_rule(
         entity=payload.entity.upper(),
         description=payload.description,
         severity=payload.severity,
-        query_mode=payload.query_mode,
-        window_days=payload.window_days,
-        ticket_mode=payload.ticket_mode,
-        group_by=payload.group_by,
-        dedupe_mode=payload.dedupe_mode,
-        alerting_enabled=payload.alerting_enabled,
-        datasource_hint=payload.datasource_hint,
+        lookback_days=payload.lookback_days,
         change_note="initial version",
         created_by=admin.username,
         origin="manual",
@@ -385,11 +371,6 @@ async def update_rule(
     source = read_source(current.source_file, settings.rules_dir)
     if payload.source_code is not None:
         source = payload.source_code
-    elif payload.change_note and not any(
-        payload.field is not None
-        for field in ("name", "description", "severity", "query_mode", "window_days")
-    ):
-        source = source  # metadata-only change still produces a version
 
     nxt = await publish_version(
         session,
@@ -399,7 +380,7 @@ async def update_rule(
         change_note=payload.change_note or "updated",
         author=admin.username,
     )
-    for field in ("name", "description", "severity", "query_mode", "window_days"):
+    for field in ("name", "description", "severity", "lookback_days"):
         value = getattr(payload, field, None)
         if value is not None:
             setattr(nxt, field, value)
@@ -469,7 +450,6 @@ async def validation_report(
             if m.get("level") == "warning"
         ],
         declared_datasources=rule.declared_datasources or [],
-        declared_alert=rule.declared_alert or {},
         name=rule.name,
         can_activate=rule.validation_status == "valid",
     )
@@ -493,14 +473,12 @@ async def _validate_and_store(session, rule: Rule, *, username: str | None) -> V
     rule.validated_at = now()
     rule.validated_by = username
     rule.declared_datasources = result.declared_datasources
-    rule.declared_alert = result.declared_alert
 
     return ValidationReport(
         status=rule.validation_status,
         errors=result.errors,
         warnings=result.warnings,
         declared_datasources=result.declared_datasources,
-        declared_alert=result.declared_alert,
         name=meta.get("name"),
         description=meta.get("description"),
         can_activate=result.ok,

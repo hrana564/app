@@ -109,9 +109,11 @@ class Rule(Base, TimestampMixin):
     entity: Mapped[str] = mapped_column(String(8), nullable=False, index=True)
     description: Mapped[str] = mapped_column(Text, default="")
     severity: Mapped[str] = mapped_column(String(16), default="medium", nullable=False)
-    query_mode: Mapped[str] = mapped_column(String(16), default="SNAPSHOT", nullable=False)
-    window_days: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     status: Mapped[str] = mapped_column(String(16), default="draft", nullable=False, index=True)
+
+    # How far back from the schedule's anchor date this rule reads.
+    # 1 = that day only. 5 = T-5 to T. One number, one job.
+    lookback_days: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
 
     # --- validation gate -------------------------------------------------
     # A rule must pass validation before it can be activated, so a broken rule
@@ -123,24 +125,13 @@ class Rule(Base, TimestampMixin):
     validated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     validated_by: Mapped[str | None] = mapped_column(String(64))
 
-    # --- alert policy ----------------------------------------------------
-    ticket_mode: Mapped[str] = mapped_column(
-        String(24), default="ONE_PER_RUN", nullable=False
-    )
-    group_by: Mapped[str | None] = mapped_column(String(64))
-    dedupe_mode: Mapped[str] = mapped_column(
-        String(24), default="PER_DATA_DATE", nullable=False
-    )
-    dedupe_window_hours: Mapped[int] = mapped_column(Integer, default=24, nullable=False)
-    alerting_enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
-
     # --- declared by the rule file ---------------------------------------
+    # The union of the DATASOURCES list and every ctx.table() found in the SQL:
+    # the audit trail of what this version actually reads.
     declared_datasources: Mapped[list[Any]] = mapped_column(JSONB, default=list, nullable=False)
-    declared_alert: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, nullable=False)
 
     source_file: Mapped[str] = mapped_column(String(255), nullable=False)
     change_note: Mapped[str] = mapped_column(Text, default="")
-    datasource_hint: Mapped[str] = mapped_column(String(255), default="")
     created_by: Mapped[str] = mapped_column(String(64), default="")
     origin: Mapped[str] = mapped_column(String(16), default="manual", nullable=False)
 
@@ -224,10 +215,12 @@ class Run(Base):
 class Ticket(Base):
     """The alert an auditor acknowledges.
 
-    dedupe_mode PER_DATA_DATE means a second trigger of the same rule against
-    the same data date does NOT open a new ticket. It increments `occurrences`
-    and repoints `last_run_id`, so the ticket shows how many times the same
-    underlying breach was observed instead of flooding the inbox.
+    One failing run opens one ticket. There is no dedupe: a breach that is still
+    open tomorrow produces another ticket tomorrow, because "it is still
+    breaching" is the fact an auditor needs, not "we told you before".
+
+    `severity` is a snapshot of the rule's severity at the moment the ticket
+    was raised. The summary is not stored here - it is read from the run.
     """
 
     __tablename__ = "tickets"
@@ -246,13 +239,6 @@ class Ticket(Base):
     )
     severity: Mapped[str] = mapped_column(String(16), default="medium", nullable=False)
     rows: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, default=list, nullable=False)
-
-    # --- dedup bookkeeping ----------------------------------------------
-    occurrences: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
-    first_run_id: Mapped[int | None] = mapped_column(Integer)
-    last_run_id: Mapped[int | None] = mapped_column(Integer)
-    fingerprint: Mapped[str | None] = mapped_column(String(64))
-    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     status: Mapped[str] = mapped_column(String(16), default="open", nullable=False, index=True)
     acknowledged_by: Mapped[str | None] = mapped_column(String(64))

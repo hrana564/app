@@ -24,11 +24,19 @@ A rule that cannot run (missing data, query error):
 
 WHAT ctx GIVES YOU
 ------------------
-    ctx.table("pos_sales")   -> quoted view name for FROM / JOIN
+    ctx.table("pos_sales")   -> quoted table name for FROM / JOIN
     ctx.sql(query)           -> Result (.all() / .one() / .scalar() / .count())
-    ctx.date                 -> the date being audited
+    ctx.date                 -> the anchor date being audited
+    ctx.lookback_days        -> how far back to read (1 = that day, 5 = T-5 to T)
     ctx.log("...")           -> appends a note to the run summary
-    ctx.count_rows("name")   -> row count of a view
+    ctx.count_rows("name")   -> row count of a table
+
+HOW YOUR ROWS BECOME A TICKET
+------------------------------
+There is no delivery policy to configure. Whatever rows you return are the
+ticket: non-empty opens one ticket, empty opens none. If you want one ticket
+per store rather than one per run, group them yourself - put a column that
+identifies the group into each row.
 
 KEEP RULES DEFENSIVE
 --------------------
@@ -36,6 +44,8 @@ KEEP RULES DEFENSIVE
     they measure. Saving the file creates a new rule version, so the change is
     recorded rather than lost.
   * Guard against empty data - a missing day folder must not crash the run.
+  * Compute helper columns (is_cash, is_exited, hour, ...) in your own SQL.
+    Nothing is pre-derived for you.
   * Interpolate numbers only after casting to float, never raw user strings.
   * Only import from: json, datetime, statistics, math, decimal.
   * Never import os / sys / subprocess / socket and never call open().

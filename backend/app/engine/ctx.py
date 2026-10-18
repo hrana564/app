@@ -71,12 +71,13 @@ class RuleContext:
         self,
         *,
         data_date: date,
-        query_mode: str = "SNAPSHOT",
+        lookback_days: int = 1,
         rule_name: str = "",
         registered: list[str] | None = None,
     ):
         self.date = data_date
-        self.query_mode = query_mode
+        # How far back from `date` this rule reads: 1 = that day, 5 = T-5 to T.
+        self.lookback_days = lookback_days
         self.rule_name = rule_name
         self._registered = registered or []
         self._logs: list[str] = []

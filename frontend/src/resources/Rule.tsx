@@ -5,7 +5,7 @@ import {
 } from "react-admin";
 import {
   Alert, Box, Button, Card, CardContent, Chip, CircularProgress, Dialog,
-  DialogActions, DialogContent, DialogTitle, Divider, Grid, IconButton,
+  DialogActions, DialogContent, DialogTitle, Divider, IconButton,
   MenuItem, Stack, TextField as MuiTextField, Tooltip, Typography,
 } from "@mui/material";
 import AutoAwesomeIcon from "@mui/icons-material/AutoAwesome";
@@ -531,7 +531,13 @@ const RuleDetails = () => {
             <SeverityField source="severity" />
             <StatusField source="status" />
             <Chip size="small" label={`v${record.version}`} />
-            <Chip size="small" variant="outlined" label={record.query_mode} />
+            <Chip
+              size="small"
+              variant="outlined"
+              label={record.lookback_days === 1
+                ? "anchor day"
+                : `T-${record.lookback_days - 1} to T`}
+            />
             <Chip size="small" variant="outlined" label={record.origin} />
             <Chip
               size="small"
@@ -603,41 +609,6 @@ const RuleDetails = () => {
           ))}
         </Alert>
       )}
-
-      {/* Alert policy */}
-      <Card>
-        <CardContent>
-          <Typography variant="h6" sx={{ mb: 1.5 }}>Alert policy</Typography>
-          <Grid container spacing={2}>
-            <Grid size={{ xs: 12, sm: 3 }}>
-              <Typography variant="caption" color="text.secondary">TICKETS PER RUN</Typography>
-              <Typography variant="body2" sx={{ fontWeight: 600 }}>{record.ticket_mode}</Typography>
-            </Grid>
-            <Grid size={{ xs: 12, sm: 3 }}>
-              <Typography variant="caption" color="text.secondary">GROUP BY</Typography>
-              <Typography variant="body2" sx={{ fontWeight: 600 }}>{record.group_by || "—"}</Typography>
-            </Grid>
-            <Grid size={{ xs: 12, sm: 3 }}>
-              <Typography variant="caption" color="text.secondary">DUPLICATE HANDLING</Typography>
-              <Typography variant="body2" sx={{ fontWeight: 600 }}>{record.dedupe_mode}</Typography>
-            </Grid>
-            <Grid size={{ xs: 12, sm: 3 }}>
-              <Typography variant="caption" color="text.secondary">ALERTING</Typography>
-              <Typography variant="body2" sx={{ fontWeight: 600 }}>
-                {record.alerting_enabled ? "On" : "Muted"}
-              </Typography>
-            </Grid>
-          </Grid>
-          {record.dedupe_mode === "PER_DATA_DATE" && (
-            <Alert severity="info" sx={{ mt: 2 }}>
-              Repeat triggers against the same data date bump the existing ticket’s
-              occurrence count rather than flooding the inbox. If an auditor has already
-              acknowledged it, the next trigger opens a fresh ticket — a breach that is
-              still happening should not hide on a closed ticket.
-            </Alert>
-          )}
-        </CardContent>
-      </Card>
 
       {/* Schedules */}
       <SchedulesSection ruleCode={record.code} isAdmin={isAdmin} />
@@ -747,9 +718,6 @@ const TicketsForRule = ({ ruleCode }: { ruleCode: string }) => {
             </Typography>
             <SeverityField source="severity" />
             <StatusField source="status" />
-            {t.occurrences > 1 && (
-              <Chip size="small" color="warning" label={`seen ${t.occurrences}×`} />
-            )}
           </Stack>
           <Typography variant="body2" color="text.secondary">{t.summary}</Typography>
         </Box>

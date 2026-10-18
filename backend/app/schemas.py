@@ -9,14 +9,11 @@ from pydantic import BaseModel, Field
 
 RuleStatus = Literal["draft", "active", "paused", "retired"]
 Severity = Literal["low", "medium", "high", "critical"]
-QueryMode = Literal["SNAPSHOT", "WINDOW"]
 RunStatus = Literal["running", "pass", "fail", "error"]
 TicketStatus = Literal["open", "acknowledged", "dismissed"]
 CadenceKind = Literal[
     "HOURLY", "DAILY", "WEEKDAYS", "WEEKLY", "MONTHLY", "CUSTOM"
 ]
-TicketMode = Literal["ONE_PER_RUN", "ONE_PER_GROUP", "ONE_PER_ROW"]
-DedupeMode = Literal["NONE", "PER_DATA_DATE", "FINGERPRINT"]
 ValidationStatus = Literal["unvalidated", "valid", "invalid"]
 
 
@@ -101,22 +98,14 @@ class RuleOut(BaseModel):
     entity: str
     description: str
     severity: Severity
-    query_mode: QueryMode
-    window_days: int
     status: RuleStatus
+    lookback_days: int
     validation_status: ValidationStatus
     validation_messages: list[dict[str, Any]]
     validated_at: datetime | None
     validated_by: str | None
-    ticket_mode: TicketMode
-    group_by: str | None
-    dedupe_mode: DedupeMode
-    dedupe_window_hours: int
-    alerting_enabled: bool
     declared_datasources: list[str]
-    declared_alert: dict[str, Any]
     source_file: str
-    datasource_hint: str
     created_by: str
     origin: str
     created_at: datetime
@@ -131,31 +120,19 @@ class RuleCreate(BaseModel):
     entity: str = "LAD"
     description: str = ""
     severity: Severity = "medium"
-    query_mode: QueryMode = "SNAPSHOT"
-    window_days: int = 1
+    lookback_days: int = Field(default=1, ge=1, le=365)
     source_code: str
-    datasource_hint: str = ""
     status: RuleStatus = "draft"
-    ticket_mode: TicketMode = "ONE_PER_RUN"
-    group_by: str | None = None
-    dedupe_mode: DedupeMode = "PER_DATA_DATE"
-    alerting_enabled: bool = True
 
 
 class RuleUpdate(BaseModel):
     name: str | None = None
     description: str | None = None
     severity: Severity | None = None
-    query_mode: QueryMode | None = None
-    window_days: int | None = None
+    lookback_days: int | None = Field(default=None, ge=1, le=365)
     status: RuleStatus | None = None
     source_code: str | None = None
     change_note: str = ""
-    ticket_mode: TicketMode | None = None
-    group_by: str | None = None
-    dedupe_mode: DedupeMode | None = None
-    dedupe_window_hours: int | None = None
-    alerting_enabled: bool | None = None
 
 
 class ValidationReport(BaseModel):
@@ -165,7 +142,6 @@ class ValidationReport(BaseModel):
     errors: list[str]
     warnings: list[str]
     declared_datasources: list[str]
-    declared_alert: dict[str, Any]
     name: str | None = None
     description: str | None = None
     can_activate: bool = False
@@ -323,10 +299,6 @@ class TicketOut(BaseModel):
     schedule_id: int | None
     severity: Severity
     rows: list[dict[str, Any]]
-    occurrences: int
-    first_run_id: int | None
-    last_run_id: int | None
-    last_seen_at: datetime | None
     status: TicketStatus
     acknowledged_by: str | None
     acknowledged_at: datetime | None

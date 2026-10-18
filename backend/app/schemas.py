@@ -326,7 +326,6 @@ class TicketOut(BaseModel):
     rule_code: str
     schedule_id: int | None
     severity: Severity
-    summary: str
     rows: list[dict[str, Any]]
     occurrences: int
     first_run_id: int | None

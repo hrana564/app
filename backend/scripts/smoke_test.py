@@ -330,6 +330,8 @@ def main() -> int:
         tickets = c.get("/api/tickets", headers=ud, params={"perPage": 200}).json()
         check("tickets raised", tickets["total"] >= 4, f"total={tickets['total']}")
         check("tickets carry rule_code", all(t.get("rule_code") for t in tickets["data"]))
+        check("ticket summary comes from rule_runs join",
+              all(t.get("summary") for t in tickets["data"]))
         check("ticket numbers formatted",
               all(t["ticket_no"].startswith("ABM-TKT-") for t in tickets["data"]))
         check("filter by rule_code works",

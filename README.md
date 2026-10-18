@@ -115,7 +115,7 @@ runs           id, rule_id -> rules_master(id), rule_code, schedule_id, data_dat
                rows, rows_scanned, is_shadow, error_detail, duration_ms
 
 tickets        id, ticket_no, run_id, rule_id -> rules_master(id), rule_code,
-               schedule_id, severity, summary, rows, occurrences, first_run_id,
+               schedule_id, severity, rows, occurrences, first_run_id,
                last_run_id, fingerprint, last_seen_at, status, acknowledged_by,
                acknowledged_at, ack_note, created_at
 ```
@@ -633,7 +633,7 @@ All endpoints except `/health`, `/api/auth/login` and `/api/dashboard` require
 | GET/PUT/DELETE | `/api/rule-schedules/{id}` | any / admin | Read / update / delete |
 | GET | `/api/rule-schedules/cron/jobs` | any | Live APScheduler jobs |
 | GET | `/api/runs` | any | `?status&rule_code&page&perPage` |
-| GET | `/api/runs/summary` | any | Counts by status |
+| GET | `/api/rule-runs/summary` | any | Counts by status |
 | GET | `/api/runs/{id}` | any | One run |
 | POST | `/api/runs/{id}/rerun` | any | Re-run same rule + date |
 | GET | `/api/tickets` | any | `?status&severity&rule_code` |
@@ -819,7 +819,7 @@ native Power Apps controls. Three constraints must shape the API — they alread
 | Constraint | Consequence | Status |
 |---|---|---|
 | Connectors require **Swagger 2.0**, FastAPI emits OpenAPI 3.1 | Convert and commit `swagger.json` (< 1 MB) | ⬜ not done |
-| Power Apps **cannot call your API directly** — every call routes through a Power Automate flow | Design **aggregate** endpoints only, never chatty per-row calls | ✅ `/api/dashboard`, `/api/tickets/summary`, `/api/runs/summary` are aggregates |
+| Power Apps **cannot call your API directly** — every call routes through a Power Automate flow | Design **aggregate** endpoints only, never chatty per-row calls | ✅ `/api/dashboard`, `/api/tickets/summary`, `/api/rule-runs/summary` are aggregates |
 | Connectors **do not support client-credentials** | Use API-key or OAuth 2.0 delegated, or front with API Management | ⬜ decide before prod |
 
 ### Option C — PCF React control

@@ -247,7 +247,6 @@ class Ticket(Base):
         ForeignKey("rule_schedules.id", ondelete="SET NULL")
     )
     severity: Mapped[str] = mapped_column(String(16), default="medium", nullable=False)
-    summary: Mapped[str] = mapped_column(Text, default="")
     rows: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, default=list, nullable=False)
 
     # --- dedup bookkeeping ----------------------------------------------

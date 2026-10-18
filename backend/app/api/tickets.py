@@ -8,7 +8,7 @@ from fastapi import APIRouter, HTTPException, Query
 from sqlalchemy import func, select
 
 from app.api.deps import CurrentUser, SessionDep
-from app.models import Rule, Ticket
+from app.models import Rule, Run, Ticket
 from app.schemas import TicketAck, TicketOut
 
 router = APIRouter(prefix="/api/tickets", tags=["tickets"])
@@ -41,12 +41,22 @@ async def list_tickets(
     stmt = stmt.order_by(col.desc() if order.upper() == "DESC" else col.asc())
     stmt = stmt.offset((page - 1) * perPage).limit(perPage)
 
-    rows = (await session.execute(stmt)).scalars().all()
+    # Join rule_runs to get the summary text - one source of truth
+    stmt = stmt.join(Run, Ticket.run_id == Run.id)
+    stmt = stmt.add_columns(Run.summary.label("run_summary"))
+    stmt = stmt.order_by(col.desc() if order.upper() == "DESC" else col.asc())
+    stmt = stmt.offset((page - 1) * perPage).limit(perPage)
+
+    result = await session.execute(stmt)
+    rows = result.all()
     total = (await session.execute(count_stmt)).scalar_one()
-    return {
-        "data": [TicketOut.model_validate(t).model_dump(mode="json") for t in rows],
-        "total": total,
-    }
+
+    data = []
+    for ticket, run_summary in rows:
+        d = TicketOut.model_validate(ticket).model_dump(mode="json")
+        d["summary"] = run_summary or ""
+        data.append(d)
+    return {"data": data, "total": total}
 
 
 @router.get("/summary")
@@ -81,7 +91,10 @@ async def get_ticket(
     ticket = await session.get(Ticket, ticket_id)
     if ticket is None:
         raise HTTPException(status_code=404, detail="Ticket not found")
-    return TicketOut.model_validate(ticket)
+    run = await session.get(Run, ticket.run_id)
+    d = TicketOut.model_validate(ticket).model_dump(mode="json")
+    d["summary"] = run.summary if run else ""
+    return d
 
 
 @router.post("/{ticket_id}/acknowledge", response_model=TicketOut)
@@ -104,7 +117,10 @@ async def acknowledge(
 
     await session.commit()
     await session.refresh(ticket)
-    return TicketOut.model_validate(ticket)
+    run = await session.get(Run, ticket.run_id)
+    d = TicketOut.model_validate(ticket).model_dump(mode="json")
+    d["summary"] = run.summary if run else ""
+    return d
 
 
 @router.post("/{ticket_id}/reopen", response_model=TicketOut)
@@ -119,4 +135,7 @@ async def reopen(
     ticket.acknowledged_at = None
     await session.commit()
     await session.refresh(ticket)
-    return TicketOut.model_validate(ticket)
+    run = await session.get(Run, ticket.run_id)
+    d = TicketOut.model_validate(ticket).model_dump(mode="json")
+    d["summary"] = run.summary if run else ""
+    return d

@@ -127,7 +127,6 @@ async def _upsert_ticket(
     group_key: str | None,
     rows: list[dict[str, Any]],
 ) -> Ticket | None:
-    summary = _build_summary(rule, run, group_key, len(rows))
     fingerprint_value = (
         fingerprint(rows) if rule.dedupe_mode == DEDUPE_FINGERPRINT else None
     )
@@ -145,7 +144,6 @@ async def _upsert_ticket(
         existing.last_run_id = run.id
         existing.last_seen_at = datetime.now(timezone.utc)
         existing.rows = rows
-        existing.summary = summary
         await session.flush()
         log.debug(
             "ticket %s bumped to %s occurrences (rule %s)",
@@ -162,7 +160,6 @@ async def _upsert_ticket(
         rule_code=rule.code,
         schedule_id=schedule_id,
         severity=rule.severity,
-        summary=summary,
         rows=rows,
         status="open",
         occurrences=1,
@@ -174,8 +171,6 @@ async def _upsert_ticket(
     session.add(ticket)
     await session.flush()
     ticket.ticket_no = f"ABM-TKT-{ticket.id:05d}"
-    if existing is not None:
-        ticket.summary = f"{summary} (recurrence of {existing.ticket_no})"
     return ticket
 
 
@@ -217,13 +212,3 @@ async def _find_repeat(
 
     result = await session.execute(stmt)
     return result.scalar_one_or_none()
-
-
-def _build_summary(rule: Rule, run: Run, group_key: str | None, row_count: int) -> str:
-    base = run.summary or f"{row_count} exception row(s)"
-    if group_key and rule.ticket_mode == TICKET_MODE_ONE_PER_GROUP:
-        by = rule.group_by or "group"
-        return f"{by} = {group_key}: {base}"
-    if rule.ticket_mode == TICKET_MODE_ONE_PER_ROW:
-        return f"Single row: {base}"
-    return base

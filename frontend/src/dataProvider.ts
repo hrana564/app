@@ -212,10 +212,10 @@ export const api = {
 
   ruleVersions: (code: string) => request<any>(`/api/rules/${code}/versions`),
 
-  testRule: (code: string, data_date: string | null, shadow = false) =>
+  testRule: (code: string, data_date: string | null) =>
     request<any>(`/api/rules/${code}/test`, {
       method: "POST",
-      body: JSON.stringify({ data_date, shadow }),
+      body: JSON.stringify({ data_date }),
     }),
 
   updateRule: (code: string, payload: Record<string, unknown>) =>

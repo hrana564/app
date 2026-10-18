@@ -301,8 +301,6 @@ class RunOut(BaseModel):
     summary: str
     metrics: dict[str, Any]
     rows: list[dict[str, Any]]
-    rows_scanned: int
-    is_shadow: bool
     error_detail: str
     duration_ms: int
 
@@ -311,7 +309,6 @@ class RunOut(BaseModel):
 
 class RunRequest(BaseModel):
     data_date: date | None = None
-    shadow: bool = False
 
 
 # ---------------------------------------------------------------------------

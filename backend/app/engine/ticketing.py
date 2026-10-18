@@ -89,7 +89,7 @@ async def raise_tickets(
     session: AsyncSession, *, rule: Rule, run: Run, schedule_id: int | None
 ) -> list[Ticket]:
     """Create or bump tickets for a failing run. Returns affected tickets."""
-    if run.status != "fail" or run.is_shadow:
+    if run.status != "fail":
         return []
     if not rule.alerting_enabled:
         log.debug("rule %s: alerting muted, no ticket raised", rule.code)

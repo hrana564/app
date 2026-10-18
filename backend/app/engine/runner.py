@@ -68,7 +68,6 @@ async def execute_rule(
     data_date: date,
     schedule_id: int | None = None,
     triggered_by: str = "schedule",
-    shadow: bool = False,
 ) -> Run:
     """Run one rule and persist the run (+ ticket when the rule fails)."""
     started = time.perf_counter()
@@ -81,29 +80,26 @@ async def execute_rule(
         data_date=data_date,
         triggered_by=triggered_by,
         status="running",
-        is_shadow=shadow,
     )
     session.add(run)
     await session.flush()
 
-    counts: dict[str, int] = {}
     result: RuleResult | None = None
 
     try:
         module = load_rule(rule.source_file, settings.rules_dir)
         fn = module.run
 
-        def work() -> tuple[dict[str, Any], dict[str, int], list[str]]:
+        def work() -> tuple[dict[str, Any], list[str]]:
             ctx = RuleContext(
                 data_date=data_date,
                 query_mode=rule.query_mode,
                 rule_name=rule.name,
                 registered=list(registry_for(rule.entity).keys()),
             )
-            raw = fn(ctx)
-            return raw, {}, ctx.logs
+            return fn(ctx), ctx.logs
 
-        raw, counts, logs = await _run_in_thread(work)
+        raw, logs = await _run_in_thread(work)
         result = RuleResult.model_validate(raw)
 
         # Guard against a rule returning a runaway number of rows.
@@ -113,7 +109,6 @@ async def execute_rule(
                 f" (truncated to {settings.max_rows_in_ticket} rows)"
             )
 
-        run.rows_scanned = sum(counts.values())
         run.summary = result.summary or _default_summary(result)
         run.metrics = json_safe(result.metrics)
         run.rows = json_safe(result.rows)
@@ -131,7 +126,6 @@ async def execute_rule(
         run.status = "error"
         run.error_detail = f"{type(exc).__name__}: {exc}"
         run.summary = f"Rule {rule.code} raised {type(exc).__name__}"
-        run.rows_scanned = sum(counts.values())
         run.metrics = {"traceback": traceback.format_exc()[-4000:]}
 
     run.finished_at = datetime.now(timezone.utc)

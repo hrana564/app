@@ -46,7 +46,6 @@ export const RunList = () => (
       <TextField source="data_date" label="Data date" />
       <StatusField source="status" />
       <TextField source="summary" label="Summary" />
-      <TextField source="rows_scanned" label="Rows" />
       <TextField source="duration_ms" label="ms" />
       <TextField source="triggered_by" label="Triggered by" />
       <DateField source="started_at" label="Started" showTime />
@@ -76,7 +75,6 @@ const RunDetails = () => {
               label={record.schedule_id ? `schedule #${record.schedule_id}` : "manual"}
             />
             <Chip size="small" variant="outlined" label={`${record.duration_ms} ms`} />
-            <Chip size="small" variant="outlined" label={`${record.rows_scanned} rows scanned`} />
           </Stack>
           <Typography variant="body1" sx={{ fontWeight: 600 }}>{record.summary}</Typography>
           <Typography variant="caption" color="text.secondary">

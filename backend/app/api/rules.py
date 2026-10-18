@@ -623,7 +623,6 @@ async def test_rule(
         rule=rule,
         data_date=payload.data_date or _latest_data_date(rule.entity),
         triggered_by="manual_test",
-        shadow=payload.shadow,
     )
     return RuleTestResponse(
         run_id=run.id,

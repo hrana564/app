@@ -213,8 +213,7 @@ class Run(Base):
     summary: Mapped[str] = mapped_column(Text, default="")
     metrics: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, nullable=False)
     rows: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, default=list, nullable=False)
-    rows_scanned: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    is_shadow: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    
     error_detail: Mapped[str] = mapped_column(Text, default="")
     duration_ms: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 

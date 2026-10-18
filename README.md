@@ -131,7 +131,7 @@ rule_schedules id, rule_code, label, kind, config, cron, timezone, data_lag_days
 
 runs           id, rule_id -> rules_master(id), rule_code, schedule_id, data_date,
                triggered_by, started_at, finished_at, status, summary, metrics,
-               rows, rows_scanned, is_shadow, error_detail, duration_ms
+               rows, error_detail, duration_ms
 
 tickets        id, ticket_no, run_id, rule_id -> rules_master(id), rule_code,
                schedule_id, severity, rows, occurrences, first_run_id,
@@ -636,7 +636,7 @@ All endpoints except `/health`, `/api/auth/login` and `/api/dashboard` require
 | PUT | `/api/rules/{id}` | admin | Update; new `source_code` → new version |
 | POST | `/api/rules/{id}/rollback/{version}` | admin | Roll back = new version from old |
 | DELETE | `/api/rules/{id}` | admin | Delete |
-| POST | `/api/rules/{id}/test` | any | Dry-run against a date (`{data_date, shadow}`) |
+| POST | `/api/rules/{code}/test` | any | Run against a date (`{data_date}`) |
 | POST | `/api/rules/{id}/validate` | any | Run the static gate, store the verdict |
 | GET | `/api/rules/{id}/validate-report` | any | Last stored verdict without re-running |
 | GET | `/api/rules/generate/status` | any | Is the LLM configured? |

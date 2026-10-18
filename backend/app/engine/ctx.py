@@ -116,7 +116,7 @@ class RuleContext:
         return _TABLE_REF.sub(lambda m: f'"{m.group(1)}"', query)
 
     def count_rows(self, name: str) -> int:
-        """Rows available in a table - recorded as rows_scanned on the run."""
+        """Rows available in a table."""
         value = self.sql(f"SELECT count(*) AS n FROM {self.table(name)}").scalar()
         return int(value or 0)
 

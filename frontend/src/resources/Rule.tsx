@@ -225,7 +225,7 @@ const TestRuleButton = () => {
 
   const run = async () => {
     setBusy(true); setError(null);
-    try { setOut(await api.testRule(record.code, day, false)); }
+    try { setOut(await api.testRule(record.code, day)); }
     catch (e: any) { setError(e.message); notify(`Run failed: ${e.message}`, { type: "error" }); }
     finally { setBusy(false); }
   };

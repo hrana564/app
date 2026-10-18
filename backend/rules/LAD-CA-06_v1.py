@@ -12,8 +12,14 @@ HRMS is the reference master and iPOS supplies the activity. The join key is
 ipos_sales.staff_id == hr_employees.employee_id, which is only meaningful
 because the generator used the same key on both sides.
 
+"Who has exited" is read from employment_status rather than a pre-computed
+flag: the status vocabulary belongs to HRMS, so this rule is where it is
+interpreted.
+
 The grace period lives in this file.
 """
+
+import polars as pl
 
 NAME = "LAD-CA-06 Ex-staff member still transacting in the POS"
 DESCRIPTION = (
@@ -26,35 +32,40 @@ DATASOURCES = ["ipos_sales", "hr_employees"]
 # Days after exit before POS activity counts as a breach.
 EX_STAFF_GRACE_DAYS = 0
 
+TS_FORMAT = "%Y-%m-%d %H:%M:%S"
+DATE_FORMAT = "%Y-%m-%d"
+EXITED_STATUS = "exited"
+
 
 def run(ctx) -> dict:
     min_days = EX_STAFF_GRACE_DAYS
 
-    rows = ctx.sql(f"""
-        SELECT
-            e.employee_id,
-            e.full_name,
-            e.nationality,
-            e.employment_status,
-            e.exit_date,
-            count(*)                    AS transactions,
-            sum(s.invoice_value)        AS value,
-            min(s.invoice_ts)           AS first_tx,
-            max(s.invoice_ts)           AS last_tx,
-            count(DISTINCT s.store_id)  AS stores
-        FROM ctx.table("ipos_sales") s
-        JOIN ctx.table("hr_employees") e
-          ON e.employee_id = s.staff_id
-        WHERE e.is_exited
-          AND NOT s.is_void
-          AND date_diff('day', e.exit_date, CAST(s.invoice_ts AS DATE)) >= {min_days}
-        GROUP BY e.employee_id, e.full_name, e.nationality,
-                 e.employment_status, e.exit_date
-        ORDER BY value DESC
-        LIMIT 200
-    """).all()
+    sales = ctx.table("ipos_sales").filter(~pl.col("is_void")).with_columns(
+        tx_date=pl.col("invoice_ts").str.to_datetime(TS_FORMAT, strict=False).dt.date(),
+    )
+    exited = ctx.table("hr_employees").filter(
+        pl.col("employment_status") == EXITED_STATUS
+    ).with_columns(
+        exit_date=pl.col("exit_date").str.to_date(DATE_FORMAT, strict=False),
+    )
 
-    if not rows:
+    activity = (
+        sales.join(
+            exited,
+            left_on="staff_id",
+            right_on="employee_id",
+            how="inner",
+        )
+        .filter(
+            pl.col("exit_date").is_not_null()
+            & (
+                (pl.col("tx_date") - pl.col("exit_date")).dt.total_days()
+                >= min_days
+            )
+        )
+    )
+
+    if activity.height == 0:
         return {
             "status": "success",
             "error_message": None,
@@ -65,6 +76,26 @@ def run(ctx) -> dict:
             "metrics": {},
             "rows": [],
         }
+
+    rows = (
+        activity.group_by(
+            "staff_id", "full_name", "nationality",
+            "employment_status", "exit_date",
+        )
+        .agg(
+            transactions=pl.len(),
+            value=pl.col("invoice_value").sum(),
+            first_tx=pl.col("invoice_ts").min(),
+            last_tx=pl.col("invoice_ts").max(),
+            stores=pl.col("store_id").n_unique(),
+        )
+        .sort("value", descending=True)
+        .head(200)
+        # The join guarantees staff_id == employee_id; polars keeps only the
+        # left key, so the employee id is renamed back for the reader.
+        .rename({"staff_id": "employee_id"})
+        .to_dicts()
+    )
 
     tx_total = sum(int(r["transactions"]) for r in rows)
     value_total = sum(float(r["value"] or 0) for r in rows)

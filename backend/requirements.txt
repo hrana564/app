@@ -23,6 +23,11 @@ apscheduler==3.11.3
 croniter==6.0.0
 orjson==3.11.7
 
+# Rules are written as polars operations over the CSVs a run staged.
+# polars is MIT. Lazy evaluation means a rule streams its inputs rather than
+# loading the whole file, which is what keeps a wide rule affordable.
+polars==2.0.0
+
 pyjwt==2.10.1
 bcrypt==5.0.0
 python-dotenv==1.2.1

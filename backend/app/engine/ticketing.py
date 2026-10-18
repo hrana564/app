@@ -25,6 +25,20 @@ from app.models import Run, Ticket
 log = logging.getLogger("abm.ticketing")
 
 
+def run_status_for(rule_status: str, row_count: int) -> str:
+    """Map what a rule reported onto the status the run ledger records.
+
+    A rule that ran and returned rows has failed its control, whatever the rule
+    itself chose to call it. That sentence is the whole of this module's reason
+    to exist, so it is expressed once here and used by both the runner and the
+    replay tool - if the two derived the status differently, a replay would
+    report a difference that is not one.
+    """
+    if rule_status != "success":
+        return "error"
+    return "fail" if row_count else "pass"
+
+
 async def raise_ticket(
     session: AsyncSession, *, run: Run, severity: str, schedule_id: int | None
 ) -> Ticket | None:

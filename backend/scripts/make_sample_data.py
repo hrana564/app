@@ -31,7 +31,7 @@ from datetime import date, datetime, time, timedelta
 from pathlib import Path
 
 APP_ROOT = Path(__file__).resolve().parent.parent.parent
-SOURCEDATA_DIR = APP_ROOT / "SourceData"
+SOURCEDATA_DIR = APP_ROOT / "mount" / "SourceData"
 
 DAYS = [
     date(2026, 10, 15),

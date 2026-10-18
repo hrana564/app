@@ -36,7 +36,7 @@ class Source:
 
     @property
     def path_template(self) -> str:
-        return f"SourceData/{self.entity}/{{date}}/{self.name}.csv"
+        return f"mount/SourceData/{self.entity}/{{date}}/{self.name}.csv"
 
 
 # ---------------------------------------------------------------------------

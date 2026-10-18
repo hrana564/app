@@ -56,22 +56,34 @@ cron fires
 
 That is the entire engine. Everything of substance lives in the rule file.
 
-> **⚠ The query engine is not wired.** DuckDB was removed and the replacement
-> is still an open decision. `ctx.sql()` currently raises `NotImplementedError`,
-> so every rule errors at execution time — the rules themselves are untouched
-> and will work unchanged once an engine is behind `ctx`. The four methods below
-> are the whole contract a rule sees, so nothing inside a rule file moves:
->
-> ```
-> ctx.table("name")   quoted table name for FROM / JOIN
-> ctx.sql("SELECT ...")   Result (.all() / .one() / .scalar() / .count())
-> ctx.date            the date being audited
-> ctx.log("...")      appends a note to the run summary
-> ```
->
-> Consequence: the 15 rule-execution assertions in `scripts/smoke_test.py` fail
-> until the engine lands. Everything else — registration, validation,
-> versioning, scheduling, the API — passes today.
+### Rules are polars, not SQL
+
+```
+ctx.table("ipos_sales")   a polars DataFrame of the rows this run staged
+ctx.date                  the date being audited
+ctx.lookback_days         how far back this rule reads
+ctx.log("...")            appends a note to the run summary
+```
+
+Three methods. There is no query engine and no query string.
+
+This replaced an earlier `ctx.sql()` surface that needed DuckDB behind it. SQL
+turned out to be the wrong shape for what these controls actually do. The
+equivalent of "is the last hour more than twice the hourly average" was
+
+```sql
+sum(invoice_value) FILTER (WHERE hour < 23)
+  / nullif(count(DISTINCT hour) FILTER (WHERE hour < 23), 0)
+```
+
+and as polars it is
+
+```python
+hourly = base.group_by("hour").agg(pl.col("invoice_value").sum())
+baseline = hourly.filter(pl.col("hour") < LAST_HOUR)["value"].mean()
+```
+
+The second one is the audit step, stated as the audit step.
 
 ---
 
@@ -81,35 +93,41 @@ That is the entire engine. Everything of substance lives in the rule file.
 LAD  Laduree          iPOS (SaaS)   |  Azure Synapse  |  HRMS
 ABM  Al Boom Marine   iPOS          |  HRMS           |  Business Central
 
-Power Automate ──▶ SourceData/<ENTITY>/<YYYY-MM-DD>/<table>.csv
+Power Automate ──▶ mount/SourceData/<ENTITY>/<YYYY-MM-DD>/<table>.csv
                         │
                         ▼
               APScheduler (per-rule cron)
                         │
                         ▼
-              Python Audit Engine ── ctx.sql() over the CSV folders
+       Python Audit Engine ── stage the inputs, then polars over them
+                        │
+                        ▼
+      Rules_Executions/<run_id>/   the exact rule + CSVs that run read
                         │
                         ▼
                   PostgreSQL  ABM_Audit_Portal
-                 rules_master · rule_schedules · runs · tickets
+                 rules_master · rule_schedules · rule_runs · tickets
                  datasources · users
                         │
                         ▼
               React UI  (react-admin)   ──▶  later: Power Apps
 ```
 
-**The query engine is an open decision.** The data is a set of daily CSV folders,
-and rules want to join across them with SQL, so whatever sits behind `ctx.sql()`
-needs to answer SQL over `SourceData/<ENTITY>/<date>/*.csv`. DuckDB filled that
-role and has been removed; the candidates are PostgreSQL (load the folders into
-real tables), a lighter in-process engine, or pandas. Nothing above this line
-depends on the choice.
+**Every run freezes its inputs first.** Before the rule runs, the CSVs it declared
+and the days its `lookback_days` covers are copied into
+`Rules_Executions/<run_id>/` alongside a byte-identical copy of the rule source
+and a `metadata.json` naming every file with its SHA-256. The rule reads the
+copy, never the mount.
+
+That is what makes a failure debuggable: `python -m app.engine.replay 123`
+re-runs that rule against those exact bytes, with no database and no network,
+and reports whether it still reproduces the recorded outcome.
 
 ---
 
 ## 3. Data model
 
-Eight tables in `ABM_Audit_Portal`. Created on startup by `create_all`.
+Six tables in `ABM_Audit_Portal`. Created on startup by `create_all`.
 
 ```
 users          id, username, password_hash, role, is_active
@@ -258,20 +276,25 @@ traceback and never takes down the process.
 
 | Member | Purpose |
 |---|---|
-| `ctx.table("ipos_sales")` | Quoted view name for `FROM` / `JOIN`. Works inside SQL strings or from Python. |
-| `ctx.sql(query)` | Run read-only SQL. Returns `Result` (`.all()`, `.one()`, `.scalar()`, `.count()`) |
-| `ctx.date` | The data date being audited |
+| `ctx.table("ipos_sales")` | A polars DataFrame of the rows this run staged for that table |
+| `ctx.date` | The anchor date being audited |
+| `ctx.lookback_days` | How far back this rule reads (1 = that day, 5 = T-5 to T) |
 | `ctx.log("...")` | Append a note to the run summary |
-| `ctx.count_rows("name")` | Row count of a view |
+| `ctx.count_rows("name")` | Row count of a table |
 
-`ctx.table("x")` inside a SQL string is rewritten to the quoted table name before the engine parses
-it, which is what makes this read naturally:
+There are no file paths and no query strings. A rule cannot reach anything that
+was not staged for its run, so `Rules_Executions/<run_id>/` is a true record of
+what it read rather than a copy made afterwards.
+
+Column types are inferred from the CSV: `invoice_value` arrives as a float,
+`is_void` as a bool. Timestamps are strings until you parse them:
 
 ```python
-ctx.sql("SELECT * FROM ctx.table('ipos_sales')")
+pl.col("invoice_ts").str.to_datetime("%Y-%m-%d %H:%M:%S").dt.hour()
 ```
 
-Referencing an unregistered datasource raises immediately with the list of valid names.
+Referring to an unregistered datasource, or one that was not staged, raises
+immediately with the list of what was actually available.
 
 ---
 
@@ -337,9 +360,9 @@ Validation is static and cheap, so it runs on every save:
 | Every table exists for this entity | union of declared `DATASOURCES` **and** every `ctx.table("x")` found in the source |
 | Declared entity matches the DB | warn only |
 
-> The `ctx.table("x")` check needs a **regex pass as well as the AST**, because the normal
-> authoring style puts the call *inside an SQL string*, where it is just text to the parser. The AST
-> alone silently let a LAD rule reference `bc_vendors` (an ABM table).
+That union is what the run folder stages. It matters because the declared list
+is a claim and the call sites are the truth: a rule that calls
+`ctx.table("bc_vendors")` from a LAD rule has to fail validation, and it does.
 
 ---
 
@@ -535,9 +558,12 @@ Vite proxies `/api` to the backend, so the browser sees a single origin in devel
 ```
 app/
 ├── README.md
-├── SourceData/                     CSV landing zone (generated; gitignored)
-│   ├── LAD/2026-10-15/ipos_sales.csv ...
-│   └── ABM/2026-10-15/bc_vendors.csv ...
+├── mount/                           the mounted landing zone
+│   ├── SourceData/                  <ENTITY>/<date>/<table>.csv (generated; gitignored)
+│   │   ├── LAD/2026-10-15/ipos_sales.csv ...
+│   │   └── ABM/2026-10-15/bc_vendors.csv ...
+├── Rules_Executions/                one folder per run (gitignored)
+│   └── 000123/                      rule.py + metadata.json + the CSVs it read
 ├── backend/
 │   ├── .env / .env.example
 │   ├── requirements.txt
@@ -554,12 +580,14 @@ app/
 │   │   │   └── datasources.py
 │   │   └── engine/
 │   │       ├── datasources.py      per-entity registry
-│   │       ├── ctx.py              RuleContext + query seam
+│   │       ├── ctx.py              RuleContext: a table -> a polars DataFrame
+│   │       ├── snapshot.py         stage one run's inputs. No ORM, no DB.
 │   │       ├── loader.py           rule file load/save
 │   │       ├── runner.py           THE ENGINE
 │   │       ├── frequency.py        friendly cadence <-> cron (only place cron exists)
 │   │       ├── validation.py       static validation gate
 │   │       ├── ticketing.py        run -> one ticket. Imports no Rule.
+│   │       ├── replay.py           re-run a captured folder. No DB, no network.
 │   │       ├── scheduler.py        APScheduler wiring
 │   │       └── rule_generator.py   prompt -> draft rule
 │   ├── rules/
@@ -615,7 +643,8 @@ LLM_API_KEY=
 LLM_MODEL=
 
 # --- Paths ---
-SOURCEDATA_DIR=../SourceData
+SOURCEDATA_DIR=../mount/SourceData
+RUNS_DIR=../Rules_Executions
 RULES_DIR=./rules
 
 # --- Guardrails ---
@@ -685,36 +714,49 @@ All endpoints except `/health`, `/api/auth/login` and `/api/dashboard` require
 Copy `backend/rules/_template.py` to `rules/<CODE>_v1.py`.
 
 ```python
+import polars as pl
+
+LAST_HOUR = 23
+LAST_HOUR_RATIO_LIMIT = 2.0
+TS_FORMAT = "%Y-%m-%d %H:%M:%S"
+
+
 def run(ctx) -> dict:
-    limit = LAST_HOUR_RATIO_LIMIT   # declared at module level
+    limit = LAST_HOUR_RATIO_LIMIT
 
-    totals = ctx.sql(f"""
-        SELECT sum(invoice_value) FILTER (WHERE hour = 23) AS last_hour,
-               sum(invoice_value) FILTER (WHERE hour < 23)
-                 / nullif(count(DISTINCT hour) FILTER (WHERE hour < 23), 0) AS hourly_avg
-        FROM ctx.table("ipos_sales")
-        WHERE NOT is_void AND item_group IN ('RETAIL','BAR')
-    """).one()
+    base = (
+        ctx.table("ipos_sales")
+        .with_columns(
+            hour=pl.col("invoice_ts").str.to_datetime(TS_FORMAT, strict=False).dt.hour(),
+        )
+        .filter((~pl.col("is_void")) & pl.col("item_group").is_in(["RETAIL", "BAR"]))
+    )
 
-    if not totals or not totals["last_hour"]:
-        return {"status": "no_rows_returned", "summary": "No trading data", "metrics": {}}
+    if base.height == 0:
+        return {"status": "success", "error_message": None,
+                "summary": f"No retail/bar invoices on {ctx.date}",
+                "metrics": {}, "rows": []}
 
-    ratio = totals["last_hour"] / totals["hourly_avg"] if totals["hourly_avg"] else 0
+    hourly = base.group_by("hour").agg(pl.col("invoice_value").sum())
+    last_hour = float(hourly.filter(pl.col("hour") == LAST_HOUR)["value"].sum() or 0)
+    hourly_avg = float(hourly.filter(pl.col("hour") < LAST_HOUR)["value"].mean() or 0)
+    ratio = (last_hour / hourly_avg) if hourly_avg else 0.0
 
     if ratio <= limit:
-        return {"status": "no_rows_returned",
-                "summary": f"Ratio {ratio:.2f}x within limit {limit}x",
-                "metrics": {"ratio": round(ratio, 3)}}
+        return {"status": "success", "error_message": None,
+                "summary": f"{ratio:.2f}x the hourly average, within {limit}x",
+                "metrics": {"ratio": round(ratio, 3), "limit": limit}, "rows": []}
 
-    rows = ctx.sql(f"""
-        SELECT invoice_id, invoice_ts, store_id, staff_id, invoice_value
-        FROM ctx.table("ipos_sales")
-        WHERE hour = 23 AND NOT is_void
-        ORDER BY invoice_value DESC LIMIT 200
-    """).all()
+    rows = (
+        base.filter(pl.col("hour") == LAST_HOUR)
+        .sort("invoice_value", descending=True)
+        .select("invoice_id", "invoice_ts", "store_id", "staff_id", "invoice_value")
+        .head(200)
+        .to_dicts()
+    )
 
-    return {"status": "rows_returned",
-            "summary": f"Last hour {ratio:.2f}x the hourly average",
+    return {"status": "success", "error_message": None,
+            "summary": f"Last hour {ratio:.2f}x the hourly average (limit {limit}x)",
             "metrics": {"ratio": round(ratio, 3), "limit": limit},
             "rows": rows}
 ```
@@ -726,21 +768,34 @@ Register it via `POST /api/rules` (the server writes the file and creates versio
 
 - Declare thresholds as module constants in UPPER_CASE with a comment saying what they measure.
   Saving the file creates a new rule version, so a threshold change is recorded rather than lost.
-- Guard against a missing day folder — `build_views` registers an empty view, so aggregate
-  functions return `NULL`.
-- Cast numbers before string interpolation (`float(x)`), never raw user input.
-- Only import from `json`, `datetime`, `statistics`, `math`, `decimal`.
+- Derive your own helper columns with `with_columns(...)`. Nothing is pre-computed: the hour of a
+  timestamp, whether a tender is cash, whether a person has exited are all written in the rule.
+- An empty frame is a normal outcome. Say so in the summary and return no rows — do not raise.
+- A source file that failed to land is handled by the platform, not the rule: the run records
+  `error` and names the missing file, rather than reporting a clean day that was never audited.
+- Only import from `polars`, `json`, `datetime`, `statistics`, `math`, `decimal`, `difflib`,
+  `collections`, `itertools`, `functools`, `re`, `typing`.
 - Never import `os` / `sys` / `subprocess` / `socket`, never call `open()`.
 
-### Query modes
+### Reproducing a run
 
-| Mode | Views span | Use for |
-|---|---|---|
-| `SNAPSHOT` | one day folder | Most daily controls |
-| `WINDOW` | last `window_days` folders | Ageing: "stock in transit > 5 days" |
+Every execution folder is self-contained, so a failure can be re-run against the exact bytes
+it failed on:
 
-> Superseded: `SNAPSHOT`/`WINDOW` and `window_days` are gone. A rule now carries a
-> single `lookback_days` — `1` for the anchor day, `5` for T-5 to T.
+```
+python -m app.engine.replay 123
+python -m app.engine.replay 123 --save fixed.py    # edit the code that actually failed
+```
+
+No database, no scheduler, no network. The tool compares the replayed outcome against the
+recorded `result.json` and says plainly whether it still reproduces.
+
+### Reading the date range
+
+`lookback_days` is the only range knob, and it is one integer. The **anchor** comes from the
+schedule (`data_lag_days`, default 1 = yesterday); the rule says how far back from that anchor
+to read. `1` is the anchor day, `5` is T-4 to T. Days that do not exist are skipped, not an
+error — a lookback reaching back before the data starts still audits what there is.
 
 ---
 
@@ -792,6 +847,7 @@ Current result: **52 permitted, 1 review, 0 unknown, 0 blocked.**
 | LLM | `openai` | Apache-2.0 |
 | Misc | `orjson` | Apache-2.0 **or** MIT |
 | | `croniter` | MIT |
+| Rules | `polars` | MIT |
 | Frontend | `react`, `react-dom` | MIT |
 | | `react-admin` | MIT |
 | | `@mui/material` | MIT (core only) |
@@ -922,7 +978,7 @@ Honest list of what is **not** done yet:
 | **No rule deletion from the UI** | API supports `DELETE` | Admin button not wired |
 | **No Swagger 2.0 export** | Blocks Power Apps custom connector | §14 option B |
 | **No requirements traceability** | The 129 requirement line items are not seeded | Worth doing — it makes the 78%/93%/95% coverage figures in the architecture docs computable |
-| **`WINDOW` mode untested with data** | Only `SNAPSHOT` is exercised by the sample set | Ageing controls (stock in transit, GRN pending) still need real fixtures |
+| **`lookback_days` > 1 untested with data** | Every sample rule uses `1`, so the multi-day window is exercised only by unit-level checks on `days_for()` | Ageing controls (stock in transit, GRN pending) need real multi-day fixtures |
 | **Single scheduler process** | Multiple API workers would duplicate jobs | Run **one** worker, or move to Celery/Redis |
 | **No alert notification** | Tickets only appear in the UI | Email/Teams via Power Automate when needed |
 | **Auth gaps** | See §16 note | No rate limiting, no MFA, token in `localStorage`, `403` incorrectly logs the user out |

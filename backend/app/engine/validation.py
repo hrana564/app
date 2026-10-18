@@ -29,9 +29,15 @@ from app.engine.datasources import registry_for
 from app.engine.loader import load_rule
 
 # Imports a rule may legitimately use.
+#
+# `polars` is the DataFrame library rules are written against and `difflib` is
+# the stdlib string-similarity helper. Neither can reach the filesystem or the
+# network on its own; the AST gate below is what keeps a rule from importing
+# something that can.
 ALLOWED_IMPORTS = {
-    "json", "datetime", "statistics", "math", "decimal",
+    "json", "datetime", "statistics", "math", "decimal", "difflib",
     "collections", "itertools", "functools", "re", "typing",
+    "polars",
 }
 
 BANNED_IMPORTS = {
@@ -39,10 +45,7 @@ BANNED_IMPORTS = {
     "importlib", "ctypes", "multiprocessing", "threading", "requests",
 }
 
-# `ctx.table("x")` is normally written INSIDE an SQL string, which the AST
-# cannot see - it is just text inside a string literal. A regex pass is the only
-# way to catch those references statically. The lookbehind keeps it from matching
-# `other_ctx.table(...)`.
+# `ctx.table("x")` is written as a plain call, so the AST sees it directly.
 _CTX_TABLE_REF = re.compile(
     r"""(?<![\w.])ctx\.(?:table|count_rows)\(\s*['"]([A-Za-z_]\w*)['"]"""
 )

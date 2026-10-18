@@ -26,8 +26,13 @@ dist/
 .vite/
 npm-debug.log*
 
-# SourceData: keep folder shape, ignore generated CSV payloads
-SourceData/**/*.csv
+# Mounted CSV landing zone: keep folder shape, ignore generated CSV payloads.
+# Moves to a volume mount in production - the app only ever reads from here.
+mount/SourceData/**/*.csv
+
+# Per-run execution folders: staged rule source + the exact CSVs a run read.
+# Output lives on the rule_runs row; these are inputs, rebuilt by hand if lost.
+Rules_Executions/
 
 # Editors / OS
 .vscode/

@@ -23,12 +23,8 @@ def resolve_rule_path(source_file: str, rules_dir: Path | None = None) -> Path:
     return path
 
 
-def load_rule(source_file: str, rules_dir: Path | None = None):
-    """Import the module fresh each call so edits take effect without a restart."""
-    path = resolve_rule_path(source_file, rules_dir)
-    module_name = f"_rules.{path.stem}"
-
-    # Drop any cached module so a re-run picks up edited source.
+def _import_from(path: Path, module_name: str):
+    """Import a module from a path, discarding any cached copy first."""
     for key in [k for k in sys.modules if k == module_name or k.startswith(module_name + ".")]:
         del sys.modules[key]
 
@@ -39,13 +35,37 @@ def load_rule(source_file: str, rules_dir: Path | None = None):
     module = importlib.util.module_from_spec(spec)
     sys.modules[module_name] = module
     spec.loader.exec_module(module)
+    return module
 
+
+def _require_run(module, path: Path):
     if not hasattr(module, "run"):
         raise AttributeError(
             f"Rule {path.name} has no run(ctx) function. "
             "Every rule must define: def run(ctx) -> dict"
         )
     return module
+
+
+def load_rule(source_file: str, rules_dir: Path | None = None):
+    """Import the module fresh each call so edits take effect without a restart."""
+    path = resolve_rule_path(source_file, rules_dir)
+    module = _import_from(path, f"_rules.{path.stem}")
+    return _require_run(module, path)
+
+
+def load_rule_at(path: Path):
+    """Import a rule from an explicit path.
+
+    Replay uses this to run the copy frozen into a run folder rather than
+    whatever version happens to sit in rules/ today - which is the only way a
+    replayed run reproduces the original.
+    """
+    path = Path(path).resolve()
+    if not path.exists():
+        raise FileNotFoundError(f"Rule file not found: {path}")
+    module = _import_from(path, f"_replay.{path.stem}")
+    return _require_run(module, path)
 
 
 def read_source(source_file: str, rules_dir: Path | None = None) -> str:

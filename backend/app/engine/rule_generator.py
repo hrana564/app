@@ -25,17 +25,20 @@ A rule is a single Python file. It MUST define exactly one function:
     def run(ctx) -> dict:
 
 `ctx` is provided by the platform and offers:
-    ctx.table("name")  -> quoted table name, usable in FROM / JOIN
-    ctx.sql(query)     -> run read-only SQL; returns Result
+    ctx.table("name")  -> a polars DataFrame holding the rows this run staged
+                          for that table. Types are inferred from the CSV.
     ctx.date           -> datetime.date being audited
-    ctx.log("...")     -> append a note to the run summary
-    ctx.count_rows("name") -> row count of a table
+    ctx.lookback_days  -> how far back this rule reads
+    ctx.log("...")     -> appends a note to the run summary
+    ctx.count_rows("name") -> number of rows in a table
 
-Result helpers:
-    .all()   -> list[dict]
-    .one()   -> dict | None
-    .scalar()-> single value
-    .count() -> int
+There is no SQL and no query engine. You write polars operations.
+
+    frame.filter(pl.col("invoice_value") > LIMIT)
+    frame.group_by("store_id").agg(value=pl.col("invoice_value").sum())
+    frame.join(other, left_on="a", right_on="b", how="inner")
+    frame.sort("value", descending=True).head(200)
+    frame.to_dicts()          # -> list[dict], which is what "rows" expects
 
 The returned dict MUST validate against:
     {
@@ -50,36 +53,41 @@ RULES:
   * Return "status": "success" with the offending rows when the control is BREACHED.
   * Return "status": "success" with empty rows when the data is clean.
   * Return "status": "failed" with error_message when the rule cannot run.
-  * Only reference datasources you are shown. Every column you select must exist.
+  * Only reference datasources you are shown. Every column you use must exist
+    in the schema given to you - polars raises on a column that does not.
   * Declare every threshold as a module-level constant in UPPER_CASE with a
     comment saying what it measures, e.g. LAST_HOUR_RATIO_LIMIT = 1.5.
     Thresholds belong to the rule, not to a runtime configuration table.
-  * Compute helper columns (is_cash, is_exited, hour, ...) in your own SQL.
-    They are NOT provided.
+  * Derive helper columns yourself with with_columns(...) - the hour of a
+    timestamp, whether a tender is cash, whether a person has exited. Nothing
+    is pre-computed for you.
+  * A `.dt.hour()` needs the string parsed first:
+        pl.col("invoice_ts").str.to_datetime("%Y-%m-%d %H:%M:%S").dt.hour()
+  * An empty frame is a normal outcome. Describe it in the summary and return
+    no rows. Do not raise.
   * Cast row values to str/float when embedding them in the summary.
-  * Only import from: json, datetime, statistics, math, decimal
+  * Only import from: polars, json, datetime, statistics, math, decimal,
+    difflib, collections, itertools, functools, re, typing
   * Do NOT write files, open sockets, or import os/subprocess/sys.
   * Emit ONLY the module source. No markdown fences, no commentary.
 """
 
 EXAMPLE_RULE = """\
-# Last-hour value may not exceed this multiple of the hourly average.
+# The last trading hour may not exceed this multiple of the hourly average.
 LAST_HOUR_RATIO_LIMIT = 1.5
+
+LAST_HOUR = 23
+TS_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 
 def run(ctx):
-    \"\"\"FSCS-CA-03  Last-hour invoice value spike.\"\"\"
-    threshold = LAST_HOUR_RATIO_LIMIT
+    limit = LAST_HOUR_RATIO_LIMIT
 
-    totals = ctx.sql(\"\"\"
-        SELECT
-            sum(invoice_value) FILTER (WHERE hour = 23)          AS last_hour,
-            sum(invoice_value) FILTER (WHERE hour < 23) / 23.0   AS hourly_avg
-        FROM ctx.table("pos_sales")
-        WHERE NOT is_void
-    \"\"\").one()
+    sales = ctx.table("ipos_sales").with_columns(
+        hour=pl.col("invoice_ts").str.to_datetime(TS_FORMAT, strict=False).dt.hour(),
+    )
 
-    if not totals or not totals["last_hour"]:
+    if sales.height == 0:
         return {
             "status": "failed",
             "error_message": "No trading data for this date",
@@ -88,42 +96,47 @@ def run(ctx):
             "rows": [],
         }
 
-    ratio = totals["last_hour"] / totals["hourly_avg"] if totals["hourly_avg"] else 0.0
+    hourly = sales.group_by("hour").agg(value=pl.col("invoice_value").sum())
+    last_hour = float(hourly.filter(pl.col("hour") == LAST_HOUR)["value"].sum() or 0)
+    hourly_avg = float(hourly.filter(pl.col("hour") < LAST_HOUR)["value"].mean() or 0)
+    ratio = (last_hour / hourly_avg) if hourly_avg else 0.0
 
-    if ratio < threshold:
+    if ratio < limit:
         return {
             "status": "success",
             "error_message": None,
             "summary": (
-                f"Last-hour value {totals['last_hour']:.0f} is {ratio:.2f}x "
-                f"hourly average (limit {threshold})"
+                f"Last-hour value {last_hour:.0f} is {ratio:.2f}x the "
+                f"{hourly_avg:.0f} hourly average (limit {limit})"
             ),
-            "metrics": {"ratio": round(ratio, 3)},
+            "metrics": {"ratio": round(ratio, 3), "hourly_avg": hourly_avg},
             "rows": [],
         }
 
-    rows = ctx.sql(\"\"\"
-        SELECT invoice_id, invoice_ts, staff_id, store_id,
-               invoice_value, item_group
-        FROM ctx.table("pos_sales")
-        WHERE hour = 23 AND NOT is_void
-        ORDER BY invoice_value DESC
-        LIMIT 50
-    \"\"\").all()
+    rows = (
+        sales.filter(pl.col("hour") == LAST_HOUR)
+        .sort("invoice_value", descending=True)
+        .select(
+            "invoice_id", "invoice_ts", "staff_id", "store_id",
+            "invoice_value", "item_group",
+        )
+        .head(50)
+        .to_dicts()
+    )
 
     return {
         "status": "success",
         "error_message": None,
         "summary": (
-            f"Last hour of trading = {totals['last_hour']:.0f} AED, "
-            f"{ratio:.2f}x the {totals['hourly_avg']:.0f} hourly average "
-            f"(limit {threshold}x), across {len(rows)} invoices"
+            f"Last hour of trading = {last_hour:.0f} AED, {ratio:.2f}x the "
+            f"{hourly_avg:.0f} hourly average (limit {limit}x), "
+            f"across {len(rows)} invoices"
         ),
         "metrics": {
-            "last_hour_value": totals["last_hour"],
-            "hourly_avg": totals["hourly_avg"],
+            "last_hour_value": last_hour,
+            "hourly_avg": hourly_avg,
             "ratio": round(ratio, 3),
-            "threshold": threshold,
+            "threshold": limit,
         },
         "rows": rows,
     }

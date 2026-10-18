@@ -44,7 +44,14 @@ class Settings(BaseSettings):
     llm_model: str = ""
 
     # --- paths ----------------------------------------------------------
-    sourcedata_dir: Path = APP_ROOT / "SourceData"
+    # The CSV landing zone is mounted, not vendored: a volume in production,
+    # a generated tree in development. Nothing in the app writes to it.
+    sourcedata_dir: Path = APP_ROOT / "mount" / "SourceData"
+
+    # Per-run execution folders. Each holds the exact rule source and the
+    # exact CSVs one run read, so a failure can be replayed byte for byte.
+    runs_dir: Path = APP_ROOT / "Rules_Executions"
+
     rules_dir: Path = BACKEND_DIR / "rules"
 
     # --- rule execution guardrails --------------------------------------

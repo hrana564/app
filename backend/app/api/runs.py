@@ -8,6 +8,7 @@ from fastapi import APIRouter, HTTPException, Query
 from sqlalchemy import func, select
 
 from app.api.deps import CurrentUser, SessionDep
+from app.api.scope import scoped
 from app.engine.runner import execute_rule
 from app.models import Run, Rule
 from app.schemas import RunOut
@@ -24,11 +25,17 @@ async def list_runs(
     status_: str | None = Query(None, alias="status"),
     outcome_: str | None = Query(None, alias="outcome"),
     rule_code: str | None = None,
+    entity: str | None = None,
     sort: str = "started_at",
     order: str = "DESC",
 ) -> dict:
     stmt = select(Run)
     count_stmt = select(func.count()).select_from(Run)
+
+    # A run has no entity column of its own - it belongs to the client whose rule
+    # produced it. See app/api/scope.py for why that join is defined once.
+    stmt = scoped(stmt, Run, entity)
+    count_stmt = scoped(count_stmt, Run, entity)
 
     # `status` asks whether the rule ran; `outcome` asks what it found. They are
     # separate columns because they are separate questions, and filtering one
@@ -56,9 +63,15 @@ async def list_runs(
 
 
 @router.get("/summary")
-async def summary(session: SessionDep, _user: CurrentUser) -> dict:
+async def summary(session: SessionDep, _user: CurrentUser, entity: str | None = None) -> dict:
     rows = (
-        await session.execute(select(Run.status, Run.outcome, func.count()).group_by(Run.status, Run.outcome))
+        await session.execute(
+            scoped(
+                select(Run.status, Run.outcome, func.count()).group_by(Run.status, Run.outcome),
+                Run,
+                entity,
+            )
+        )
     ).all()
     tally: dict[tuple[str, str | None], int] = {
         (status, outcome): count for status, outcome, count in rows
@@ -68,7 +81,11 @@ async def summary(session: SessionDep, _user: CurrentUser) -> dict:
     since = datetime.now(timezone.utc) - timedelta(days=7)
     recent = (
         await session.execute(
-            select(func.count()).select_from(Run).where(Run.started_at >= since)
+            scoped(
+                select(func.count()).select_from(Run).where(Run.started_at >= since),
+                Run,
+                entity,
+            )
         )
     ).scalar_one()
 

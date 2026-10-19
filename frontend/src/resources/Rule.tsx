@@ -33,13 +33,13 @@ import {
   RuleStateCell, SeverityField, StatusField, RowCountField,
 } from "../components/ui";
 import { severityColor, statusColor, FONT } from "../theme";
+import { useEntityScope, ENTITIES } from "../entityScope";
 
 /* ================================================================== */
 /* Filter vocabulary - mirrors the Literals in backend/app/schemas.py */
 /* ================================================================== */
 const STATUS_OPTIONS = ["draft", "active", "paused", "retired"] as const;
 const SEVERITY_OPTIONS = ["low", "medium", "high", "critical"] as const;
-const ENTITY_OPTIONS = ["LAD", "ABM"] as const;
 
 /** One row of a rule's history. RuleOut, minus the fields the table ignores. */
 interface VersionRow {
@@ -63,13 +63,18 @@ const isAdminUser = () => getStoredUser()?.role === "admin";
 export const GenerateRuleDialog = () => {
   const [open, setOpen] = useState(false);
   const [prompt, setPrompt] = useState("");
-  const [entity, setEntity] = useState("LAD");
   const [result, setResult] = useState<any>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [configured, setConfigured] = useState<boolean | null>(null);
   const notify = useNotify();
   const refresh = useRefresh();
+
+  // A generated rule belongs to the client the portal is scoped to. The model
+  // is only shown that client's registered datasources, so a second selector here
+  // would be asking the same question in two places with two answers.
+  const { entity } = useEntityScope();
+  const current = ENTITIES.find((e) => e.code === entity);
 
   const openDialog = async () => {
     setOpen(true);
@@ -140,11 +145,11 @@ export const GenerateRuleDialog = () => {
             </Stack>
           ) : (
             <Stack spacing={2} sx={{ mt: 1 }}>
-              <MuiTextField select fullWidth size="small" label="Client entity"
-                value={entity} onChange={(e) => setEntity(e.target.value)}>
-                <MenuItem value="LAD">Laduree (iPOS SaaS, Azure Synapse, HRMS)</MenuItem>
-                <MenuItem value="ABM">Al Boom Marine (iPOS, HRMS, Business Central)</MenuItem>
-              </MuiTextField>
+              <Alert severity="info">
+                The draft will belong to{" "}
+                <strong>{current?.name ?? entity}</strong> — the client the app
+                bar is scoped to. Change it there to generate for the other one.
+              </Alert>
               <MuiTextField label="Describe the audit control" value={prompt}
                 onChange={(e) => setPrompt(e.target.value)} multiline minRows={4} fullWidth
                 placeholder="e.g. Flag POS transactions settled by an employee who exited the company in the last 30 days"
@@ -168,7 +173,7 @@ export const GenerateRuleDialog = () => {
 };
 
 /**
- * Search plus three dropdowns, held in one local object and pushed in a single
+ * Search plus two dropdowns, held in one local object and pushed in a single
  * debounced effect. Two separate effects would race: typing in the search box
  * calls setFilters with just `q`, which drops the dropdowns.
  *
@@ -177,6 +182,10 @@ export const GenerateRuleDialog = () => {
  * on it re-runs this effect on every render. And the push is guarded by a real
  * comparison, because react-admin builds a fresh `filterValues` object on every
  * call even when nothing changed, so an unguarded call never converges and loops.
+ *
+ * There is no entity dropdown here. The client scope belongs to the app bar and
+ * arrives as a permanent filter on <List>, so it cannot be cleared from here and
+ * cannot disagree with the screen above it.
  */
 const RuleToolbar = () => {
   const { setFilters, filterValues } = useListContext<any>();
@@ -184,7 +193,6 @@ const RuleToolbar = () => {
     q: "",
     status: "",
     severity: "",
-    entity: "",
   });
 
   const applyRef = useRef({ setFilters, filterValues });
@@ -239,11 +247,10 @@ const RuleToolbar = () => {
         onChange={(e) => set({ q: e.target.value })} sx={{ minWidth: 220 }} />
       <FilterSelect label="status" options={STATUS_OPTIONS} value={filters.status} />
       <FilterSelect label="severity" options={SEVERITY_OPTIONS} value={filters.severity} />
-      <FilterSelect label="entity" options={ENTITY_OPTIONS} value={filters.entity} />
       {active && (
         <Button
           size="small"
-          onClick={() => setLocal({ q: "", status: "", severity: "", entity: "" })}
+          onClick={() => setLocal({ q: "", status: "", severity: "" })}
         >
           Clear
         </Button>
@@ -1556,16 +1563,22 @@ const RuleTable = () => {
 };
 
 /** Search and filters live in the custom actions toolbar (see RuleToolbar). */
-export const RuleList = () => (
-  <List
-    actions={<RuleToolbar />}
-    sort={{ field: "code", order: "ASC" }}
-    perPage={10}
-    pagination={<Pagination rowsPerPageOptions={[10, 25, 50]} />}
-  >
-    <RuleTable />
-  </List>
-);
+export const RuleList = () => {
+  const { entity } = useEntityScope();
+  return (
+    <List
+      actions={<RuleToolbar />}
+      // The client scope is a permanent filter, so the toolbar's Clear button
+      // cannot quietly drop it and leave the list showing both clients.
+      filter={{ entity }}
+      sort={{ field: "code", order: "ASC" }}
+      perPage={10}
+      pagination={<Pagination rowsPerPageOptions={[10, 25, 50]} />}
+    >
+      <RuleTable />
+    </List>
+  );
+};
 
 /* ================================================================== */
 /* Edit - every save publishes a new draft version                     */

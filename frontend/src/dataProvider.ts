@@ -40,6 +40,18 @@ const compact = (params: Record<string, string | undefined>) => {
   return q.toString();
 };
 
+/**
+ * The same, ready to append to a path.
+ *
+ * `compact` returns a bare query string with no leading `?`, so writing
+ * `` `/api/dashboard${compact(...)}` `` produced `/api/dashboardentity=LAD` and a
+ * 404 that looked like a routing problem. Everything here goes through this.
+ */
+const qs = (params: Record<string, string | undefined>) => {
+  const s = compact(params);
+  return s ? `?${s}` : "";
+};
+
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
@@ -266,17 +278,19 @@ export const api = {
 
   me: () => request<any>("/api/auth/me"),
 
-  dashboard: () => request<any>("/api/dashboard"),
+  dashboard: (entity?: string) => request<any>(`/api/dashboard${qs({ entity })}`),
 
   health: () => request<any>("/health"),
 
-  ticketSummary: () => request<any>("/api/tickets/summary"),
-  runSummary: () => request<any>("/api/runs/summary"),
+  ticketSummary: (entity?: string) =>
+    request<any>(`/api/tickets/summary${qs({ entity })}`),
+  runSummary: (entity?: string) =>
+    request<any>(`/api/rule-runs/summary${qs({ entity })}`),
 
   /** Flat ticket list, for the ungrouped inbox view. */
   listTickets: (params: Record<string, string | undefined>) =>
     request<{ data: any[]; total: number }>(
-      `/api/tickets?${compact(params)}&sort=created_at&order=DESC`,
+      `/api/tickets${qs({ ...params, sort: "created_at", order: "DESC" })}`,
     ),
 
   /**
@@ -288,7 +302,7 @@ export const api = {
    */
   groupedTickets: (params: Record<string, string | undefined>) =>
     request<{ groups: any[]; total_groups: number; total_tickets: number }>(
-      `/api/tickets/grouped?${compact(params)}`,
+      `/api/tickets/grouped${qs(params)}`,
     ),
 
   listRules: () => request<{ data: any[] }>("/api/rules?perPage=200&sort=code&order=ASC"),
@@ -303,8 +317,9 @@ export const api = {
    * Acknowledge every OPEN ticket matching the given filters, server-side.
    *
    * The filters are the ones the inbox is showing, so the action can never
-   * reach a ticket the auditor cannot see. Doing this from the browser would
-   * mean one request per ticket.
+   * reach a ticket the auditor cannot see - `entity` included, because the app
+   * bar's client scope is part of what is on screen. Doing this from the
+   * browser would mean one request per ticket.
    */
   acknowledgeAllTickets: (payload: {
     status?: "acknowledged" | "dismissed";
@@ -312,6 +327,7 @@ export const api = {
     rule_code?: string;
     severity?: string;
     q?: string;
+    entity?: string;
   }) =>
     request<any>("/api/tickets/acknowledge-all", {
       method: "POST",

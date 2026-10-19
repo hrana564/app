@@ -13,6 +13,7 @@ import {
   IdField, JsonBlock, RowsTable, StatusField, ActionIcon,
 } from "../components/ui";
 import { runOutcomeColor, runStatusColor, FONT } from "../theme";
+import { useEntityScope } from "../entityScope";
 
 /**
  * A run summary is written for a detail page, so it runs to 160 characters and
@@ -218,50 +219,56 @@ const widthSx = FIXED_WIDTHS.reduce<Record<string, { width: number }>>(
   {},
 );
 
-export const RunList = () => (
-  <List
-    pagination={<Pagination rowsPerPageOptions={[10, 25, 50, 100]} />}
-    sort={{ field: "started_at", order: "DESC" }}
-  >
-    <Datagrid
-      rowClick="show"
-      bulkActionButtons={false}
-      size="small"
-      sx={{
-        // Fixed layout is what makes "one row, one line" enforceable: columns
-        // take their declared width and the summary absorbs the remainder
-        // instead of the browser redistributing it against the longest cell.
-        "& .RaDatagrid-table": { tableLayout: "fixed" },
-        "& .RaDatagrid-headerCell": {
-          py: 0.75,
-          px: 1.25,
-          fontSize: FONT.label,
-          fontWeight: 700,
-          textTransform: "uppercase",
-          letterSpacing: 0.5,
-          color: "#5b6b82",
-          backgroundColor: "#fafbfe",
-          whiteSpace: "nowrap",
-          overflow: "hidden",
-        },
-        "& .RaDatagrid-rowCell": cellSx,
-        "& .RaDatagrid-headerRow:hover": { backgroundColor: "#f3f6fb" },
-        ...widthSx,
-      }}
+export const RunList = () => {
+  const { entity } = useEntityScope();
+  return (
+    <List
+      // The app bar owns the client scope; see RuleList for why it is a
+      // permanent filter rather than another dropdown on this toolbar.
+      filter={{ entity }}
+      pagination={<Pagination rowsPerPageOptions={[10, 25, 50, 100]} />}
+      sort={{ field: "started_at", order: "DESC" }}
     >
-      <IdField source="id" label="#" />
-      <TextLike source="rule_code" label="Rule" mono />
-      <TextLike source="data_date" label="Data date" secondary />
-      <RunStatusCell source="status" label="Ran" />
-      <RunOutcomeCell source="outcome" label="Outcome" />
-      <RunSummary source="summary" label="Finding" />
-      <TextLike source="duration_ms" label="Took" render={duration} secondary />
-      <TextLike source="triggered_by" label="By" render={(v: string) => TRIGGER_LABEL[v] ?? v} secondary />
-      <TextLike source="started_at" label="Started" render={stamp} secondary />
-      <RerunButton label="" />
-    </Datagrid>
-  </List>
-);
+      <Datagrid
+        rowClick="show"
+        bulkActionButtons={false}
+        size="small"
+        sx={{
+          // Fixed layout is what makes "one row, one line" enforceable: columns
+          // take their declared width and the summary absorbs the remainder
+          // instead of the browser redistributing it against the longest cell.
+          "& .RaDatagrid-table": { tableLayout: "fixed" },
+          "& .RaDatagrid-headerCell": {
+            py: 0.75,
+            px: 1.25,
+            fontSize: FONT.label,
+            fontWeight: 700,
+            textTransform: "uppercase",
+            letterSpacing: 0.5,
+            color: "#5b6b82",
+            backgroundColor: "#fafbfe",
+            whiteSpace: "nowrap",
+            overflow: "hidden",
+          },
+          "& .RaDatagrid-rowCell": cellSx,
+          "& .RaDatagrid-headerRow:hover": { backgroundColor: "#f3f6fb" },
+          ...widthSx,
+        }}
+      >
+        <IdField source="id" label="#" />
+        <TextLike source="rule_code" label="Rule" mono />
+        <TextLike source="data_date" label="Data date" secondary />
+        <RunStatusCell source="status" label="Ran" />
+        <RunOutcomeCell source="outcome" label="Outcome" />
+        <RunSummary source="summary" label="Finding" />
+        <TextLike source="duration_ms" label="Took" render={duration} secondary />
+        <TextLike source="triggered_by" label="By" render={(v: string) => TRIGGER_LABEL[v] ?? v} secondary />
+        <TextLike source="started_at" label="Started" render={stamp} secondary />
+        <RerunButton label="" />
+      </Datagrid>
+    </List>
+  );
+};
 
 const RunDetails = () => {
   const record = useRecordContext<any>();

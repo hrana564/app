@@ -411,5 +411,6 @@ class BulkAck(BaseModel):
     rule_code: str | None = None
     severity: Severity | None = None
     q: str | None = None
+    entity: str | None = None
 
 

@@ -8,6 +8,7 @@ from fastapi import APIRouter, HTTPException, Query
 from sqlalchemy import func, select
 
 from app.api.deps import CurrentUser, SessionDep
+from app.api.scope import scoped
 from app.models import Rule, Run, Ticket
 from app.schemas import BulkAck, TicketAck, TicketOut
 
@@ -18,7 +19,7 @@ router = APIRouter(prefix="/api/tickets", tags=["tickets"])
 MAX_GROUP_SCAN = 5000
 
 
-def _filtered(stmt, count_stmt, *, status, rule_code, severity, q):
+def _filtered(stmt, count_stmt, *, status, rule_code, severity, q, entity=None):
     """Narrow the page query and the count query identically.
 
     Both always join rule_runs: the ticket's summary is the run's summary, and
@@ -26,10 +27,18 @@ def _filtered(stmt, count_stmt, *, status, rule_code, severity, q):
     can never disagree about which rows match - and `total` is what pagination
     trusts.
 
+    `entity` narrows to one client. It is a parameter of this function rather
+    than something the bulk endpoint adds afterwards, because "acknowledge
+    everything on screen" must mean the same rows the screen showed - and that
+    includes the client the app bar is currently scoped to.
+
     count_stmt is unused by the bulk endpoint, which passes a throwaway.
     """
     stmt = stmt.join(Run, Ticket.run_id == Run.id)
     count_stmt = count_stmt.join(Run, Ticket.run_id == Run.id)
+
+    stmt = scoped(stmt, Ticket, entity)
+    count_stmt = scoped(count_stmt, Ticket, entity)
 
     for value, column in ((status, Ticket.status), (severity, Ticket.severity)):
         if value:
@@ -56,6 +65,7 @@ async def list_tickets(
     rule_code: str | None = None,
     severity: str | None = None,
     q: str | None = None,
+    entity: str | None = None,
     sort: str = "created_at",
     order: str = "DESC",
 ) -> dict:
@@ -63,7 +73,7 @@ async def list_tickets(
     stmt, count_stmt = _filtered(
         stmt,
         select(func.count()).select_from(Ticket),
-        status=status_, rule_code=rule_code, severity=severity, q=q,
+        status=status_, rule_code=rule_code, severity=severity, q=q, entity=entity,
     )
 
     col = getattr(Ticket, sort, Ticket.created_at)
@@ -92,7 +102,8 @@ async def acknowledge_all(
     Acknowledge every OPEN ticket matching the given filters, in one transaction.
 
     Scoped by the same parameters as the list so the toolbar can act on exactly
-    what is on screen, and never on the whole table by accident. The filters are
+    what is on screen, and never on the whole table by accident - including the
+    client entity, which is what the app bar is scoped to. The filters are
     echoed back: a bulk audit action that does not report what it did is its own
     problem.
     """
@@ -104,6 +115,7 @@ async def acknowledge_all(
         rule_code=payload.rule_code,
         severity=payload.severity,
         q=payload.q,
+        entity=payload.entity,
     )
     tickets = (await session.execute(stmt)).scalars().all()
 
@@ -121,6 +133,7 @@ async def acknowledge_all(
         "rule_code": payload.rule_code,
         "severity": payload.severity,
         "q": payload.q,
+        "entity": payload.entity,
     }
 
 
@@ -133,6 +146,7 @@ async def grouped_tickets(
     rule_code: str | None = None,
     severity: str | None = None,
     q: str | None = None,
+    entity: str | None = None,
     page: int = Query(1, ge=1),
     perPage: int = Query(25, ge=1, le=200),
     order: str = "DESC",
@@ -149,7 +163,7 @@ async def grouped_tickets(
     stmt, _ = _filtered(
         stmt,
         select(func.count()).select_from(Ticket),
-        status=status_, rule_code=rule_code, severity=severity, q=q,
+        status=status_, rule_code=rule_code, severity=severity, q=q, entity=entity,
     )
     stmt = stmt.add_columns(Run.summary.label("run_summary"))
     order_col = (
@@ -216,18 +230,28 @@ def _group_sort(key: str, group_by: str):
 
 
 @router.get("/summary")
-async def summary(session: SessionDep, _user: CurrentUser) -> dict:
+async def summary(session: SessionDep, _user: CurrentUser, entity: str | None = None) -> dict:
     """Aggregate counts for the dashboard. One round trip, Power Automate friendly."""
     rows = (
         await session.execute(
-            select(Ticket.status, func.count()).group_by(Ticket.status)
+            scoped(
+                select(Ticket.status, func.count()).group_by(Ticket.status),
+                Ticket,
+                entity,
+            )
         )
     ).all()
     by_status = {status: count for status, count in rows}
 
     sev = (
         await session.execute(
-            select(Ticket.severity, func.count()).where(Ticket.status == "open").group_by(Ticket.severity)
+            scoped(
+                select(Ticket.severity, func.count())
+                .where(Ticket.status == "open")
+                .group_by(Ticket.severity),
+                Ticket,
+                entity,
+            )
         )
     ).all()
 

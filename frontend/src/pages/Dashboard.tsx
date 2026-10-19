@@ -10,6 +10,7 @@ import ReportProblemIcon from "@mui/icons-material/ReportProblem";
 import TaskAltIcon from "@mui/icons-material/TaskAlt";
 import { api } from "../dataProvider";
 import { severityColor } from "../theme";
+import { ENTITIES, useEntityScope } from "../entityScope";
 
 interface Dashboard {
   rules: { total: number; active: number; draft: number; paused: number; validated: number };
@@ -69,17 +70,40 @@ export const Dashboard = () => {
   const [data, setData] = useState<Dashboard | null>(null);
   const [sev, setSev] = useState<Record<string, number>>({});
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const { entity } = useEntityScope();
+  const current = ENTITIES.find((e) => e.code === entity);
 
   useEffect(() => {
-    Promise.all([api.dashboard(), api.ticketSummary()])
+    let live = true;
+    setLoading(true);
+    setError(null);
+    Promise.all([api.dashboard(entity), api.ticketSummary(entity)])
       .then(([d, s]: [any, any]) => {
+        if (!live) return;
         setData(d);
         setSev(s.open_by_severity ?? {});
       })
-      .finally(() => setLoading(false));
-  }, []);
+      .catch((e: Error) => live && setError(e.message))
+      // Without this a failed load left `loading` true forever, which renders as
+      // a blank screen under a progress bar that never stops. A page that cannot
+      // load has to say so.
+      .finally(() => live && setLoading(false));
+    return () => { live = false; };
+  }, [entity]);
 
-  if (loading || !data) return <LinearProgress />;
+  if (loading) return <LinearProgress />;
+
+  // No figure beats a wrong one. Half a dashboard renders as real counts, and a
+  // count nobody checked is the one figure an auditor will quote.
+  if (!data) {
+    return (
+      <Alert severity="error">
+        Could not load the overview{error ? ` — ${error}` : ""}. Refusing to draw
+        a partial picture that would read as a real count.
+      </Alert>
+    );
+  }
 
   // Denominator for the control-outcome bars. Deliberately NOT runs.total:
   // runs that failed to execute have no outcome, and counting them here would
@@ -89,9 +113,13 @@ export const Dashboard = () => {
 
   return (
     <Box>
-      <Typography variant="h5" sx={{ mb: 0.5 }}>Continuous Auditing Overview</Typography>
+      <Typography variant="h5" sx={{ mb: 0.5 }}>
+        Continuous Auditing Overview
+      </Typography>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
-        Rules, schedules, execution history and the open ticket queue across both client entities.
+        {current?.name ?? entity} — rules, schedules, execution history and the
+        open ticket queue for this client only. Use the switch in the top bar to
+        change it.
       </Typography>
 
       <Grid container spacing={2.5}>

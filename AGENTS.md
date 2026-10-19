@@ -139,6 +139,45 @@ sources"* about a rule whose file declared two, and the Data Sources screen's
 Derive this twice and the two drift invisibly: the rule still runs correctly
 while the catalogue and the rule's own page disagree about what it reads.
 
+### The client scope also lives in exactly one place
+
+```
+app/api/scope.py:
+
+scoped(stmt, model, entity)   -> the same statement, narrowed to one client
+```
+
+Only `rules_master` knows which client a thing belongs to. A run and a ticket
+carry no entity of their own — they point at a rule and inherit it — so three of
+the five queries that have to filter by client have to **join** to get there.
+Writing that join per endpoint is how the dashboard ends up counting LAD while
+the inbox beside it shows ABM: the two disagree silently and every number still
+looks plausible.
+
+Callers pass the result to **both** the page query and its count query. Narrowing
+one and not the other is how `total` starts lying about what the page holds.
+
+The bulk acknowledge takes `entity` too, and that is the one that matters. Its
+own docstring already said the action must reach "exactly what is on screen" —
+and the client the app bar is scoped to is part of what is on screen. The smoke
+test proves it by filtering on a severity both clients use, so an unscoped call
+would visibly touch more rows.
+
+### The client scope lives in exactly one place in the frontend too
+
+```
+src/entityScope.tsx:
+
+useEntityScope()   -> { entity, setEntity }
+```
+
+One provider above `<Admin>`, one dropdown in the app bar, and no screen carries
+its own copy. Rules and Runs take it as a react-admin **permanent filter**
+(`<List filter={{ entity }}>`) rather than a toolbar dropdown, so a screen's
+"Clear" button cannot quietly drop the client and leave the list showing both.
+The choice is remembered in `localStorage`, because the scheduler and the ETL
+work per client and re-picking it on every reload is noise.
+
 ---
 
 ## 3. Invariants — break these and something will be quietly wrong
@@ -151,6 +190,8 @@ while the catalogue and the rule's own page disagree about what it reads.
 | `snapshot.py` does no ORM and no DB work | `backend/app/engine/` | A run's inputs are frozen before the rule sees them. That is what makes `replay` work with no database and no network. |
 | The runner and replay share the mapping | see §2 | Otherwise replay reports differences that aren't real. |
 | One `declared_tables` for every caller | `app/engine/validation.py` | Validating a rule and writing one must answer "what does it read" identically, or the rule page and the catalogue disagree about it. See §2. |
+| One `scoped()` for every query that filters by client | `backend/app/api/scope.py` | Runs and tickets have no entity column; they inherit the rule's. Five endpoints joining for it themselves is how the dashboard counts a different client than the list beside it. See §2. |
+| One `useEntityScope()` for every screen | `frontend/src/entityScope.tsx` | The app bar owns the client. A screen with its own dropdown can disagree with the header above it, and a "Clear" button can drop the scope silently. See §2. |
 | Rules may only `import` from the allow-list | `app/engine/validation.py` | Enforced by AST scan, not convention. |
 | The catalogue lives in the `datasources` table, not in `app/` | see §3a | A module under `app/` that also answered "what tables exist" would be a second source of truth, and the two would drift the first time an admin registered something. |
 | Consumers take a `Catalog`, never a storage mechanism | `app/engine/catalog.py` | Keeps the ETL, the catalogue, the rules and the runner decoupled. See §3a. |

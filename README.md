@@ -1,4 +1,4 @@
-# ABM Audit Portal
+# Scope Investments — Audit Portal
 
 **Intelligent Continuous Auditing — Laduree & Al Boom Marine**
 
@@ -8,6 +8,11 @@ auditors review and acknowledge.
 
 Rules are **plain Python files**. There is no rule DSL, no new language to learn, and no engine
 between you and the data.
+
+The portal audits two unrelated clients — **LAD** (Laduree) and **ABM** (Al Boom Marine). Every
+screen is scoped to one of them; the switch is in the app bar, and the scope is applied by the
+server rather than by the browser filtering what it already downloaded. See
+[the client scope](#the-client-scope).
 
 ---
 
@@ -648,6 +653,7 @@ app/
 │   │   ├── api/
 │   │   │   ├── deps.py             auth + role gating
 │   │   │   ├── auth.py  rules.py  schedules.py  runs.py  tickets.py
+│   │   │   ├── scope.py            THE ONLY place a query is filtered by client
 │   │   │   └── datasources.py      register / remove + overview + row preview
 │   │   └── engine/
 │   │       ├── catalog.py          THE CONTRACT: what an entity may read
@@ -677,6 +683,8 @@ app/
     ├── vite.config.ts              dev proxy to :8000
     └── src/
         ├── App.tsx                 Admin + resources
+        ├── Layout.tsx              app bar: the product name + the client switch
+        ├── entityScope.tsx         THE ONLY place the client is chosen
         ├── dataProvider.ts         the ONLY module that talks to the API
         ├── authProvider.ts
         ├── theme.ts
@@ -734,6 +742,20 @@ CORS_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
 All endpoints except `/health`, `/api/auth/login` and `/api/dashboard` require
 `Authorization: Bearer <token>`.
 
+### The client scope
+
+The portal audits two clients, **LAD** (Laduree) and **ABM** (Al Boom Marine).
+Every screen is scoped to one of them, chosen once in the app bar and applied by
+the server — never by the browser filtering what it already downloaded.
+
+`?entity=LAD|ABM` is accepted on rules, runs, tickets (including `/grouped`,
+`/summary` and `acknowledge-all`), both summaries, `/api/dashboard` and the
+datasource overview. Omit it and the endpoint answers for every client.
+
+Only `rules_master` carries the client. A run and a ticket inherit it from the
+rule that produced them, so those endpoints join to reach it — that join lives in
+`app/api/scope.py` and nowhere else. See AGENTS.md §2.
+
 ### Auth
 | Method | Path | Role | Description |
 |---|---|---|---|
@@ -766,14 +788,14 @@ All endpoints except `/health`, `/api/auth/login` and `/api/dashboard` require
 | GET/POST | `/api/rule-schedules` | any / admin | List (`?rule_code=`) / create |
 | GET/PUT/DELETE | `/api/rule-schedules/{id}` | any / admin | Read / update / delete |
 | GET | `/api/rule-schedules/cron/jobs` | any | Live APScheduler jobs |
-| GET | `/api/rule-runs` | any | `?status&outcome&rule_code&page&perPage&sort&order` — `status` filters execution, `outcome` filters findings; neither implies the other |
-| GET | `/api/rule-runs/summary` | any | `{running, completed, failed, breaches, cleared}` |
+| GET | `/api/rule-runs` | any | `?status&outcome&rule_code&entity&page&perPage&sort&order` — `status` filters execution, `outcome` filters findings; neither implies the other |
+| GET | `/api/rule-runs/summary` | any | `?entity` — `{running, completed, failed, breaches, cleared}` |
 | GET | `/api/rule-runs/{id}` | any | One run |
 | POST | `/api/rule-runs/{id}/rerun` | any | Re-run same rule version + data date |
-| GET | `/api/tickets/grouped` | any | `?group_by=rule_code\|severity\|status` — grouped across the **whole** filtered set, paginated by group, so counts are never fragmented |
-| POST | `/api/tickets/acknowledge-all` | any | Scoped bulk acknowledge — one transaction, filters echoed back |
-| GET | `/api/tickets` | any | `?status&severity&rule_code` |
-| GET | `/api/tickets/summary` | any | Counts + open by severity |
+| GET | `/api/tickets/grouped` | any | `?group_by=rule_code\|severity\|status&entity` — grouped across the **whole** filtered set, paginated by group, so counts are never fragmented |
+| POST | `/api/tickets/acknowledge-all` | any | Scoped bulk acknowledge — one transaction, filters echoed back. Takes `entity`, so it reaches exactly the tickets on screen and no others |
+| GET | `/api/tickets` | any | `?status&severity&rule_code&q&entity` |
+| GET | `/api/tickets/summary` | any | `?entity` — counts + open by severity |
 | GET | `/api/tickets/{id}` | any | One ticket |
 | POST | `/api/tickets/{id}/acknowledge` | **any** | `{status, note}` |
 | POST | `/api/tickets/{id}/reopen` | any | Back to open |
@@ -785,7 +807,7 @@ All endpoints except `/health`, `/api/auth/login` and `/api/dashboard` require
 | GET | `/api/datasources/available-dates?entity=LAD` | any | Day folders present, plus the latest |
 | POST | `/api/datasources` | admin | Register a table. Columns default to the file's header |
 | DELETE | `/api/datasources/{id}` | admin | Remove a registration. 409 naming the rules, while any active rule reads it |
-| GET | `/api/dashboard` | — | Aggregated counters (unauthenticated, for the login screen) |
+| GET | `/api/dashboard` | — | `?entity` — aggregated counters for the landing screen (unauthenticated) |
 
 ---
 
@@ -1011,7 +1033,7 @@ cd backend
 .\.venv\Scripts\python.exe scripts\smoke_test.py
 ```
 
-**161 assertions** covering: health, both logins, rejection of bad credentials and missing tokens,
+**198 assertions** covering: health, both logins, rejection of bad credentials and missing tokens,
 RBAC for every admin-only endpoint, both entities and their systems, datasource listing,
 **the admin's catalogue workflow** (discover what the ETL delivered, columns read from the CSV header,
 register, remove, and the refusal for removing a table live rules read), rule registration,
@@ -1024,13 +1046,16 @@ including duplicate detection and pause/reactivate deregistration, **the validat
 (banned imports, activation refusal, cross-entity table reference inside an SQL string), **alert
 policy), **execution and outcome being independent** (a completed run always has an outcome, a
 run that did not execute has none, and `?status=` and `?outcome=` filter separately), the run
-ledger and the version each run was produced by, dashboard and generation status.
+ledger and the version each run was produced by, dashboard and generation status, and **the client
+scope** (LAD + ABM must equal the whole on every list and summary, a scoped list carries only that
+client's rules, the scoped dashboard agrees with the scoped lists, and the bulk acknowledge reaches
+only the client it was given — then puts every ticket back).
 
 ```
-RESULT: 161 passed, 0 failed
+RESULT: 198 passed, 0 failed
 ```
 
-The suite is **idempotent** — run it twice and it still reports 161/161. The deduplication
+The suite is **idempotent** — run it twice and it still reports 198/198. The deduplication
 assertions work on ticket *identity* rather than absolute counts, so a previous run's tickets don't
 make the next run fail.
 

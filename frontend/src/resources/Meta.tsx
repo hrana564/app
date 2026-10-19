@@ -1,6 +1,6 @@
 import { Fragment, useCallback, useEffect, useState } from "react";
 import {
-  Alert, Box, Button, Card, CardContent, Chip, CircularProgress, Collapse,
+  Alert, Box, Button, Card, CardContent, Chip, CircularProgress,
   Dialog, DialogActions, DialogContent, DialogTitle, IconButton, MenuItem,
   Stack, Table, TableBody, TableCell, TableContainer, TableHead, TableRow,
   TextField, ToggleButton, ToggleButtonGroup, Tooltip, Typography,
@@ -21,6 +21,7 @@ import {
   type DiscoveredFile,
 } from "../dataProvider";
 import { FONT } from "../theme";
+import { ENTITIES, useEntityScope } from "../entityScope";
 
 /* ================= Datasources ================= */
 
@@ -40,7 +41,10 @@ type View = "registered" | "landed";
 
 export const DatasourceList = () => {
   const notify = useNotify();
-  const [entity, setEntity] = useState("LAD");
+  // The client comes from the app bar, not from a control on this screen. Two
+  // pickers for the same question is how the list below ends up describing one
+  // client while the header says another.
+  const { entity } = useEntityScope();
   const [view, setView] = useState<View>("registered");
   const [dataDate, setDataDate] = useState<string>("");
   const [overview, setOverview] = useState<DatasourceOverview | null>(null);
@@ -67,6 +71,9 @@ export const DatasourceList = () => {
     return () => { live = false; };
   }, [entity, dataDate, load]);
 
+  // The date list belongs to the client, so a client change invalidates it.
+  useEffect(() => { setExpanded({}); }, [entity]);
+
   const onToggle = (name: string) =>
     setExpanded((prev) => ({ ...prev, [name]: !prev[name] }));
 
@@ -92,6 +99,7 @@ export const DatasourceList = () => {
   const active = overview.registered;
   const unconsumed = overview.discovered.filter((d) => d.state === "new");
   const absent = active.filter((r) => r.landing === "absent");
+  const current = ENTITIES.find((e) => e.code === entity);
 
   return (
     <Box>
@@ -102,14 +110,12 @@ export const DatasourceList = () => {
         justifyContent="space-between"
         sx={{ mb: 2, flexWrap: "wrap", gap: 1 }}
       >
-        <TextField
-          select size="small" label="Entity" value={entity}
-          onChange={(e) => { setEntity(e.target.value); setExpanded({}); }}
-          sx={{ minWidth: 200 }}
-        >
-          <MenuItem value="LAD">LAD — Laduree</MenuItem>
-          <MenuItem value="ABM">ABM — Al Boom Marine</MenuItem>
-        </TextField>
+        <Typography variant="h6" sx={{ fontWeight: 700 }}>
+          {current?.name ?? entity}
+          <Typography component="span" variant="body2" color="text.secondary" sx={{ ml: 1 }}>
+            what the ETL delivered for this client, and what we consume
+          </Typography>
+        </Typography>
 
         <Stack direction="row" spacing={1.5} alignItems="center" sx={{ flexWrap: "wrap", gap: 1 }}>
           <TextField
@@ -337,10 +343,14 @@ const RegisteredTable = ({
                       )}
                     </TableCell>
                 </TableRow>
+                {/* Rendered only while open. Collapsing an always-present row left
+                    a 1px placeholder per table in the DOM, so the table held nine
+                    rows twice over - wrong to anything counting them, including a
+                    screen reader. */}
+                {open && (
                 <TableRow>
                   <TableCell colSpan={8} sx={{ py: 0, border: 0 }}>
-                    <Collapse in={open} timeout="auto" unmountOnExit>
-                      <Box sx={{ py: 2 }}>
+                    <Box sx={{ py: 2 }}>
                         {row.description && (
                           <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
                             {row.description}
@@ -353,10 +363,10 @@ const RegisteredTable = ({
                         >
                           {row.path_template}
                         </Typography>
-                      </Box>
-                    </Collapse>
+                    </Box>
                   </TableCell>
                 </TableRow>
+                )}
               </Fragment>
             );
           })}

@@ -50,7 +50,7 @@ export const Login = () => {
             >
               <LockOutlinedIcon fontSize="large" />
             </Box>
-            <Typography variant="h5">ABM Audit Portal</Typography>
+            <Typography variant="h5">Scope Investments — Audit Portal</Typography>
             <Typography variant="body2" color="text.secondary" textAlign="center">
               Continuous auditing for Laduree &amp; Al Boom Marine
             </Typography>

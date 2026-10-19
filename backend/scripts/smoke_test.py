@@ -680,6 +680,118 @@ def main() -> int:
               dash["runs"]["completed"] == dash["runs"]["breaches"] + dash["runs"]["cleared"],
               str(dash["runs"]))
 
+        # --- client entity scope -----------------------------------------
+        # Every screen in the portal is scoped to one client, so the split has
+        # to hold on all four queries at once. The strong assertion is that the
+        # parts add up to the whole: a filter that silently matched nothing, or
+        # matched everything, passes a weaker check than this.
+        section("client entity scope")
+        both = ("LAD", "ABM")
+
+        def split(path: str, key: str = "total", **params) -> dict:
+            whole = c.get(path, headers=ah, params=params).json()[key]
+            parts = {
+                e: c.get(path, headers=ah, params={**params, "entity": e}).json()[key]
+                for e in both
+            }
+            check(f"{path}: LAD + ABM == all clients", sum(parts.values()), whole)
+            check(f"{path}: LAD and ABM are disjoint", parts["LAD"] > 0 and parts["ABM"] > 0,
+                  str(parts))
+            return parts
+
+        split("/api/rules")
+        split("/api/rule-runs")
+        split("/api/tickets")
+        split("/api/tickets/grouped", key="total_tickets")
+        split("/api/tickets/summary")
+        split("/api/rule-runs/summary")
+
+        # A run and a ticket carry no entity of their own - they inherit the
+        # rule's - so the join is the thing most likely to be dropped.
+        lad_runs = c.get("/api/rule-runs", headers=ah,
+                         params={"entity": "LAD", "perPage": 200}).json()
+        check("a scoped run list carries only that client's rules",
+              all(x["rule_code"].startswith("LAD") for x in lad_runs["data"]),
+              str([x["rule_code"] for x in lad_runs["data"][:5]]))
+        lad_tix = c.get("/api/tickets", headers=ah,
+                        params={"entity": "LAD", "perPage": 500}).json()
+        check("a scoped ticket list carries only that client's rules",
+              all(x["rule_code"].startswith("LAD") for x in lad_tix["data"]),
+              str([x["rule_code"] for x in lad_tix["data"][:5]]))
+
+        lad_dash = c.get("/api/dashboard", params={"entity": "LAD"}).json()
+        check("dashboard reports the client it was scoped to", lad_dash["entity"], "LAD")
+        check("scoped dashboard rules == scoped rules list",
+              lad_dash["rules"]["total"],
+              c.get("/api/rules", headers=ah, params={"entity": "LAD"}).json()["total"])
+        check("scoped dashboard tickets == scoped ticket list",
+              lad_dash["tickets"]["total"],
+              c.get("/api/tickets", headers=ah, params={"entity": "LAD"}).json()["total"])
+        check("scoped dashboard schedules stay inside the client",
+              lad_dash["schedules"]["total"] <= lad_dash["rules"]["versions"],
+              str(lad_dash["schedules"]))
+
+        # The dangerous one. "Acknowledge everything on screen" must mean the
+        # client the auditor is looking at, not every client in the portal - so
+        # the scope has to reach the bulk call, not just the list beside it.
+        #
+        # The filter has to match tickets in BOTH clients, or a scoped bulk call
+        # and an unscoped one touch the same rows and the check proves nothing.
+        # No rule spans both clients - a rule belongs to exactly one - so the
+        # filter is a severity that both happen to use. Everything touched is
+        # reopened afterwards, so the inbox is left as it was found.
+        sev = None
+        for level in ("critical", "high", "medium", "low"):
+            spread = {
+                e: c.get("/api/tickets", headers=ah, params={
+                    "severity": level, "entity": e, "status": "open",
+                    "perPage": 1}).json()["total"]
+                for e in both
+            }
+            if all(spread[e] > 0 for e in both):
+                sev = level
+                break
+        check("a severity exists for both clients, to scope against", sev is not None,
+              "no shared severity - the bulk scope check is skipped")
+
+        if sev:
+            lad_open = c.get("/api/tickets", headers=ah, params={
+                "severity": sev, "entity": "LAD", "status": "open",
+                "perPage": 500}).json()["data"]
+            all_open = c.get("/api/tickets", headers=ah, params={
+                "severity": sev, "status": "open", "perPage": 500}).json()
+            check("the unscoped set really is larger than LAD's alone",
+                  len(lad_open) < all_open["total"],
+                  f"lad={len(lad_open)} all={all_open['total']}")
+
+            abm_open_before = all_open["total"] - len(lad_open)
+            r = c.post("/api/tickets/acknowledge-all", headers=ah,
+                       json={"entity": "LAD", "status": "dismissed", "severity": sev,
+                             "note": "smoke: scope probe"})
+            body = r.json() if r.status_code == 200 else {}
+            touched = set(body.get("ticket_nos", []))
+            lad_only = {t["ticket_no"] for t in lad_open}
+
+            check("bulk acknowledge touched only LAD tickets",
+                  bool(touched) and touched <= lad_only,
+                  f"touched={len(touched)} lad={len(lad_only)}")
+            check("bulk acknowledge touched fewer than the unscoped set",
+                  len(touched) < all_open["total"],
+                  f"{len(touched)} vs {all_open['total']}")
+            check("bulk acknowledge echoed the scope it used", body.get("entity"), "LAD")
+            check("the other client's open tickets were left alone",
+                  c.get("/api/tickets", headers=ah, params={
+                      "severity": sev, "entity": "ABM", "status": "open",
+                      "perPage": 1}).json()["total"], abm_open_before)
+
+            # Put the inbox back exactly as it was found.
+            for t in lad_open:
+                c.post(f"/api/tickets/{t['id']}/reopen", headers=ah)
+            check("the inbox is back as it was found",
+                  c.get("/api/tickets", headers=ah, params={
+                      "severity": sev, "entity": "LAD", "status": "open",
+                      "perPage": 500}).json()["total"], len(lad_open))
+
         section("rule generation")
         gen = c.get("/api/rules/generate/status", headers=ud).json()
         check(f"generate status configured={gen['configured']}",

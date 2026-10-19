@@ -145,22 +145,39 @@ async def health() -> dict:
 
 
 @app.get("/api/dashboard", tags=["meta"])
-async def dashboard(session: SessionDep) -> dict:
-    """One aggregated payload for the landing screen."""
-    from sqlalchemy import func, select
+async def dashboard(session: SessionDep, entity: str | None = None) -> dict:
+    """One aggregated payload for the landing screen.
 
+    Scoped to one client, like every other screen. A landing page that counts
+    both clients while the lists behind it show one is worse than no numbers: the
+    first click out of it disagrees with it.
+    """
+    from sqlalchemy import and_, func, select
+
+    from app.api.scope import scoped
     from app.models import Rule, RuleSchedule, Run, Ticket
 
     async def count(model, *where) -> int:
         stmt = select(func.count()).select_from(model)
         for clause in where:
             stmt = stmt.where(clause)
-        return (await session.execute(stmt)).scalar_one()
+        return (await session.execute(scoped(stmt, model, entity))).scalar_one()
 
     head = Rule.is_version_active.is_(True)
-    live = select(Rule.code).where(head, Rule.status == "active")
+
+    # A schedule is a rule's cadence and is keyed by the rule's code, so scoping
+    # schedules to a client means scoping them to the codes that client's rules
+    # hold. `scoped_head` is that rule-scope, folded into one clause.
+    scoped_head = head if not entity else and_(head, Rule.entity == entity.upper())
+
+    async def schedule_count(codes_of) -> int:
+        stmt = select(func.count()).select_from(RuleSchedule).where(
+            RuleSchedule.rule_code.in_(codes_of)
+        )
+        return (await session.execute(stmt)).scalar_one()
 
     return {
+        "entity": entity.upper() if entity else None,
         "rules": {
             # Only head versions count as rules; earlier versions are history.
             "total": await count(Rule, head),
@@ -171,9 +188,11 @@ async def dashboard(session: SessionDep) -> dict:
             "versions": await count(Rule),
         },
         "schedules": {
-            "total": await count(RuleSchedule),
+            "total": await schedule_count(select(Rule.code).where(scoped_head)),
             # A schedule runs iff its rule code has a live, active head.
-            "live": await count(RuleSchedule, RuleSchedule.rule_code.in_(live)),
+            "live": await schedule_count(
+                select(Rule.code).where(scoped_head, Rule.status == "active")
+            ),
         },
         "runs": {
             "total": await count(Run),

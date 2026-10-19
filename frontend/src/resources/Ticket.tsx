@@ -16,6 +16,7 @@ import ArrowForwardIcon from "@mui/icons-material/ArrowForward";
 import { api } from "../dataProvider";
 import { DotLabel, RowsTable } from "../components/ui";
 import { severityColor, statusColor, FONT } from "../theme";
+import { useEntityScope } from "../entityScope";
 
 const STATUS_OPTIONS = ["open", "acknowledged", "dismissed"] as const;
 const SEVERITY_OPTIONS = ["critical", "high", "medium", "low"] as const;
@@ -183,7 +184,14 @@ const ReopenButton = ({ record: explicit }: { record?: any }) => {
 interface BulkScope {
   describe: string;
   count: number;
-  payload: { rule_code?: string; severity?: string; q?: string; status?: string };
+  payload: {
+    rule_code?: string;
+    severity?: string;
+    q?: string;
+    status?: string;
+    /** The client the inbox is scoped to. Part of the scope, not a detail. */
+    entity?: string;
+  };
 }
 
 const BulkAckDialog = ({
@@ -544,6 +552,7 @@ export const TicketList = () => {
   const [loading, setLoading] = useState(true);
   const [scope, setScope] = useState<BulkScope | null>(null);
   const ruleNames = useRuleNames();
+  const { entity } = useEntityScope();
 
   // Debounced search, so typing does not fire a request per keystroke.
   const [q, setQ] = useState("");
@@ -565,6 +574,8 @@ export const TicketList = () => {
       status: filters.status || undefined,
       severity: filters.severity || undefined,
       rule_code: filters.rule_code || undefined,
+      // Part of what is on screen, so it belongs in the request that draws it.
+      entity,
       page: String(page + 1),
       perPage: String(perPage),
     };
@@ -582,7 +593,7 @@ export const TicketList = () => {
       .finally(() => {
         if (nonce === nonceRef.current) setLoading(false);
       });
-  }, [q, filters, groupBy, page, perPage]);
+  }, [q, filters, groupBy, page, perPage, entity]);
 
   useEffect(() => {
     load();
@@ -630,6 +641,10 @@ export const TicketList = () => {
       rule_code: s.payload.rule_code,
       severity: s.payload.severity,
       q: s.payload.q,
+      // Same client scope the page is drawn with. Without it the confirmation
+      // dialog would count one client's tickets and the button behind it would
+      // acknowledge both clients'.
+      entity,
     };
     api.listTickets({ ...params, perPage: "1" })
       .then((d) => setScope({ ...s, count: d.total }))
@@ -709,6 +724,7 @@ export const TicketList = () => {
                   rule_code: filters.rule_code || undefined,
                   severity: filters.severity || undefined,
                   q: q || undefined,
+                  entity,
                 },
               })
             }>

@@ -7,7 +7,7 @@ import { useNavigate } from "react-router";
 import {
   Alert, Autocomplete, Box, Button, Card, CardContent, Chip, CircularProgress,
   Dialog, DialogActions, DialogContent, DialogTitle, Divider, IconButton,
-  MenuItem, Stack, Table, TableBody, TableCell, TableContainer, TableHead,
+  Menu, MenuItem, Stack, Table, TableBody, TableCell, TableContainer, TableHead,
   TableRow, TextField as MuiTextField, Tooltip, Typography,
 } from "@mui/material";
 import AutoAwesomeIcon from "@mui/icons-material/AutoAwesome";
@@ -30,6 +30,7 @@ import {
 } from "../dataProvider";
 import { CadenceEditor, type CadenceConfig } from "../components/CadenceEditor";
 import { DatasourcePicker } from "../components/DatasourcePicker";
+import { STARTERS, starterPrompt } from "../components/rulePrompts";
 import { RunOutcomeCell, RunStatusCell } from "./Run";
 import {
   ActionIcon, CodeBlock, DotLabel, EntityField, IdField, JsonBlock, RowsTable,
@@ -91,6 +92,7 @@ export const GenerateRuleDialog = () => {
   const [tables, setTables] = useState<string[]>([]);
   const [lookback, setLookback] = useState(1);
   const [testDate, setTestDate] = useState("");
+  const [starterMenu, setStarterMenu] = useState<HTMLElement | null>(null);
   const [overview, setOverview] = useState<DatasourceOverview | null>(null);
   const [result, setResult] = useState<RuleGenerateResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -203,6 +205,24 @@ export const GenerateRuleDialog = () => {
   const options = useMemo(
     () => overview?.registered ?? [],
     [overview],
+  );
+
+  // The templates are written from the catalogue's own knowledge of each
+  // table - its grain, its description, its columns - so the user is left
+  // filling in the judgement, which is the only part that is theirs.
+  const promptTables = useMemo(
+    () =>
+      tables
+        .map((name) => options.find((o) => o.name === name))
+        .filter((o): o is DatasourceRow => Boolean(o))
+        .map((o) => ({
+          name: o.name,
+          system: o.system,
+          description: o.description,
+          grain: o.grain,
+          columns: o.columns ?? {},
+        })),
+    [tables, options],
   );
 
   // A table whose file has not landed cannot be tested, and the trial will
@@ -343,11 +363,42 @@ export const GenerateRuleDialog = () => {
               </Alert>
 
               <MuiTextField label="Describe the audit control" value={prompt}
-                onChange={(e) => setPrompt(e.target.value)} multiline minRows={4} fullWidth
+                onChange={(e) => setPrompt(e.target.value)} multiline minRows={7} fullWidth
                 placeholder="e.g. Flag POS transactions settled by an employee who exited the company in the last 30 days"
-                helperText="Plain language. Say what should not happen, and what the finding should show." />
+                helperText="Plain language. Say what should not happen, and what the finding should show. Anything in angle brackets is a question for you to answer." />
 
-              <Autocomplete multiple options={options} value={options.filter((o) => tables.includes(o.name))}
+              <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" gap={1}>
+                <Button size="small" variant="outlined" startIcon={<AutoAwesomeIcon />}
+                  onClick={(e) => setStarterMenu(e.currentTarget)}>
+                  Start from a template
+                </Button>
+                <Menu anchorEl={starterMenu} open={Boolean(starterMenu)} onClose={() => setStarterMenu(null)}>
+                  {STARTERS.map((s) => (
+                    <MenuItem
+                      key={s.id}
+                      onClick={() => {
+                        setPrompt(starterPrompt(s.id, promptTables, lookback));
+                        setStarterMenu(null);
+                      }}
+                    >
+                      <Box>
+                        <Typography variant="body2">{s.label}</Typography>
+                        <Typography variant="caption" color="text.secondary" display="block">
+                          {s.hint}
+                          {s.tables > 1 ? ` - needs ${s.tables} datasources` : ""}
+                        </Typography>
+                      </Box>
+                    </MenuItem>
+                  ))}
+                </Menu>
+                <Typography variant="caption" color="text.secondary">
+                  A template fills in what the catalogue already knows - the table,
+                  its grain, its columns - and leaves you the judgement.
+                </Typography>
+              </Stack>
+
+              <Autocomplete multiple options={options}
+                value={tables.map((n) => options.find((o) => o.name === n)).filter(Boolean) as DatasourceRow[]}
                 onChange={(_, next) => setTables(next.map((o) => o.name))}
                 getOptionLabel={(o) => o.name}
                 isOptionEqualToValue={(a, b) => a.name === b.name}

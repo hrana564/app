@@ -9,9 +9,30 @@ rule that works and a rule that looks like it works is the whole subject.
 
 ---
 
+## The five steps
+
+1. **Open it.** Rules → **Create a rule**.
+2. **Choose the datasources.** Tick every table the control needs, and no
+   others. The selection binds: the model sees only these, and a rule that
+   reads anything else is refused before it runs.
+3. **Write the prompt.** Use **Start from a template** to get the shape, then
+   fill in the blanks. Say what should not happen, what a finding shows, and
+   what the legitimate case looks like.
+4. **Set the lookback and the test date.** The lookback is how far back the
+   rule reads. The test date is the day it is run against while it is being
+   written - pick a day with something wrong on it, or the test proves
+   nothing.
+5. **Read it, then save.** The agent writes the rule, runs it, and repairs it
+   until it runs. You get the source, the verdict and what it found. Read the
+   code, press **Save as draft**, then activate it when you are ready.
+
+Nothing is created until step 5.
+
+---
+
 ## 1. What the button actually does
 
-**Rules → Create a rule** opens a form with three things:
+**Rules → Create a rule** opens a form with four things:
 
 | Field | What it means |
 |---|---|
@@ -49,6 +70,10 @@ is created and you are told what it tried and why each attempt failed.
 
 ## 2. Writing the prompt
 
+> **In a hurry? Use the template, or the button in the dialog.**
+> **Start from a template** fills in everything the catalogue already knows -
+> the table, its grain, its columns - and leaves you the blanks.
+
 The model is shown your datasources, their real columns, and a few real rows
 from each. It is never shown anything else. What it has to work out from your
 sentence is the *judgement* you want applied.
@@ -77,6 +102,55 @@ are. Describe the control and let it work out the data.
 **Name the systems, not the columns.** "An employee who exited" is a control.
 "`employment_status == 'exited'`" is a guess about the data that will be
 wrong the moment the ETL renames a column.
+
+### The master template
+
+Copy this, fill in the blanks, and it is a good prompt. The blanks are in
+angle brackets.
+
+```
+Flag <the thing that should not happen> in <the table>.
+
+<the table> holds <what it holds> - <what one row is>.
+A finding is <one row per what>, showing <the fields an auditor would act on>.
+Do not flag <the case that looks the same but is legitimate>.
+```
+
+For a control that spans two systems:
+
+```
+Flag <the thing that should not happen>, by comparing <table A> with <table B>.
+
+<table A> holds <what it holds> - <what one row is>.
+<table B> holds <what it holds> - <what one row is>.
+They are linked by <the key that joins them>.
+A finding is <one row per what>, showing <the fields an auditor would act on>.
+Do not flag <the case that looks the same but is legitimate>.
+```
+
+The last line is the one people leave out, and it is the one that matters
+most. A control that flags the legitimate case produces a ticket every day,
+and a rule nobody trusts is a rule nobody reads.
+
+### A worked example
+
+The cross-system control that CA-06 does, written out in full:
+
+```
+Flag POS transactions settled by employees who have already left the company,
+by comparing ipos_sales with hr_employees.
+
+ipos_sales holds Point-of-sale invoice header - one row per invoice.
+hr_employees holds Employee master - one row per employee.
+They are linked by <staff_id in ipos_sales> to <employee_id in hr_employees>.
+A finding is one row per employee, showing the employee's name, the number of
+transactions they settled and the total value.
+Do not flag transactions settled before the employee's exit date.
+```
+
+Every angle bracket is a decision only you can make - what the thing is
+called, how the two systems link, what a finding shows, and what the
+legitimate case is. The rest is the catalogue, which the portal already had.
 
 ---
 

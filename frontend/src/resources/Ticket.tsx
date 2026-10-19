@@ -423,7 +423,10 @@ const TicketInbox = ({
 }) => {
   const { data, isPending } = useListContext<any>();
   const ruleNames = useRuleNames();
-  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+  // Tracks what is OPEN, not what is closed. Empty means every group is shut,
+  // which is the state an inbox should open in: four rules with counts, rather
+  // than twenty-five rows before the eye has decided what to look at.
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const navigate = useNavigate();
 
   const tickets: any[] = useMemo(() => data ?? [], [data]);
@@ -467,18 +470,18 @@ const TicketInbox = ({
 
   const openCount = tickets.filter((t) => t.status === "open").length;
 
-  // Collapse state must not survive a change of result set. A group collapsed
-  // before a search would otherwise reappear with no rows under it, which reads
-  // as "this rule has no tickets" rather than "you closed this".
+  // Expansion must not survive a change of result set. A group opened before a
+  // search would otherwise still be open over an entirely different set of
+  // tickets, which reads as stale rather than remembered.
   const signature = useMemo(() => tickets.map((t) => t.id).join(","), [tickets]);
   useEffect(() => {
-    setCollapsed({});
+    setExpanded({});
   }, [signature]);
 
-  const allCollapsed = groups.length > 0 && groups.every((g) => collapsed[g.key]);
+  const allExpanded = groups.length > 0 && groups.every((g) => expanded[g.key]);
   const toggleAll = () =>
-    setCollapsed(
-      allCollapsed ? {} : Object.fromEntries(groups.map((g) => [g.key, true])),
+    setExpanded(
+      allExpanded ? {} : Object.fromEntries(groups.map((g) => [g.key, true])),
     );
 
   if (isPending) {
@@ -515,7 +518,7 @@ const TicketInbox = ({
           <Box sx={{ flex: 1 }} />
           {groupBy && groups.length > 1 && (
             <Button size="small" onClick={toggleAll}>
-              {allCollapsed ? "Expand all" : "Collapse all"}
+              {allExpanded ? "Collapse all" : "Expand all"}
             </Button>
           )}
         </Stack>
@@ -537,20 +540,34 @@ const TicketInbox = ({
 
           <TableBody>
             {groups.map((group) => {
-              const isCollapsed = Boolean(collapsed[group.key]);
+              // Ungrouped views have nothing to open, so they stay flat.
+              const isCollapsed = Boolean(groupBy && group.label) && !expanded[group.key];
               const groupOpen = group.tickets.filter((t) => t.status === "open").length;
               return (
                 <Fragment key={group.key}>
                   {group.label && (
-                    <TableRow sx={{ bgcolor: "#eef2f8" }}>
+                    <TableRow
+                      hover
+                      sx={{ bgcolor: "#eef2f8", cursor: "pointer" }}
+                      onClick={() =>
+                        setExpanded((prev) => ({ ...prev, [group.key]: !prev[group.key] }))
+                      }
+                    >
                       <TableCell colSpan={7} sx={{ py: 1 }}>
                         <Stack direction="row" spacing={1} alignItems="center">
                           <Box
                             role="button"
-                            aria-label={isCollapsed ? `Expand ${group.label}` : `Collapse ${group.label}`}
-                            onClick={() =>
-                              setCollapsed((prev) => ({ ...prev, [group.key]: !prev[group.key] }))
+                            aria-label={
+                              isCollapsed ? `Expand ${group.label}` : `Collapse ${group.label}`
                             }
+                            onClick={(e) => {
+                              // The whole header row is also clickable. Without
+                              // this the chevron toggles and then bubbles to the
+                              // row, which toggles again - so nothing appears to
+                              // happen.
+                              e.stopPropagation();
+                              setExpanded((prev) => ({ ...prev, [group.key]: !prev[group.key] }));
+                            }}
                             sx={{
                               width: 26, height: 26, display: "flex", alignItems: "center",
                               justifyContent: "center", borderRadius: 1, cursor: "pointer",

@@ -203,6 +203,35 @@ settle:
 **Nothing here is stored.** The payload is derived on read precisely so there is
 no summary table to fall out of step with `rule_runs` and `tickets`.
 
+### A partial answer must say it is partial
+
+The grouped inbox caps how many rows it reads, so that a pathological filter
+cannot pull an unbounded result set into memory. That cap is on **work**, not on
+the **truth**:
+
+```
+app/api/tickets.py:
+
+total_tickets  ->  its own COUNT over the same filter  (always the real number)
+scanned        ->  how many rows the scan actually read
+truncated      ->  total_tickets > scanned
+```
+
+It used to report the scanned count as the total and expose `scanned` as a
+duplicate of it. Nothing on screen could tell the difference, so an estate with
+more than `MAX_GROUP_SCAN` open tickets would show a header claiming 5,000 while
+the filter actually matched 12,000 — and the bulk acknowledge behind that
+header would touch all 12,000. The numbers looked plausible, which is the only
+property a wrong number needs to have.
+
+Two consequences worth keeping in mind:
+
+- **The count and the rows come from different queries on purpose.** If they
+  shared one, the truncation would be invisible by construction.
+- **`truncated` is a UI obligation, not just a field.** `Ticket.tsx` must show
+  it. A truth the endpoint knows and the screen does not say is still a lie the
+  user is told.
+
 ### The client scope lives in exactly one place in the frontend too
 
 ```
@@ -233,6 +262,8 @@ work per client and re-picking it on every reload is noise.
 | One `scoped()` for every query that filters by client | `backend/app/api/scope.py` | Runs and tickets have no entity column; they inherit the rule's. Five endpoints joining for it themselves is how the dashboard counts a different client than the list beside it. See §2. |
 | One `summarise_day()` for the assurance grid | `backend/app/api/assurance.py` | `passed + breached + errored + unchecked == assured` has to close, or the landing page reports incomplete assurance as complete. See §2. |
 | One `useEntityScope()` for every screen | `frontend/src/entityScope.tsx` | The app bar owns the client. A screen with its own dropdown can disagree with the header above it, and a "Clear" button can drop the scope silently. See §2. |
+| One licence policy for gate and notice | `backend/scripts/check_licenses.py` | `write_third_party_notice.py` imports `BLOCKING`/`PERMISSIVE`/`classify` rather than restating them. It once kept its own lists and they drifted within a single commit - `epl`, `cpal` and `commercial` were blocked by the gate and unknown to the notice, which is the one place a copyleft dependency could be declared into compliance. |
+| One `SEVERITIES` list for the frontend | `frontend/src/theme.ts` | Three screens sorted and filtered by severity with a copy each, and the ticket inbox held two. Derive from `SEVERITIES` / `SEVERITIES_ASC`; the backend equivalent is `SEVERITY_ORDER` in `app/api/assurance.py`, which the ticket group sort imports. |
 | Rules may only `import` from the allow-list | `app/engine/validation.py` | Enforced by AST scan, not convention. |
 | The catalogue lives in the `datasources` table, not in `app/` | see §3a | A module under `app/` that also answered "what tables exist" would be a second source of truth, and the two would drift the first time an admin registered something. |
 | Consumers take a `Catalog`, never a storage mechanism | `app/engine/catalog.py` | Keeps the ETL, the catalogue, the rules and the runner decoupled. See §3a. |

@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException, Query
 from sqlalchemy import func, select
 
+from app.api.assurance import SEVERITY_ORDER
 from app.api.deps import CurrentUser, SessionDep
 from app.api.scope import scoped
 from app.models import Rule, Run, Ticket
@@ -16,6 +17,13 @@ router = APIRouter(prefix="/api/tickets", tags=["tickets"])
 
 # Upper bound on rows scanned when grouping. An inbox is small; this exists so
 # a pathological filter cannot pull an unbounded result set into memory.
+#
+# It is a cap on WORK, not on the truth. The response reports `total_tickets` as
+# the real number of tickets matching the filter, counted independently of the
+# scan, and sets `truncated` when the scan could not reach them all. The
+# alternative - reporting the scanned count as if it were the whole - is how a
+# header ends up saying 5,000 while the filter actually matches 12,000, with
+# nothing on screen to say so.
 MAX_GROUP_SCAN = 5000
 
 
@@ -158,13 +166,27 @@ async def grouped_tickets(
     with a count on each - and then a header says 8 while the acknowledge-all
     call behind it touches 17. Counts here are computed before paging, so a
     group is never fragmented and its count is the number of tickets it holds.
+
+    The scan is bounded, so "computed before paging" has a ceiling. When the
+    filter matches more tickets than MAX_GROUP_SCAN, `total_tickets` still
+    reports the true number (counted with its own query), the groups cover only
+    the newest MAX_GROUP_SCAN, and `truncated` is true. The UI is expected to
+    say so rather than let a partial total read as a complete one.
     """
     stmt = select(Ticket)
-    stmt, _ = _filtered(
+    stmt, count_stmt = _filtered(
         stmt,
         select(func.count()).select_from(Ticket),
         status=status_, rule_code=rule_code, severity=severity, q=q, entity=entity,
     )
+
+    # The true size of the filtered set, answered by the database rather than
+    # inferred from what we managed to read. `scoped` is applied to both inside
+    # _filtered, so this count is over exactly the rows the page is drawn from.
+    total_tickets = (
+        await session.execute(count_stmt)
+    ).scalar_one()
+
     stmt = stmt.add_columns(Run.summary.label("run_summary"))
     order_col = (
         Ticket.created_at.desc() if order.upper() == "DESC" else Ticket.created_at.asc()
@@ -203,11 +225,17 @@ async def grouped_tickets(
         }
         for key, items in window
     ]
+    scanned = sum(len(items) for _, items in ordered)
     return {
         "groups": groups,
         "total_groups": len(ordered),
-        "total_tickets": sum(len(items) for _, items in ordered),
-        "scanned": sum(len(items) for _, items in ordered),
+        # The real number of tickets matching the filter, not the number read.
+        "total_tickets": total_tickets,
+        "scanned": scanned,
+        # True when the scan ceiling stopped the search early, so `scanned` is
+        # less than `total_tickets` and the groups omit older tickets.
+        "truncated": total_tickets > scanned,
+        "scan_limit": MAX_GROUP_SCAN,
     }
 
 
@@ -221,7 +249,10 @@ def _mix(items: list[dict], field: str) -> dict[str, int]:
 def _group_sort(key: str, group_by: str):
     """Most alarming group first, rather than alphabetical."""
     if group_by == "severity":
-        order = ["critical", "high", "medium", "low"]
+        # The order is SEVERITY_ORDER, not a copy of it. Two lists of "what is
+        # severe" will drift, and a drifted one puts medium above critical in
+        # the inbox with nothing to show for it.
+        order = list(SEVERITY_ORDER)
     elif group_by == "status":
         order = ["open", "acknowledged", "dismissed"]
     else:

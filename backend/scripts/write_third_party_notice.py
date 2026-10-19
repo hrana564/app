@@ -11,42 +11,62 @@ Run it before a release, and re-run it whenever a dependency changes:
     python scripts/write_third_party_notice.py
 
 Refuses to write if anything BLOCKED appears, so a copyleft dependency cannot
-be attributed into compliance by being quietly listed.
+be attributed into compliance by being quietly listed. "BLOCKED" is whatever
+`check_licenses.py` says it is - this script imports the policy rather than
+restating it, because a notice that silently disagrees with the gate is worse
+than no notice.
 """
 
 from __future__ import annotations
 
 import importlib.metadata as md
-import re
-import subprocess
 import sys
 from datetime import date
 from pathlib import Path
 
+# check_licenses.py owns the policy. Imported, never re-declared.
+#
+# This script had its own PERMITTED/BLOCKED sets, and they had already drifted
+# from the checker's by the first commit that contained them: `epl`, `cpal` and
+# `commercial` are BLOCKED by the checker and were absent from this list, while
+# bare `apache`, `bsd` and `unlicense` are PERMITTED by the checker and unknown
+# here. That is the exact failure the checker exists to prevent - a copyleft
+# dependency quietly written into a notice as though it had been declared - and
+# it happened inside the tool whose job is to prevent it.
+#
+# One source of truth. If the policy changes, it changes there and both scripts
+# follow.
+from check_licenses import (
+    BLOCKING,
+    PERMISSIVE,
+    _license_from_classifier,
+    classify,
+)
+
 BACKEND_DIR = Path(__file__).resolve().parent.parent
 APP_ROOT = BACKEND_DIR.parent
 
-# Kept beside check_licenses.py so the two agree on what "permitted" means. If
-# one changes, both must - a notice that omits a blocked licence is worse than
-# no notice, because it looks like there was nothing to declare.
-PERMITTED = {
-    "mit", "apache-2.0", "bsd-2-clause", "bsd-3-clause", "isc",
-    "psf-2.0", "python-software-foundation-license", "zlib",
-}
-BLOCKED = {"gpl", "agpl", "lgpl", "sspl", "busl", "elastic", "proprietary"}
-
 
 def normalise(raw: str) -> str:
+    """Only used to spot a licence field that carries no licence at all."""
+    import re
+
     return re.sub(r"[^a-z0-9.+-]", "", (raw or "").lower())
 
 
 def licence_of(dist: md.Distribution) -> str:
     """The most specific licence string we can get for one distribution.
 
-    Modern metadata carries a PEP 639 `License-Expression`, which is exact. The
-    `License` field is free text and is sometimes a copyright line instead of a
-    licence - polars is the one that bites - so the Trove classifier is
-    consulted before giving up.
+    Resolution order is the checker's, not this script's: PEP 639
+    `License-Expression` first, then the free-text `License` field, then the
+    Trove classifier. The `License` field is sometimes a copyright line rather
+    than a licence - polars is the one that bites - and sometimes simply vague
+    ("Dual License", as python-dateutil is). Both cases are why the classifier
+    is consulted before giving up.
+
+    Duplicating that order here is what made the two scripts disagree about
+    which packages they could even name. `_license_from_classifier` is the
+    checker's, so the fallback cannot drift either.
     """
     expr = dist.metadata.get("License-Expression")
     if expr:
@@ -54,10 +74,7 @@ def licence_of(dist: md.Distribution) -> str:
     raw = dist.metadata.get("License")
     if raw and normalise(raw) not in {"", "unknown"}:
         return str(raw).strip()
-    for c in dist.metadata.get_all("Classifier") or []:
-        if c.startswith("License :: OSI Approved ::"):
-            return c.rsplit("::", 1)[-1].strip()
-    return "UNKNOWN"
+    return _license_from_classifier(dist)
 
 
 def licence_files(root: Path) -> list[str]:
@@ -123,8 +140,7 @@ def main() -> int:
     npm = npm_entries()
 
     blocked = [
-        (n, v, l) for n, v, l, _, _ in py
-        if any(b in normalise(l) for b in BLOCKED)
+        (n, v, l) for n, v, l, _, _ in py if classify(l)[0] == "BLOCKED"
     ]
     if blocked:
         print("REFUSING to write: a blocked licence is installed.", file=sys.stderr)
@@ -132,7 +148,9 @@ def main() -> int:
             print(f"  {n}=={v}  {l}", file=sys.stderr)
         return 1
 
-    unknown = [f"{n}=={v} ({l})" for n, v, l, _, _ in py if normalise(l) == "unknown"]
+    unclassified = [
+        f"{n}=={v} ({l})" for n, v, l, _, _ in py if classify(l)[0] == "UNKNOWN"
+    ]
 
     lines: list[str] = []
     w = lines.append
@@ -202,8 +220,11 @@ def main() -> int:
 
     print(f"wrote {out.relative_to(APP_ROOT)}")
     print(f"  {len(py)} python packages, {len(npm)} npm packages")
-    if unknown:
-        print(f"  {len(unknown)} with no machine-readable licence: {', '.join(unknown)}")
+    if unclassified:
+        print(
+            f"  {len(unclassified)} with no machine-readable licence: "
+            f"{', '.join(unclassified)}"
+        )
     return 0
 
 

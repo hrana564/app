@@ -63,6 +63,8 @@ TOP_CONTROLS = 8
 TOP_FINDINGS = 6
 
 SEVERITY_ORDER = ("critical", "high", "medium", "low")
+"""Severity, worst first. Shared with the ticket inbox's group sort, so the
+dashboard and the inbox it sends you to can never rank a finding differently."""
 
 
 # ---------------------------------------------------------------------------

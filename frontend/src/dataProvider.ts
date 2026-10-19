@@ -317,9 +317,17 @@ export const api = {
    * more tickets than the header said. Counts here are computed before paging.
    */
   groupedTickets: (params: Record<string, string | undefined>) =>
-    request<{ groups: any[]; total_groups: number; total_tickets: number }>(
-      `/api/tickets/grouped${qs(params)}`,
-    ),
+    request<{
+      groups: any[];
+      total_groups: number;
+      /** The true number of tickets matching the filter, counted by the server. */
+      total_tickets: number;
+      /** How many the scan actually read. Less than total_tickets when `truncated`. */
+      scanned: number;
+      /** True when the server's scan ceiling hid older tickets from the groups. */
+      truncated: boolean;
+      scan_limit: number;
+    }>(`/api/tickets/grouped${qs(params)}`),
 
   listRules: () => request<{ data: any[] }>("/api/rules?perPage=200&sort=code&order=ASC"),
 
@@ -410,16 +418,18 @@ export const api = {
     }),
 
   /**
-   * The two client entities and the systems each one draws from.
+   * The configured clients and the systems each one draws from.
    *
    * The endpoint wraps its list in `{ entities: [...] }`. The unwrap belongs
    * here so a caller cannot treat the envelope as the list - which is how this
    * read `entities.map is not a function`.
+   *
+   * How many there are is the deployment's business, not ours. It comes from
+   * CLIENT_ENTITIES via the API; the app bar and the entity scope both read
+   * this one call rather than keeping a list of their own.
    */
   entities: () =>
     request<{ entities: EntityOut[] }>("/api/datasources/entities").then((d) => d.entities),
-
-  listDatasources: () => request<any[]>("/api/datasources"),
 
   /**
    * Everything the datasources screen shows, in ONE call: what is registered,

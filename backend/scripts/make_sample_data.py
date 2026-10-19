@@ -100,8 +100,6 @@ SCENARIO = {
     (_SECOND, date(2026, 10, 20)): "bank_match",
 }
 
-TRADING_DAYS = 14  # consecutive days per entity, most recent is the "live" one
-
 
 def scenario_for(entity: str, day: date) -> str:
     return SCENARIO.get((entity, day), "clean")

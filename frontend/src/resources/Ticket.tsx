@@ -15,11 +15,11 @@ import DoneAllIcon from "@mui/icons-material/DoneAll";
 import ArrowForwardIcon from "@mui/icons-material/ArrowForward";
 import { api } from "../dataProvider";
 import { DotLabel, RowsTable } from "../components/ui";
-import { severityColor, statusColor, FONT } from "../theme";
+import { severityColor, statusColor, SEVERITIES, FONT } from "../theme";
 import { useEntityScope } from "../entityScope";
 
 const STATUS_OPTIONS = ["open", "acknowledged", "dismissed"] as const;
-const SEVERITY_OPTIONS = ["critical", "high", "medium", "low"] as const;
+const SEVERITY_OPTIONS = SEVERITIES;
 
 /**
  * How the inbox can be grouped - the ServiceNow "Group by" pattern, with a
@@ -300,7 +300,7 @@ interface Group {
   tickets: any[];
 }
 
-const severityOrder = ["critical", "high", "medium", "low"];
+const severityOrder = SEVERITIES;
 
 /** Wrapped in a TableBody because a bare <tr> may not sit directly under <table>. */
 const TableFooterRow = ({ children }: { children: React.ReactNode }) => (
@@ -444,9 +444,9 @@ const GroupedInbox = ({
                     <TableCell>
                       <Typography variant="body2" sx={{ lineHeight: 1.45 }}>{t.summary}</Typography>
                       <Typography variant="caption" color="text.secondary">
-                        {t.rows?.length ?? 0} row{(t.rows?.length ?? 0) === 1 ? "" : "s"} Â·{" "}
+                        {t.rows?.length ?? 0} row{(t.rows?.length ?? 0) === 1 ? "" : "s"} ·{" "}
                         {new Date(t.created_at).toLocaleString()}
-                        {t.acknowledged_by ? ` Â· reviewed by ${t.acknowledged_by}` : ""}
+                        {t.acknowledged_by ? ` · reviewed by ${t.acknowledged_by}` : ""}
                       </Typography>
                     </TableCell>
                     <TableCell align="right" onClick={(e) => e.stopPropagation()}>
@@ -466,7 +466,7 @@ const GroupedInbox = ({
         <TableFooterRow>
           <Typography variant="body2" color="text.secondary" sx={{ flex: 1 }}>
             <strong>{groups.length}</strong> of <strong>{totalGroups}</strong>{" "}
-            {totalGroups === 1 ? "group" : "groups"} Â·{" "}
+            {totalGroups === 1 ? "group" : "groups"} ·{" "}
             <strong>{totalTickets}</strong> ticket{totalTickets === 1 ? "" : "s"} in total
           </Typography>
           <Button size="small" onClick={onToggleAll}>
@@ -522,7 +522,7 @@ const FlatInbox = ({ tickets, total }: { tickets: any[]; total: number }) => {
               <Stack direction="row" spacing={0.5} justifyContent="flex-end" alignItems="center">
                 {t.acknowledged_by && (
                   <Tooltip
-                    title={`${t.acknowledged_by} Â· ${new Date(t.acknowledged_at).toLocaleString()}${t.ack_note ? ` Â· ${t.ack_note}` : ""}`}
+                    title={`${t.acknowledged_by} · ${new Date(t.acknowledged_at).toLocaleString()}${t.ack_note ? ` · ${t.ack_note}` : ""}`}
                   >
                     <Chip size="small" label={t.acknowledged_by} sx={{ fontSize: FONT.label }} />
                   </Tooltip>
@@ -737,11 +737,24 @@ export const TicketList = () => {
         <Box sx={{ px: 2, py: 1, bgcolor: "#fafbfe" }}>
           <Typography variant="body2" color="text.secondary">
             <strong>{rowCount}</strong> {groupBy ? (totalCount === 1 ? "group" : "groups") : "tickets"}{" "}
-            on this page Â· <strong>{openOnPage}</strong> open in view Â·{" "}
+            on this page · <strong>{openOnPage}</strong> open in view ·{" "}
             <strong>{ticketTotal}</strong> ticket{ticketTotal === 1 ? "" : "s"} match
             {groupBy ? ", counted before paging so no rule is split across pages" : ""}
           </Typography>
         </Box>
+
+        {/* The count above is the server's true total. When the scan ceiling
+            stopped the search early, the groups on screen do not cover all of
+            it - so say that here rather than let a partial list read as a
+            complete one. */}
+        {data?.truncated ? (
+          <Alert severity="warning" sx={{ borderRadius: 0 }}>
+            Showing the newest {data.scanned.toLocaleString()} of{" "}
+            {ticketTotal.toLocaleString()} matching tickets. Narrow the filters
+            to see the rest &mdash; the bulk acknowledge below acts on every
+            match, not only the ones listed here.
+          </Alert>
+        ) : null}
 
         {loading && !data ? (
           <Box sx={{ p: 6, textAlign: "center" }}><CircularProgress size={28} /></Box>

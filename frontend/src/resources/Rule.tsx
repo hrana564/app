@@ -32,14 +32,17 @@ import {
   ActionIcon, CodeBlock, DotLabel, EntityField, IdField, JsonBlock, RowsTable,
   RuleStateCell, SeverityField, StatusField, RowCountField,
 } from "../components/ui";
-import { severityColor, statusColor, FONT } from "../theme";
+import { severityColor, statusColor, SEVERITIES_ASC, FONT } from "../theme";
 import { useEntityScope } from "../entityScope";
 
 /* ================================================================== */
 /* Filter vocabulary - mirrors the Literals in backend/app/schemas.py */
 /* ================================================================== */
 const STATUS_OPTIONS = ["draft", "active", "paused", "retired"] as const;
-const SEVERITY_OPTIONS = ["low", "medium", "high", "critical"] as const;
+// Ascending here, worst-first in the inbox: a "set the severity of a new rule"
+// dropdown should start at the least alarming option, because that is the
+// starting position, not the interesting one.
+const SEVERITY_OPTIONS = SEVERITIES_ASC;
 
 /** One row of a rule's history. RuleOut, minus the fields the table ignores. */
 interface VersionRow {
@@ -443,7 +446,7 @@ export const RunRuleDialog = ({
 
             <Box>
               <Typography variant="caption" sx={{ fontWeight: 700 }}>
-                Exception lines ({out.rows?.length ?? 0}) Â· {out.duration_ms} ms
+                Exception lines ({out.rows?.length ?? 0}) · {out.duration_ms} ms
               </Typography>
               <Box sx={{ mt: 0.5 }}><RowsTable rows={out.rows ?? []} /></Box>
             </Box>
@@ -617,10 +620,10 @@ export const VersionSourceDialog = ({
   return (
     <Dialog open onClose={onClose} maxWidth="lg" fullWidth>
       <DialogTitle sx={{ pb: 1 }}>
-        {code} Â· version {version}
+        {code} · version {version}
         {found && (
           <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
-            {found.change_note || "(no note)"} Â· {found.created_by} Â·{" "}
+            {found.change_note || "(no note)"} · {found.created_by} ·{" "}
             {new Date(found.created_at).toLocaleString()}
           </Typography>
         )}
@@ -779,8 +782,8 @@ const SchedulesSection = ({ ruleCode, isAdmin }: { ruleCode: string; isAdmin: bo
                   <Typography variant="caption" color="text.secondary">
                     next {s.next_run_relative ?? "unknown"}
                     {s.upcoming_runs?.[1] &&
-                      ` Â· then ${new Date(s.upcoming_runs[1]).toLocaleString()}`}
-                    {s.last_run_at && ` Â· last ran ${new Date(s.last_run_at).toLocaleString()}`}
+                      ` · then ${new Date(s.upcoming_runs[1]).toLocaleString()}`}
+                    {s.last_run_at && ` · last ran ${new Date(s.last_run_at).toLocaleString()}`}
                   </Typography>
                   <Typography variant="caption" sx={{ display: "block", color: "#8d99ae", fontFamily: "monospace" }}>
                     cron: {s.cron}
@@ -999,7 +1002,7 @@ const RuleDetails = () => {
                     <Typography variant="body2">{v.change_note || "(no note)"}</Typography>
                   </Stack>
                   <Typography variant="caption" color="text.secondary">
-                    {v.created_by} Â· {new Date(v.created_at).toLocaleString()}
+                    {v.created_by} · {new Date(v.created_at).toLocaleString()}
                   </Typography>
                 </Box>
               ))}
@@ -1445,7 +1448,7 @@ const RuleTable = () => {
                           </Typography>
                           {totalVersions > 1 && (
                             <Typography variant="caption" color="text.secondary">
-                              Â· {totalVersions} versions
+                              · {totalVersions} versions
                             </Typography>
                           )}
                         </Stack>
@@ -1515,7 +1518,7 @@ const RuleTable = () => {
                               {v.change_note || "(no note)"}
                             </Typography>
                             <Typography variant="caption" color="text.secondary" noWrap>
-                              Â· {v.created_by} Â· {new Date(v.created_at).toLocaleDateString()}
+                              · {v.created_by} · {new Date(v.created_at).toLocaleDateString()}
                             </Typography>
                           </Stack>
                         </TableCell>

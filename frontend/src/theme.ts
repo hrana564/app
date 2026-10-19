@@ -124,6 +124,25 @@ export const theme = createTheme({
   },
 });
 
+/**
+ * Severity, worst first. The single list every screen sorts and filters by.
+ *
+ * It lived as three separate arrays - SEVERITY_OPTIONS in the rule editor,
+ * SEVERITY_OPTIONS and severityOrder in the ticket inbox - and the ticket inbox
+ * alone held two copies that had to agree with each other. They agreed only
+ * because nothing had made them disagree yet. `assurance.py` orders the same
+ * four values on the server.
+ *
+ * Worst-first rather than alphabetical: a picker that offers "critical" after
+ * "medium" is asking the user to rank severity themselves, which is the one
+ * judgement the scale already encodes.
+ */
+export const SEVERITIES = ["critical", "high", "medium", "low"] as const;
+export type Severity = (typeof SEVERITIES)[number];
+
+/** Ascending order, for a dropdown where lowest is listed first. */
+export const SEVERITIES_ASC = [...SEVERITIES].reverse();
+
 export const severityColor: Record<string, "error" | "warning" | "info" | "success"> = {
   critical: "error",
   high: "error",

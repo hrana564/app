@@ -778,6 +778,25 @@ def main() -> int:
         check("a scoped ticket list carries only that client's rules", not wrong,
               f"{FIRST} scope returned {wrong}")
 
+        # The grouped inbox caps how many rows it reads. When that cap bites,
+        # the count it SHOWS must still be the true total and it must say the
+        # list is partial. Reporting the number read as if it were the whole is
+        # how a header ends up asserting a total it can only see part of.
+        for ent in (FIRST, SECOND):
+            g = c.get("/api/tickets/grouped", headers=ah,
+                      params={"entity": ent, "group_by": "rule_code"}).json()
+            flat = c.get("/api/tickets", headers=ah, params={"entity": ent}).json()
+            check(f"{ent}: the grouped total is the real total, not what it read",
+                  g["total_tickets"] == flat["total"],
+                  f"grouped={g['total_tickets']} flat={flat['total']}")
+            check(f"{ent}: it reports truncation honestly",
+                  (g["scanned"] < g["total_tickets"]) == bool(g["truncated"]),
+                  f"scanned={g['scanned']} total={g['total_tickets']} "
+                  f"truncated={g['truncated']}")
+            check(f"{ent}: grouped problems never outnumber the total",
+                  g["total_tickets"] <= flat["total"] + 1,  # +1 for eventual count skew
+                  f"grouped={g['total_tickets']} flat={flat['total']}")
+
         dash_first = c.get("/api/dashboard", headers=ah, params={"entity": FIRST}).json()
         check("dashboard reports the client it was scoped to", dash_first["entity"] == FIRST, dash_first["entity"])
         check("scoped dashboard controls == scoped rules list",

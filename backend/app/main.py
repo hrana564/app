@@ -93,9 +93,12 @@ app = FastAPI(
     title="Audit Portal API",
     description=(
         "Continuous auditing platform.\n\n"
-        "Rules are plain Python files; each returns "
-        "`no_rows_returned` or `rows_returned`. A failing run raises a ticket "
-        "that an auditor acknowledges."
+        "Rules are plain Python files. Each `run(ctx)` returns a `RuleResult` "
+        "whose `status` is `success` (the rule executed) or `failed` (it could "
+        "not) - and whose `rows` are what it found. Empty `rows` means the "
+        "control passed; non-empty `rows` mean it breached, and raise a ticket "
+        "that an auditor acknowledges. Execution and outcome are deliberately "
+        "separate: a rule that never ran has no opinion about the control."
     ),
     version="0.1.0",
     lifespan=lifespan,

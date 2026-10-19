@@ -13,6 +13,10 @@ from app.schemas import BulkAck, TicketAck, TicketOut
 
 router = APIRouter(prefix="/api/tickets", tags=["tickets"])
 
+# Upper bound on rows scanned when grouping. An inbox is small; this exists so
+# a pathological filter cannot pull an unbounded result set into memory.
+MAX_GROUP_SCAN = 5000
+
 
 def _filtered(stmt, count_stmt, *, status, rule_code, severity, q):
     """Narrow the page query and the count query identically.
@@ -118,6 +122,97 @@ async def acknowledge_all(
         "severity": payload.severity,
         "q": payload.q,
     }
+
+
+@router.get("/grouped", response_model=dict)
+async def grouped_tickets(
+    session: SessionDep,
+    _user: CurrentUser,
+    group_by: str = Query("rule_code", pattern="^(rule_code|severity|status)$"),
+    status_: str | None = Query(None, alias="status"),
+    rule_code: str | None = None,
+    severity: str | None = None,
+    q: str | None = None,
+    page: int = Query(1, ge=1),
+    perPage: int = Query(25, ge=1, le=200),
+    order: str = "DESC",
+) -> dict:
+    """
+    Tickets grouped across the WHOLE filtered set, paginated by group.
+
+    Grouping a page of tickets is how a group ends up split across three pages
+    with a count on each - and then a header says 8 while the acknowledge-all
+    call behind it touches 17. Counts here are computed before paging, so a
+    group is never fragmented and its count is the number of tickets it holds.
+    """
+    stmt = select(Ticket)
+    stmt, _ = _filtered(
+        stmt,
+        select(func.count()).select_from(Ticket),
+        status=status_, rule_code=rule_code, severity=severity, q=q,
+    )
+    stmt = stmt.add_columns(Run.summary.label("run_summary"))
+    order_col = (
+        Ticket.created_at.desc() if order.upper() == "DESC" else Ticket.created_at.asc()
+    )
+    stmt = stmt.order_by(order_col).limit(MAX_GROUP_SCAN)
+
+    buckets: dict[str, list[dict]] = {}
+    for ticket, run_summary in (await session.execute(stmt)).all():
+        d = TicketOut.model_validate(ticket).model_dump(mode="json")
+        d["summary"] = run_summary or ""
+        buckets.setdefault(str(getattr(ticket, group_by) or "—"), []).append(d)
+
+    ordered = sorted(buckets.items(), key=lambda kv: _group_sort(kv[0], group_by))
+
+    # Grouping by rule reads better with the rule's own name attached.
+    rule_names: dict[str, str] = {}
+    if group_by == "rule_code" and ordered:
+        codes = [k for k, _ in ordered]
+        names = (
+            await session.execute(
+                select(Rule.code, Rule.name).where(Rule.code.in_(codes))
+            )
+        ).all()
+        rule_names = dict(names)
+
+    window = ordered[(page - 1) * perPage : page * perPage]
+    groups = [
+        {
+            "key": key,
+            "label": rule_names.get(key, key) if group_by == "rule_code" else None,
+            "total": len(items),
+            "open": sum(1 for t in items if t["status"] == "open"),
+            "severity_mix": _mix(items, "severity"),
+            "status_mix": _mix(items, "status"),
+            "tickets": items,
+        }
+        for key, items in window
+    ]
+    return {
+        "groups": groups,
+        "total_groups": len(ordered),
+        "total_tickets": sum(len(items) for _, items in ordered),
+        "scanned": sum(len(items) for _, items in ordered),
+    }
+
+
+def _mix(items: list[dict], field: str) -> dict[str, int]:
+    out: dict[str, int] = {}
+    for t in items:
+        out[t[field]] = out.get(t[field], 0) + 1
+    return out
+
+
+def _group_sort(key: str, group_by: str):
+    """Most alarming group first, rather than alphabetical."""
+    if group_by == "severity":
+        order = ["critical", "high", "medium", "low"]
+    elif group_by == "status":
+        order = ["open", "acknowledged", "dismissed"]
+    else:
+        return (0, key)
+    return (order.index(key) if key in order else len(order), key)
 
 
 @router.get("/summary")

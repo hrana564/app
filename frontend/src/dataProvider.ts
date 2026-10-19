@@ -33,6 +33,13 @@ export class ApiError extends Error {
   }
 }
 
+/** Drop empty values so a filter object can be passed straight through. */
+const compact = (params: Record<string, string | undefined>) => {
+  const q = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) if (v) q.set(k, v);
+  return q.toString();
+};
+
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
@@ -205,6 +212,26 @@ export const api = {
 
   ticketSummary: () => request<any>("/api/tickets/summary"),
   runSummary: () => request<any>("/api/runs/summary"),
+
+  /** Flat ticket list, for the ungrouped inbox view. */
+  listTickets: (params: Record<string, string | undefined>) =>
+    request<{ data: any[]; total: number }>(
+      `/api/tickets?${compact(params)}&sort=created_at&order=DESC`,
+    ),
+
+  /**
+   * Tickets grouped across the WHOLE filtered set, paginated by group.
+   *
+   * Grouping a page of tickets fragments a rule across pages, so its count on
+   * each page is wrong - and a bulk acknowledge behind that count then touches
+   * more tickets than the header said. Counts here are computed before paging.
+   */
+  groupedTickets: (params: Record<string, string | undefined>) =>
+    request<{ groups: any[]; total_groups: number; total_tickets: number }>(
+      `/api/tickets/grouped?${compact(params)}`,
+    ),
+
+  listRules: () => request<{ data: any[] }>("/api/rules?perPage=200&sort=code&order=ASC"),
 
   acknowledgeTicket: (id: number | string, status: string, note: string) =>
     request<any>(`/api/tickets/${id}/acknowledge`, {

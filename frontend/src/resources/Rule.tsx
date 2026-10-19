@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Datagrid, Edit, List, Pagination, ShowBase, TextField, TopToolbar,
   useListContext, useNotify, useRecordContext, useRefresh,
@@ -169,9 +169,15 @@ export const GenerateRuleDialog = () => {
  * Search plus three dropdowns, held in one local object and pushed in a single
  * debounced effect. Two separate effects would race: typing in the search box
  * calls setFilters with just `q`, which drops the dropdowns.
+ *
+ * Two details are load-bearing. `setFilters` and `filterValues` are read through
+ * refs because setFilters changes identity every time the store does - depending
+ * on it re-runs this effect on every render. And the push is guarded by a real
+ * comparison, because react-admin builds a fresh `filterValues` object on every
+ * call even when nothing changed, so an unguarded call never converges and loops.
  */
 const RuleToolbar = () => {
-  const { setFilters } = useListContext<any>();
+  const { setFilters, filterValues } = useListContext<any>();
   const [filters, setLocal] = useState({
     q: "",
     status: "",
@@ -179,16 +185,26 @@ const RuleToolbar = () => {
     entity: "",
   });
 
+  const applyRef = useRef({ setFilters, filterValues });
+  applyRef.current = { setFilters, filterValues };
+
   useEffect(() => {
     const handle = setTimeout(() => {
       const next: Record<string, string> = {};
       (Object.keys(filters) as (keyof typeof filters)[]).forEach((k) => {
         if (filters[k]) next[k] = filters[k];
       });
-      setFilters(next, "ignored");
+
+      const { setFilters: apply, filterValues: current } = applyRef.current;
+      const live: Record<string, unknown> = current ?? {};
+      const changed =
+        Object.keys(next).length !== Object.keys(live).length ||
+        Object.keys(next).some((k) => live[k] !== next[k]);
+
+      if (changed) apply(next, "ignored");
     }, 300);
     return () => clearTimeout(handle);
-  }, [filters, setFilters]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [filters]);
 
   const set = (patch: Partial<typeof filters>) => setLocal((f) => ({ ...f, ...patch }));
   const active = Object.values(filters).some(Boolean);

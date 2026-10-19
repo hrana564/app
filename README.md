@@ -146,9 +146,11 @@ rules_master   ONE ROW PER VERSION OF A RULE
 rule_schedules id, rule_code, label, kind, config, cron, timezone, data_lag_days,
                last_run_at, next_run_at, created_by          -- no FK, see below
 
-runs           id, rule_id -> rules_master(id), rule_code, schedule_id, data_date,
-               triggered_by, started_at, finished_at, status, summary, metrics,
+runs           id, rule_id -> rules_master(id), rule_code, rule_version, schedule_id, data_date,
+               triggered_by, started_at, finished_at, status, outcome, summary, metrics,
                rows, error_detail, duration_ms
+               -- status  = did the rule EXECUTE?   running | success | failed
+               -- outcome = what did the control FIND? pass | fail, NULL when it never ran
 
 tickets        id, ticket_no, run_id, rule_id -> rules_master(id), rule_code,
                schedule_id, severity, rows, status, acknowledged_by,
@@ -252,24 +254,31 @@ and return a dict matching `app.schemas.RuleResult`:
 
 ```python
 {
-    "status":  "no_rows_returned" | "rows_returned" | "error",
+    "status":  "success" | "failed",   # did the rule EXECUTE?
     "summary": str,     # one line an auditor reads on the ticket
     "metrics": dict,    # the numbers behind the verdict
     "rows":    list,    # the rows that caused the breach -> become the ticket
-    "error":   str,     # only for status == "error"
+    "error_message": str | None,   # required when status == "failed"
 }
 ```
 
-The runner maps this to a run outcome:
+A rule that ran and found nothing returns `{"status": "success", "rows": []}`. A rule that could
+not run at all returns `{"status": "failed", "error_message": "...", "rows": []}`.
 
-| `status` | `runs.status` | ticket raised? |
-|---|---|---|
-| `no_rows_returned` | `pass` | no |
-| `rows_returned` | `fail` | **yes**, carrying `rows` |
-| `error` / raised exception | `error` | no, traceback stored on the run |
+The runner maps that onto **two** run columns, because they answer different questions:
+
+| `status` | `rows` | `runs.status` | `runs.outcome` | ticket raised? |
+|---|---|---|---|---|
+| `success` | `[]` | `success` | `pass` | no |
+| `success` | non-empty | `success` | **`fail`** | **yes**, carrying `rows` |
+| `failed` / raised exception | — | `failed` | `NULL` | no — the control never got an opinion |
+
+The third row is the one that matters. A rule that never ran has no finding, so a day it failed
+to cover is **unchecked, not clean** — and the UI says so. The mapping is expressed once in
+`app/engine/ticketing.py` and shared with the replay tool, so the two can never disagree.
 
 The return value is validated by Pydantic, so a malformed rule fails loudly instead of
-corrupting the ledger. A rule that raises an exception is caught — it records `error` with the
+corrupting the ledger. A rule that raises an exception is caught — it records `failed` with the
 traceback and never takes down the process.
 
 ### What `ctx` gives you
@@ -569,7 +578,8 @@ Vite proxies `/api` to the backend, so the browser sees a single origin in devel
 
 ```
 app/
-├── README.md
+├── README.md                          the product: what it is and how it works
+├── AGENTS.md                          how to change it without breaking it
 ├── mount/                           external data: read by the app, never owned
 │   ├── SourceData/                  <ENTITY>/<date>/<table>.csv (generated; gitignored)
 │   │   ├── LAD/2026-10-15/ipos_sales.csv ...
@@ -610,7 +620,7 @@ app/
 │   │   └── rule_4.py   LAD-CA-06   ex-staff still transacting
 │   └── scripts/
 │       ├── make_sample_data.py     generate SourceData with planted breaches
-│       ├── smoke_test.py           54-assertion end-to-end test
+│       ├── smoke_test.py           end-to-end test suite
 │       └── check_licenses.py       license gate
 └── frontend/
     ├── vite.config.ts              dev proxy to :8000
@@ -705,10 +715,12 @@ All endpoints except `/health`, `/api/auth/login` and `/api/dashboard` require
 | GET/POST | `/api/rule-schedules` | any / admin | List (`?rule_code=`) / create |
 | GET/PUT/DELETE | `/api/rule-schedules/{id}` | any / admin | Read / update / delete |
 | GET | `/api/rule-schedules/cron/jobs` | any | Live APScheduler jobs |
-| GET | `/api/runs` | any | `?status&rule_code&page&perPage` |
-| GET | `/api/rule-runs/summary` | any | Counts by status |
-| GET | `/api/runs/{id}` | any | One run |
-| POST | `/api/runs/{id}/rerun` | any | Re-run same rule + date |
+| GET | `/api/rule-runs` | any | `?status&outcome&rule_code&page&perPage&sort&order` — `status` filters execution, `outcome` filters findings; neither implies the other |
+| GET | `/api/rule-runs/summary` | any | `{running, completed, failed, breaches, cleared}` |
+| GET | `/api/rule-runs/{id}` | any | One run |
+| POST | `/api/rule-runs/{id}/rerun` | any | Re-run same rule version + data date |
+| GET | `/api/tickets/grouped` | any | `?group_by=rule_code\|severity\|status` — grouped across the **whole** filtered set, paginated by group, so counts are never fragmented |
+| POST | `/api/tickets/acknowledge-all` | any | Scoped bulk acknowledge — one transaction, filters echoed back |
 | GET | `/api/tickets` | any | `?status&severity&rule_code` |
 | GET | `/api/tickets/summary` | any | Counts + open by severity |
 | GET | `/api/tickets/{id}` | any | One ticket |
@@ -943,7 +955,7 @@ cd backend
 .\.venv\Scripts\python.exe scripts\smoke_test.py
 ```
 
-**94 assertions** covering: health, both logins, rejection of bad credentials and missing tokens,
+**128 assertions** covering: health, both logins, rejection of bad credentials and missing tokens,
 RBAC for every admin-only endpoint, both entities and their systems, datasource listing,
 parameters, rule registration, **validate → activate gate**, source and version round-trip,
 per-entity isolation, clean-day pass / breach-day fail for all four rules, both cross-system joins,
@@ -952,14 +964,15 @@ ticket numbering, JSON serialisation of timestamps, acknowledge → double-ack r
 out-of-range weekdays, non-dividing intervals and garbage cron), **multiple schedules per rule**
 including duplicate detection and pause/reactivate deregistration, **the validation gate**
 (banned imports, activation refusal, cross-entity table reference inside an SQL string), **alert
-policy), run ledger,
-dashboard and generation status.
+policy), **execution and outcome being independent** (a completed run always has an outcome, a
+run that did not execute has none, and `?status=` and `?outcome=` filter separately), the run
+ledger and the version each run was produced by, dashboard and generation status.
 
 ```
-RESULT: 94 passed, 0 failed
+RESULT: 128 passed, 0 failed
 ```
 
-The suite is **idempotent** — run it twice and it still reports 94/94. The deduplication
+The suite is **idempotent** — run it twice and it still reports 128/128. The deduplication
 assertions work on ticket *identity* rather than absolute counts, so a previous run's tickets don't
 make the next run fail.
 
@@ -985,7 +998,7 @@ Honest list of what is **not** done yet:
 
 | Gap | Impact | Notes |
 |---|---|---|
-| **No schema versioning** | Tables come from `create_all` at startup | Fine while the schema is still moving. When it settles, or before a second environment exists, add Alembic — otherwise a rename leaves an orphan table, which is exactly what happened here. |
+| **No schema versioning** | Tables come from `create_all` at startup | Deliberate while there is one disposable dev database — see **[AGENTS.md §1](AGENTS.md)**, which gives the reset recipe. Change a model, drop the database, reseed; do not write an `ALTER TABLE` script. Add Alembic the moment there is a **second environment** or data that cannot be regenerated. |
 | **No process-level sandbox** | LLM-generated Python runs in-process | The AST gate blocks `os`/`subprocess`/`socket`/`open()` statically, but that is **not** a sandbox — a determined rule can still exhaust memory or spin a CPU. Acceptable while your devs write rules. **Mandatory hardening** if auditors type prompts and never read the diff: subprocess isolation, read-only mount, no network, rlimits. RestrictedPython is *not* a substitute — see §13. |
 | **No pagination beyond `perPage`** | Large tables return capped pages | Fine for dev volumes |
 | **No rule deletion from the UI** | API supports `DELETE` | Admin button not wired |

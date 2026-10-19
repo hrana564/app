@@ -7,7 +7,9 @@ import {
   type ReactNode,
 } from "react";
 import { Box, CircularProgress, Typography } from "@mui/material";
-import { api, type EntityOut } from "./dataProvider";
+import {
+  api, ApiError, getToken, SESSION_EVENT, type EntityOut,
+} from "./dataProvider";
 
 /**
  * The client entity every screen is scoped to.
@@ -32,6 +34,17 @@ import { api, type EntityOut } from "./dataProvider";
  * Rendering early would hand `<List filter={{ entity }}>` an undefined entity,
  * which is no filter at all - the app bar would say one client while the list
  * beneath it showed every client.
+ *
+ * BUT NOT BEFORE THERE IS A SESSION TO SCOPE
+ * ------------------------------------------
+ * The list comes from an endpoint that needs a token, so asking for it before
+ * sign-in gets a 401. This provider used to ask anyway, and the 401 became a
+ * message that replaced the whole application - which replaced the login
+ * form, so the portal could not be signed in to at all.
+ *
+ * Before sign-in there is no client to scope to, and the login page does not
+ * ask for one. So the shell renders, react-admin puts the login form up, and
+ * the list is fetched when there is a session to scope.
  */
 
 export type Entity = EntityOut;
@@ -54,8 +67,24 @@ export const EntityScope = ({ children }: { children: ReactNode }) => {
   const [entities, setEntities] = useState<Entity[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [entity, set] = useState("");
+  // Whether there is a session to scope. Read once here and then kept in
+  // step with the session events, because a token can appear or vanish while
+  // the app is open - a sign-in, a sign-out, or a 401 anywhere clearing it.
+  const [signedIn, setSignedIn] = useState(() => Boolean(getToken()));
 
   useEffect(() => {
+    const onSession = () => setSignedIn(Boolean(getToken()));
+    window.addEventListener(SESSION_EVENT, onSession);
+    onSession();
+    return () => window.removeEventListener(SESSION_EVENT, onSession);
+  }, []);
+
+  useEffect(() => {
+    if (!signedIn) {
+      setEntities(null);
+      setError(null);
+      return;
+    }
     let live = true;
     api
       .entities()
@@ -78,11 +107,20 @@ export const EntityScope = ({ children }: { children: ReactNode }) => {
         }
         set(list.some((e) => e.code === chosen) ? chosen : list[0].code);
       })
-      .catch(() => live && setError("Could not reach the API to list the clients."));
+      .catch((e: Error) => {
+        if (!live) return;
+        // A 401 is not a broken API. The request was made and refused, which
+        // is a different thing, and the message has to say which it was.
+        setError(
+          e instanceof ApiError && e.status === 401
+            ? "Your session has expired. Please sign in again."
+            : "Could not reach the API to list the clients.",
+        );
+      });
     return () => {
       live = false;
     };
-  }, []);
+  }, [signedIn]);
 
   const value = useMemo<Scope>(
     () => ({
@@ -101,6 +139,14 @@ export const EntityScope = ({ children }: { children: ReactNode }) => {
     [entity, entities],
   );
 
+  // No session, no scope, and no list to wait for. The shell renders and
+  // react-admin puts the login form up. This is the whole fix: the list is
+  // an authenticated read, so asking for it as a stranger was asking for a
+  // 401, and the error that came back replaced the login form with a wall.
+  if (!signedIn) {
+    return <EntityContext.Provider value={value}>{children}</EntityContext.Provider>;
+  }
+
   if (error) {
     return (
       <Box sx={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100vh" }}>
@@ -109,6 +155,8 @@ export const EntityScope = ({ children }: { children: ReactNode }) => {
     );
   }
 
+  // There IS a session, so the scope now matters, and it has to be right
+  // before anything below renders. An undefined entity is no filter at all.
   if (!entities || entity === "") {
     return (
       <Box sx={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100vh" }}>

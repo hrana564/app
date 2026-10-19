@@ -11,6 +11,17 @@ import type { DataProvider, GetListParams, GetListResult } from "react-admin";
 const TOKEN_KEY = "audit.token";
 const USER_KEY = "audit.user";
 
+/**
+ * Fired whenever the session changes - a sign-in, a sign-out, or a 401
+ * anywhere in the app clearing it.
+ *
+ * A provider that reads the token once at mount would keep asking for
+ * things as a stranger after the user signed out, and would keep waiting for
+ * a list it can never get. The session is a moment, not a state, and this is
+ * how the rest of the app hears about it.
+ */
+export const SESSION_EVENT = "audit:session";
+
 export const getToken = () => localStorage.getItem(TOKEN_KEY);
 export const getStoredUser = () => {
   const raw = localStorage.getItem(USER_KEY);
@@ -19,10 +30,12 @@ export const getStoredUser = () => {
 export const storeSession = (token: string, user: unknown) => {
   localStorage.setItem(TOKEN_KEY, token);
   localStorage.setItem(USER_KEY, JSON.stringify(user));
+  window.dispatchEvent(new Event(SESSION_EVENT));
 };
 export const clearSession = () => {
   localStorage.removeItem(TOKEN_KEY);
   localStorage.removeItem(USER_KEY);
+  window.dispatchEvent(new Event(SESSION_EVENT));
 };
 
 export class ApiError extends Error {

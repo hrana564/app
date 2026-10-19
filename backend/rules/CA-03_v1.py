@@ -1,7 +1,6 @@
 """
 CA-03  -  Last hour of trading volume spike
 
-Entity : CLIENT-A (demo estate)
 System : POS  ->  ipos_sales
 
 Source requirement (demo estate continuous auditing area #3):
@@ -24,7 +23,6 @@ DESCRIPTION = (
     "Value settled in the last hour of store operations exceeds a multiple of "
     "the average hourly value for the day (retail and bar items)."
 )
-ENTITY = "CLIENT-A"
 DATASOURCES = ["ipos_sales"]
 
 LAST_HOUR = 23  # stores trade 10:00-23:59, so the final trading hour is 23
@@ -33,7 +31,6 @@ LAST_HOUR = 23  # stores trade 10:00-23:59, so the final trading hour is 23
 LAST_HOUR_RATIO_LIMIT = 2.0
 
 TS_FORMAT = "%Y-%m-%d %H:%M:%S"
-
 
 def run(ctx) -> dict:
     ratio_limit = LAST_HOUR_RATIO_LIMIT
@@ -52,7 +49,7 @@ def run(ctx) -> dict:
         return {
             "status": "success",
             "error_message": None,
-            "summary": f"No retail/bar invoices for CLIENT-A on {ctx.date}",
+            "summary": f"No retail/bar invoices on {ctx.date}",
             "metrics": {},
             "rows": [],
         }

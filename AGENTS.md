@@ -581,6 +581,23 @@ deployment's `.env`, read once in `app/settings.py`. Nothing under `app/`,
 from `GET /api/datasources/entities` rather than keeping its own copy. A client
 name in source is a sale blocker, not a style question.
 
+**Which client a rule belongs to is on the rule's ROW, not in its file.** The
+file holds the logic and the data binding; the row holds the client, chosen
+when the rule is registered. A file that named a client would carry a client's
+identity into the source, and would be wrong the moment the same file was
+registered for a different client — which is the whole reason the file is
+portable. The `ENTITY` constant is still *read*, and a file that declares one
+that disagrees with its row is warned about, but nothing asks for one.
+
+The same applies to the demo estate's own layout. `ipos_*`, `syn_*`, `bc_*` and
+`hr_*` are PRODUCT names — iPOS, Synapse, Business Central — and they are the
+demo ETL contract, not a client's identity. The two estates are handed to
+whichever clients the deployment names, **in the order `CLIENT_ENTITIES`
+declares them**. That order is the mapping, and it is why the seeder uses
+declaration order rather than sorting: sorted, a client called ABM sorted
+ahead of LAD and was handed the other company's estate, with the other
+company's tables under its own name.
+
 - **Allowed:** Apache-2.0, MIT, BSD-2/3, ISC, PSF, Zlib
 - **Blocked:** GPL, AGPL, LGPL, SSPL, BUSL, Elastic, proprietary
 - **Review (non-fatal):** MPL-2.0 and anything unclassifiable

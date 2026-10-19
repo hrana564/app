@@ -1,7 +1,6 @@
 """
 CA-04  -  Single staff member dominates a day's cash settlement
 
-Entity : CLIENT-A (demo estate)
 System : POS  ->  ipos_sales
 
 Source requirement (demo estate continuous auditing areas #4 and #6):
@@ -23,14 +22,12 @@ DESCRIPTION = (
     "One staff member settles more than the permitted share of the day's "
     "cash-tendered invoices."
 )
-ENTITY = "CLIENT-A"
 DATASOURCES = ["ipos_sales"]
 
 # One staff member may settle at most this share of the day's cash invoices.
 SINGLE_STAFF_CASH_SHARE_LIMIT = 50.0
 
 CASH_TENDER = "cash"
-
 
 def run(ctx) -> dict:
     share_limit = SINGLE_STAFF_CASH_SHARE_LIMIT
@@ -44,7 +41,7 @@ def run(ctx) -> dict:
         return {
             "status": "success",
             "error_message": None,
-            "summary": f"No cash invoices for CLIENT-A on {ctx.date}",
+            "summary": f"No cash invoices on {ctx.date}",
             "metrics": {},
             "rows": [],
         }

@@ -20,6 +20,13 @@ The model is shown the tables the admin selected, and only those. A selector
 the model may wander outside of is a selector that does not select anything -
 and the trial would catch it after the model had already written a rule around
 a table nobody chose.
+
+THE RULE DOES NOT NAME ITS CLIENT
+---------------------------------
+Which client a rule belongs to is a property of the rule's ROW, chosen when
+the rule is registered. So the model is not asked for an ENTITY constant: a
+file that named one would carry a client's identity into the source, and would
+be wrong the moment the same file was registered for a different client.
 """
 
 from __future__ import annotations
@@ -53,12 +60,15 @@ A rule is a single Python file. It MUST define exactly one function:
 
     def run(ctx) -> dict:
 
-and MUST declare four module constants:
+and MUST declare three module constants:
 
     NAME        str   one line, human readable: what the control proves
     DESCRIPTION str   one or two lines, plain language, for an auditor
-    ENTITY      str   the client code, exactly as given above
     DATASOURCES list  the tables it reads, exactly as they are named above
+
+It does NOT declare which client the rule is for. That is a property of the
+rule's row, chosen when the rule is registered - so one file can be
+registered for whichever client the deployment wants it for.
 
 `ctx` is provided by the platform and offers:
     ctx.table("name")  -> a polars DataFrame holding the rows this run staged

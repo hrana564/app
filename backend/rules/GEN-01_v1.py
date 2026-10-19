@@ -2,12 +2,10 @@ import polars as pl
 
 NAME = "POS transactions settled by departed employees"
 DESCRIPTION = "Identifies POS transactions settled by employees on or after their exit date, when access should already have been revoked, and groups the value settled per person."
-ENTITY = "CLIENT-A"
 DATASOURCES = ["ipos_sales", "hr_employees"]
 
 EXIT_DATE_FORMAT = "%Y-%m-%d"
 INVOICE_TIMESTAMP_FORMAT = "%Y-%m-%d %H:%M:%S"
-
 
 def run(ctx) -> dict:
     sales = ctx.table("ipos_sales").with_columns(

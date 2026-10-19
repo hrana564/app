@@ -1,7 +1,6 @@
 """
 CA-06  -  Ex-staff member still transacting in the POS
 
-Entity : CLIENT-A (demo estate)
 Systems: POS (ipos_sales)  JOIN  HRMS (hr_employees)
 
 Source requirement (demo estate continuous auditing area #9):
@@ -26,7 +25,6 @@ DESCRIPTION = (
     "POS transactions settled by employees who have already exited in HRMS - "
     "access has not been revoked."
 )
-ENTITY = "CLIENT-A"
 DATASOURCES = ["ipos_sales", "hr_employees"]
 
 # Days after exit before POS activity counts as a breach.
@@ -35,7 +33,6 @@ EX_STAFF_GRACE_DAYS = 0
 TS_FORMAT = "%Y-%m-%d %H:%M:%S"
 DATE_FORMAT = "%Y-%m-%d"
 EXITED_STATUS = "exited"
-
 
 def run(ctx) -> dict:
     min_days = EX_STAFF_GRACE_DAYS

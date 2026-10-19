@@ -54,7 +54,11 @@ from app.engine.datasources import ENTITIES  # noqa: E402
 # CSVs written here always land in a folder the registered datasources expect.
 # Writing a folder named after a client the deployment never configured would
 # produce data that discovery finds and no rule can reach.
-_CODES = sorted(ENTITIES)
+#
+# In DECLARATION ORDER, not sorted - the same reason, and the same mapping.
+# Which estate a client gets is the deployment's decision, and sorting made it
+# alphabetical by accident.
+_CODES = list(ENTITIES)
 if len(_CODES) < 2:
     raise SystemExit(
         "make_sample_data generates a two-client demo estate. Set "

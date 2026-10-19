@@ -40,12 +40,17 @@ There is no delivery policy to configure. Whatever rows you return are the
 ticket: non-empty opens one ticket, empty opens none. If you want one ticket
 per store rather than one per run, group the rows yourself.
 
+WHICH CLIENT THIS RULE BELONGS TO
+---------------------------------
+Not here. The client is a property of the rule's ROW, chosen when the rule is
+registered - so the same file can be registered for whichever client the
+deployment wants it for, and the file carries no client's name.
+
 A WORKED EXAMPLE
 ----------------
     import polars as pl
 
     NAME = "CA-XX What this control proves"
-    ENTITY = "CLIENT-A"
     DATASOURCES = ["ipos_sales"]
 
     # Thresholds belong to the rule. Changing one is a code change, which is
@@ -116,11 +121,9 @@ import polars as pl
 
 NAME = "Template rule"
 DESCRIPTION = "Copy me. Replace the table, the threshold and the frame work."
-ENTITY = "CLIENT-A"
 DATASOURCES = ["ipos_sales"]
 
 VALUE_LIMIT = 500.0
-
 
 def run(ctx) -> dict:
     limit = VALUE_LIMIT

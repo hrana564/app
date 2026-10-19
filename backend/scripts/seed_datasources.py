@@ -29,7 +29,17 @@ from app.engine.datasources import ENTITIES
 # So the two demo estates are mapped positionally onto whatever CLIENT_ENTITIES
 # names. The demo data generator writes the same two layouts, so the CSVs on disk
 # and the registered tables always agree.
-_CODES = sorted(ENTITIES)
+#
+# IN DECLARATION ORDER, NOT SORTED. The two estates are different businesses,
+# and which one a client gets is the deployment's decision, not the alphabet's.
+# Sorting made it alphabetical by accident: a client called ABM sorted ahead of
+# LAD and was handed the other company's estate, with the other company's
+# tables under its own name.
+#
+# So the order of CLIENT_ENTITIES in the .env IS the mapping. The first client
+# gets the first estate (retail POS plus a Synapse warehouse plus HRMS); the
+# second gets the second (POS plus HRMS plus a Business Central ERP).
+_CODES = list(ENTITIES)
 if len(_CODES) < 2:
     raise SystemExit(
         "seed_datasources seeds a two-client demo estate. Set CLIENT_ENTITIES "
@@ -54,7 +64,7 @@ _CLIENT_A = [
     SeedSource(
         name="ipos_sales",
         entity=_FIRST,
-        system="POS",
+        system="iPOS (SaaS)",
         description="Point-of-sale invoice header.",
         grain="one row per invoice",
         columns={
@@ -72,7 +82,7 @@ _CLIENT_A = [
     SeedSource(
         name="ipos_items",
         entity=_FIRST,
-        system="POS",
+        system="iPOS (SaaS)",
         description="Selling-item master.",
         grain="one row per SKU",
         columns={
@@ -87,7 +97,7 @@ _CLIENT_A = [
     SeedSource(
         name="ipos_voids",
         entity=_FIRST,
-        system="POS",
+        system="iPOS (SaaS)",
         description="Void and cancellation events, with reason and staff.",
         grain="one row per void",
         columns={
@@ -110,7 +120,7 @@ _CLIENT_A_WHAPSE = [
     SeedSource(
         name="syn_inventory",
         entity=_FIRST,
-        system="Warehouse",
+        system="Azure Synapse",
         description="Store-level stock position and ageing.",
         grain="one row per store per SKU per snapshot",
         columns={
@@ -125,7 +135,7 @@ _CLIENT_A_WHAPSE = [
     SeedSource(
         name="syn_recipes",
         entity=_FIRST,
-        system="Warehouse",
+        system="Azure Synapse",
         description="Recipe master. POS items with no active recipe are an audit exception.",
         grain="one row per recipe",
         columns={
@@ -138,7 +148,7 @@ _CLIENT_A_WHAPSE = [
     SeedSource(
         name="syn_wastage",
         entity=_FIRST,
-        system="Warehouse",
+        system="Azure Synapse",
         description="Wastage postings by store, item, reason and employee.",
         grain="one row per wastage entry",
         columns={
@@ -155,7 +165,7 @@ _CLIENT_A_WHAPSE = [
     SeedSource(
         name="syn_stock_transfers",
         entity=_FIRST,
-        system="Warehouse",
+        system="Azure Synapse",
         description="Inter-store and warehouse stock transfers.",
         grain="one row per transfer line",
         columns={
@@ -219,7 +229,7 @@ _CLIENT_B_POS = [
     SeedSource(
         name="ipos_sales",
         entity=_SECOND,
-        system="POS",
+        system="iPOS",
         description="POS invoice header (retail stores).",
         grain="one row per invoice",
         columns={
@@ -236,7 +246,7 @@ _CLIENT_B_POS = [
     SeedSource(
         name="ipos_price_overrides",
         entity=_SECOND,
-        system="POS",
+        system="iPOS",
         description="Manual price override events applied at the till.",
         grain="one row per override",
         columns={
@@ -254,7 +264,7 @@ _CLIENT_B_POS = [
     SeedSource(
         name="ipos_discounts",
         entity=_SECOND,
-        system="POS",
+        system="iPOS",
         description="Discount and promotion lines applied at the till.",
         grain="one row per discount line",
         columns={
@@ -320,7 +330,7 @@ _CLIENT_B_ERP = [
     SeedSource(
         name="bc_purchase_orders",
         entity=_SECOND,
-        system="ERP",
+        system="Business Central",
         description="Purchase order header.",
         grain="one row per purchase order",
         columns={
@@ -336,7 +346,7 @@ _CLIENT_B_ERP = [
     SeedSource(
         name="bc_goods_receipts",
         entity=_SECOND,
-        system="ERP",
+        system="Business Central",
         description="Goods received notes. Un-invoiced GRNs are an audit exception.",
         grain="one row per goods receipt",
         columns={
@@ -353,7 +363,7 @@ _CLIENT_B_ERP = [
     SeedSource(
         name="bc_vendors",
         entity=_SECOND,
-        system="ERP",
+        system="Business Central",
         description="Vendor master with bank details - the ERP side of the "
                     "vendor/employee bank match control.",
         grain="one row per vendor",
@@ -370,7 +380,7 @@ _CLIENT_B_ERP = [
     SeedSource(
         name="bc_customer_credit",
         entity=_SECOND,
-        system="ERP",
+        system="Business Central",
         description="Distribution customer credit limits and AR ageing.",
         grain="one row per customer",
         columns={

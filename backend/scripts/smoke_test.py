@@ -28,15 +28,29 @@ MOUNT_DIR = Path(__file__).resolve().parent.parent.parent / "mount"
 ADMIN = ("admin_user", "Admin@2026")
 AUDITOR = ("audit_user", "Audit@2026")
 
+# The demo estate is two layouts. Which client gets which one is the
+# deployment's decision - the order of CLIENT_ENTITIES in the .env - so the
+# suite identifies an estate by its tables, and never by a client's code.
+WAREHOUSE_ESTATE = "syn_inventory"  # retail POS + a warehouse + HRMS
+ERP_ESTATE = "bc_vendors"           # POS + HRMS + a Business Central ERP
+
+# The two estates, by the name the rule specs use.
+ESTATE_RETAIL = "retail"
+ESTATE_ERP = "erp"
+
 RULE_SPECS = [
     ("CA-03", "high", "CA-03_v1.py",
-     "Value settled in the last hour of trading exceeds a multiple of the hourly average."),
+     "Value settled in the last hour of trading exceeds a multiple of the hourly average.",
+     ESTATE_RETAIL),
     ("CA-04", "critical", "CA-04_v1.py",
-     "One staff member settles more than the permitted share of the day's cash invoices."),
+     "One staff member settles more than the permitted share of the day's cash invoices.",
+     ESTATE_RETAIL),
     ("CA-22", "critical", "CA-22_v1.py",
-     "Vendor bank details in the ERP match employee bank details in HRMS."),
+     "Vendor bank details in the ERP match employee bank details in HRMS.",
+     ESTATE_ERP),
     ("CA-06", "high", "CA-06_v1.py",
-     "Exited employees still settling POS transactions."),
+     "Exited employees still settling POS transactions.",
+     ESTATE_RETAIL),
 ]
 
 EXEC_EXPECTATIONS = {
@@ -46,20 +60,6 @@ EXEC_EXPECTATIONS = {
     "CA-06": ("2026-10-16", "2026-10-15"),
 }
 
-
-def rule_entity(filename: str) -> str:
-    """The client a rule file scopes itself to, read from the rule.
-
-    Not hardcoded here. A literal would be a second source of truth that drifts
-    the first time a rule is retargeted, and the drift is silent: the API would
-    register the rule against one client while the file scopes itself to
-    another, and every assertion downstream would pass against the wrong one.
-    """
-    src = (RULES_DIR / filename).read_text(encoding="utf-8")
-    m = re.search(r'^ENTITY\s*=\s*"([^"]+)"', src, re.MULTILINE)
-    if not m:
-        raise SystemExit(f"{filename} declares no ENTITY constant")
-    return m.group(1)
 
 passes, failures = 0, 0
 
@@ -170,12 +170,46 @@ def main() -> int:
                   str(sorted({d["entity"] for d in ds})))
         ds = (c.get("/api/datasources", headers=ud, params={"entity": FIRST}).json()
               + c.get("/api/datasources", headers=ud, params={"entity": SECOND}).json())
-        check(f"{FIRST} has the POS/Warehouse/HRMS tables",
-              {"ipos_sales", "syn_inventory", "hr_employees"}
-              <= {d["name"] for d in ds if d["entity"] == FIRST})
-        check(f"{SECOND} has the ERP tables",
-              {"bc_vendors", "bc_purchase_orders"}
-              <= {d["name"] for d in ds if d["entity"] == SECOND})
+
+        # WHICH client gets which demo estate is the deployment's decision - the
+        # order of CLIENT_ENTITIES in the .env. The suite must not assume it.
+        # It used to: it took the alphabetically first code and expected the
+        # retail estate under it. When the two were mapped the other way round,
+        # it looked for "a table the rules read" on a client whose rules lived
+        # on the OTHER one, found none, and deleted a live table.
+        #
+        # What the suite CAN know is the LAYOUT, from the table names.
+        by_entity = {
+            ent: {d["name"] for d in ds if d["entity"] == ent}
+            for ent in (FIRST, SECOND)
+        }
+        RETAIL = next(
+            (e for e in (FIRST, SECOND) if WAREHOUSE_ESTATE in by_entity[e]), None
+        )
+        ERP = next(
+            (e for e in (FIRST, SECOND) if ERP_ESTATE in by_entity[e]), None
+        )
+        check("one client holds the retail + warehouse estate", RETAIL is not None,
+              str(sorted(by_entity)))
+        check("one client holds the ERP estate", ERP is not None,
+              str(sorted(by_entity)))
+        check("the two estates went to different clients",
+              RETAIL is not None and ERP is not None and RETAIL != ERP,
+              f"{RETAIL} / {ERP}")
+        if RETAIL is None or ERP is None:
+            print("FAIL  the demo estate did not split across the two clients")
+            return 1
+
+        # The estate -> client resolution, once. A rule's client comes from the
+        # estate it belongs to, never from a literal in this file.
+        ESTATE_CLIENT = {ESTATE_RETAIL: RETAIL, ESTATE_ERP: ERP}
+
+        check(f"{RETAIL} has the POS/Warehouse/HRMS tables",
+              {"ipos_sales", "syn_inventory", "hr_employees"} <= by_entity[RETAIL],
+              str(sorted(by_entity[RETAIL])))
+        check(f"{ERP} has the ERP tables",
+              {"bc_vendors", "bc_purchase_orders"} <= by_entity[ERP],
+              str(sorted(by_entity[ERP])))
         for ent in (FIRST, SECOND):
             d = c.get("/api/datasources/available-dates", headers=ud,
                       params={"entity": ent}).json()
@@ -185,8 +219,8 @@ def main() -> int:
         # --- the admin's job: see what landed, register it, retire what we
         # --- no longer consume. Every assertion below is idempotent.
         ov = c.get("/api/datasources/overview", headers=ud,
-                   params={"entity": FIRST}).json()
-        check("overview names the entity", ov["entity"] == FIRST)
+                   params={"entity": RETAIL}).json()
+        check("overview names the entity", ov["entity"] == RETAIL)
         check("overview resolved a data date", bool(ov["data_date"]), ov["data_date"])
         check("overview lists registered tables", len(ov["registered"]) >= 9,
               str(len(ov["registered"])))
@@ -219,7 +253,7 @@ def main() -> int:
 
         # --- preview: what the file actually holds --------------------------
         prev = c.get("/api/datasources/preview", headers=ud, params={
-            "entity": FIRST, "name": "ipos_sales", "limit": 5}).json()
+            "entity": RETAIL, "name": "ipos_sales", "limit": 5}).json()
         check("preview returns rows", len(prev["rows"]) == 5, str(len(prev["rows"])))
         check("preview reports the whole file's size, not just what it sent",
               prev["total_rows"] > 5, str(prev["total_rows"]))
@@ -236,10 +270,10 @@ def main() -> int:
         for bad in ("../../settings", "a/b", ".hidden"):
             check(f"preview refuses a path fragment: {bad!r}",
                   c.get("/api/datasources/preview", headers=ud,
-                        params={"entity": FIRST, "name": bad}).status_code == 400)
+                        params={"entity": RETAIL, "name": bad}).status_code == 400)
         check("preview 404s a file that did not land",
               c.get("/api/datasources/preview", headers=ud,
-                    params={"entity": FIRST, "name": "definitely_not_here"}).status_code == 404)
+                    params={"entity": RETAIL, "name": "definitely_not_here"}).status_code == 404)
 
         # --- register, then retire, then restore ----------------------------
         probe = "smoke_probe_table"
@@ -319,13 +353,14 @@ def main() -> int:
         section("rules")
         existing = c.get("/api/rules", headers=ah).json()
         present = {x["code"] for x in existing["data"]}
-        for code, severity, filename, desc in RULE_SPECS:
+        for code, severity, filename, desc, estate in RULE_SPECS:
             if code in present:
                 check(f"{code} already registered", True)
                 continue
             src = (RULES_DIR / filename).read_text(encoding="utf-8")
             r = c.post("/api/rules", headers=ah, json={
-                "code": code, "name": code, "entity": rule_entity(filename), "description": desc,
+                "code": code, "name": code, "entity": ESTATE_CLIENT[estate],
+                "description": desc,
                 "severity": severity,
                 "source_code": src, "status": "draft"})
             if r.status_code != 201:
@@ -342,7 +377,7 @@ def main() -> int:
         # hold is that the known rules are here and that each row is a head.
         listed = {x["code"] for x in all_rules["data"]}
         check("every known rule is listed",
-              all(code in listed for code, _, _, _ in RULE_SPECS),
+              all(spec[0] in listed for spec in RULE_SPECS),
               str(sorted(listed)))
         check("every listed rule is a head version",
               all(x["is_version_active"] for x in all_rules["data"]))
@@ -382,11 +417,16 @@ def main() -> int:
         # exercised for real. Checked HERE rather than in the datasource section,
         # where on a fresh database nothing reads the table yet and the DELETE
         # would succeed and destroy seeded data.
+        #
+        # On the RETAIL estate, because that is where CA-03 lives. The other
+        # estate has an ipos_sales of its own that no rule reads, and deleting
+        # THAT one would have succeeded - which is how this suite deleted a
+        # live table once.
         sales_row = next(
             (d for d in c.get("/api/datasources", headers=ud,
-                              params={"entity": FIRST}).json()
+                              params={"entity": RETAIL}).json()
              if d["name"] == "ipos_sales"), None)
-        check(f"ipos_sales is registered for {FIRST}", sales_row is not None)
+        check(f"ipos_sales is registered for {RETAIL}", sales_row is not None)
         if sales_row:
             blocked = c.delete(f"/api/datasources/{sales_row['id']}", headers=ah)
             check("removing a table live rules read is refused", blocked.status_code == 409,
@@ -908,13 +948,20 @@ def main() -> int:
               reached >= {FIRST, SECOND},
               str(sorted(x for x in reached if x)))
 
-        # The window is a real filter, not a label.
+        # The window is a real filter, not a label. It counts the days a client
+        # has RUNS on, so it needs a client with more than one: the retail
+        # estate, whose three controls were run on four different dates. The
+        # ERP estate has a single rule, run on a single date, and a window
+        # cannot narrow one day - which is not a broken window, it is a client
+        # with nothing to narrow.
+        dash_retail = c.get("/api/dashboard", headers=ah,
+                            params={"entity": RETAIL}).json()
         narrow = c.get("/api/dashboard", headers=ah,
-                       params={"entity": FIRST, "window": 2}).json()
+                       params={"entity": RETAIL, "window": 2}).json()
         check("the window narrows the grid", len(narrow["days"]) == 2, len(narrow["days"]))
         check("a narrower window is the tail of the wider one",
               [r["date"] for r in narrow["days"]]
-              == [r["date"] for r in dash_first["days"]][-2:],
+              == [r["date"] for r in dash_retail["days"]][-2:],
               str([r["date"] for r in narrow["days"]]))
         check("the window cannot be set to nothing",
               c.get("/api/dashboard", headers=ah, params={"window": 1}).status_code == 422,
@@ -1021,7 +1068,7 @@ def main() -> int:
         from app.engine.trial import run_trial
         from app.settings import settings as app_settings
 
-        entity = rule_entity("CA-03_v1.py")
+        entity = ESTATE_CLIENT[ESTATE_RETAIL]
         overview = c.get("/api/datasources/overview", headers=ah,
                          params={"entity": entity}).json()
         test_day = overview["data_date"]

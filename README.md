@@ -421,9 +421,15 @@ The rule says how far back from that anchor to read. Each number has one job.
 
 ```python
 NAME        = "CA-03 Last-hour of trading value spike"
-ENTITY      = "CLIENT-A"
+DESCRIPTION = "Value settled in the last hour of trading exceeds a multiple of the hourly average."
 DATASOURCES = ["ipos_sales"]
 ```
+
+A rule file does **not** say which client it belongs to. That is a property of
+the rule's row, chosen when the rule is registered — so one file can be
+registered for whichever client the deployment wants it for, and the source
+carries no client's name. The catalogue is where a table is bound to a client;
+the rule is bound the same way.
 
 ### Binding a rule to its datasources
 

@@ -1,7 +1,6 @@
 """
 CA-22  -  Vendor bank details match employee bank details
 
-Entity : CLIENT-B (demo estate)
 Systems: ERP (bc_vendors)  JOIN  HRMS (hr_employees)
 
 Source requirement (demo estate continuous auditing areas #22 and #23):
@@ -30,7 +29,6 @@ DESCRIPTION = (
     "Vendor bank account details in ERP match employee bank "
     "details in HRMS - a payments-fraud indicator."
 )
-ENTITY = "CLIENT-B"
 DATASOURCES = ["hr_employees", "bc_vendors"]
 
 # A vendor bank record must clear this similarity (%) against an employee
@@ -41,7 +39,6 @@ BANK_MATCH_MIN_SIMILARITY = 92.0
 NON_ALPHANUMERIC = r"[^a-z0-9]"
 EXITED_STATUS = "exited"
 
-
 def _normalise(column):
     """Lowercase and drop everything that is not a letter or a digit.
 
@@ -50,7 +47,6 @@ def _normalise(column):
     """
     return column.str.to_lowercase().str.replace_all(NON_ALPHANUMERIC, "")
 
-
 def _similarity(left: str, right: str) -> float:
     """Percentage similarity, 0-100."""
     if not left or not right:
@@ -58,7 +54,6 @@ def _similarity(left: str, right: str) -> float:
     if left == right:
         return 100.0
     return round(SequenceMatcher(None, left, right).ratio() * 100, 2)
-
 
 def run(ctx) -> dict:
     min_similarity = BANK_MATCH_MIN_SIMILARITY

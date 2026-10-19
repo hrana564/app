@@ -25,6 +25,7 @@ node_modules/
 dist/
 .vite/
 npm-debug.log*
+*.tsbuildinfo
 
 # The mount: external data the app reads but never owns. A volume in production,
 # a generated tree in development. Keep the folder shape, ignore the payloads.

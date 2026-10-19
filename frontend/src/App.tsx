@@ -10,7 +10,7 @@ import { dataProvider } from "./dataProvider";
 import { authProvider } from "./authProvider";
 import { Login } from "./pages/Login";
 import { Dashboard } from "./pages/Dashboard";
-import { RuleList, RuleShow } from "./resources/Rule";
+import { RuleList, RuleShow, RuleEdit } from "./resources/Rule";
 import { RunList, RunShow } from "./resources/Run";
 import { TicketList, TicketShow } from "./resources/Ticket";
 import { DatasourceList } from "./resources/Meta";
@@ -37,6 +37,7 @@ export const App = () => (
       name="rules"
       list={RuleList}
       show={RuleShow}
+      edit={RuleEdit}
       icon={RuleIcon}
       options={{ label: "Rules" }}
     />

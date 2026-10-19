@@ -87,9 +87,17 @@ function listQuery(resource: string, params: Partial<GetListParams>): string {
   q.set("page", String(p.page ?? 1));
   q.set("perPage", String(p.perPage ?? 25));
   if (params.sort) {
-    const [field, order] = String(params.sort).split(" ");
-    q.set("sort", field);
-    q.set("order", (order ?? "ASC").toUpperCase());
+    // react-admin hands sort over as "field ORDER", but an object has been seen
+    // reaching here too - a plain String(sort) produced the literal
+    // "sort=[object Object]&order=OBJECT" on the wire. Accept either shape.
+    const raw: any = params.sort;
+    const parts = typeof raw === "string" ? raw.split(" ") : [];
+    const field = typeof raw === "string" ? parts[0] : raw.field;
+    const order = typeof raw === "string" ? parts[1] : raw.order;
+    if (field) {
+      q.set("sort", String(field));
+      q.set("order", String(order ?? "ASC").toUpperCase());
+    }
   }
   const filter = params.filter ?? {};
   for (const [key, value] of Object.entries(filter)) {
@@ -212,6 +220,19 @@ export const api = {
 
   ruleVersions: (code: string) => request<any>(`/api/rules/${code}/versions`),
 
+  /**
+   * Every version of every rule, metadata only.
+   *
+   * The list endpoint is used deliberately rather than /versions: RuleOut
+   * omits `source_code`, while RuleVersionOut embeds the full source of every
+   * version in the tree. One call therefore gives the rules screen its whole
+   * drill-down history without downloading every rule's code.
+   */
+  allRuleVersions: () =>
+    request<{ data: any[]; total: number }>(
+      "/api/rules?all_versions=true&perPage=500&sort=code&order=ASC",
+    ),
+
   testRule: (code: string, data_date: string | null) =>
     request<any>(`/api/rules/${code}/test`, {
       method: "POST",
@@ -220,6 +241,9 @@ export const api = {
 
   updateRule: (code: string, payload: Record<string, unknown>) =>
     request<any>(`/api/rules/${code}`, { method: "PUT", body: JSON.stringify(payload) }),
+
+  deleteRule: (code: string) =>
+    request<void>(`/api/rules/${code}`, { method: "DELETE" }),
 
   setRuleStatus: (code: string, status: string) =>
     request<any>(`/api/rules/${code}/status`, {
@@ -263,8 +287,14 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
-  listSchedules: (ruleCode: string) =>
-    request<{ data: any[] }>(`/api/rule-schedules?rule_code=${ruleCode}`),
+  /**
+   * Omit `ruleCode` to get every schedule in one call. The rules screen does
+   * exactly that - fetching per row meant one request per row.
+   */
+  listSchedules: (ruleCode?: string) =>
+    request<{ data: any[] }>(
+      ruleCode ? `/api/rule-schedules?rule_code=${ruleCode}` : "/api/rule-schedules",
+    ),
   createSchedule: (payload: any) =>
     request<any>("/api/rule-schedules", { method: "POST", body: JSON.stringify(payload) }),
   updateSchedule: (id: number, payload: any) =>

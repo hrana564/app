@@ -1,4 +1,7 @@
-import { Chip, Box } from "@mui/material";
+import {
+  Chip, Box, IconButton, Stack, Tooltip, Typography, useTheme,
+} from "@mui/material";
+import { Link } from "react-router-dom";
 import { useRecordContext } from "react-admin";
 import { severityColor, statusColor, entityColor } from "../theme";
 
@@ -22,6 +25,78 @@ export const EntityChip = ({ value }: { value?: string }) =>
   ) : null;
 
 /* ------------------------------------------------------------------ */
+/* Dot + text                                                          */
+/* ------------------------------------------------------------------ */
+/**
+ * The rules screen used a filled Chip for severity, status and validation -
+ * three coloured blocks per row, so the eye had nothing to land on. Colour
+ * survives here as a small accent dot; the fill does not.
+ *
+ * `tone` is a palette key, so the colour comes from the theme rather than a
+ * second hard-coded table that could drift out of step with it.
+ */
+export const DotLabel = ({
+  value,
+  tone = "default",
+  hint,
+}: {
+  value?: string | null;
+  tone?: string;
+  hint?: string;
+}) => {
+  const theme = useTheme();
+  const palette = theme.palette as unknown as Record<string, { main?: string } | undefined>;
+  const colour =
+    tone === "default" ? "#8d99ae" : (palette[tone]?.main ?? "#8d99ae");
+
+  if (!value) {
+    return (
+      <Typography variant="body2" color="text.secondary">
+        &mdash;
+      </Typography>
+    );
+  }
+  return (
+    <Stack direction="row" spacing={0.75} alignItems="center" sx={{ minWidth: 0 }}>
+      <Box
+        sx={{
+          width: 8,
+          height: 8,
+          borderRadius: "50%",
+          bgcolor: colour,
+          flexShrink: 0,
+        }}
+      />
+      <Typography
+        variant="body2"
+        noWrap
+        title={hint ?? value}
+        sx={{ textTransform: "capitalize" }}
+      >
+        {value}
+      </Typography>
+    </Stack>
+  );
+};
+
+/** Status on the first line, validation state as a quiet caption beneath. */
+export const RuleStateCell = ({ record }: { record: any }) => {
+  const status = record?.status;
+  return (
+    <Stack spacing={0.15} sx={{ minWidth: 0 }}>
+      <DotLabel value={status} tone={statusColor[status] ?? "default"} />
+      <Typography variant="caption" color="text.secondary" noWrap>
+        {record?.validation_status === "valid"
+          ? "validated"
+          : record?.validation_status === "invalid"
+            ? "validation failed"
+            : "not validated"}
+      </Typography>
+    </Stack>
+  );
+};
+
+/* ------------------------------------------------------------------ */
 /* Datagrid cell fields                                                */
 /* react-admin's TextField has no `render` prop - these read the row   */
 /* record from context instead.                                        */
@@ -42,6 +117,63 @@ export const IdField = fieldFromRecord((v) => <RowCount value={v} />);
 export const BooleanDotField = fieldFromRecord((v) => (
   <Chip size="small" label={v ? "ENABLED" : "DISABLED"} color={v ? "success" : "default"} />
 ));
+
+/**
+ * An icon action with a tooltip. Disabled actions stay in place and say why,
+ * rather than disappearing - a missing button is a question a user has to ask.
+ *
+ * Give it `to` to navigate or `onClick` to act. It never accepts both.
+ */
+export const ActionIcon = ({
+  title,
+  icon,
+  onClick,
+  disabled,
+  to,
+  color = "default",
+}: {
+  title: string;
+  icon: React.ReactNode;
+  onClick?: (e: React.MouseEvent) => void;
+  disabled?: boolean;
+  to?: string;
+  color?: "default" | "primary" | "error";
+}) => {
+  const sx = {
+    color: disabled ? undefined : color === "error" ? "error.main" : "text.secondary",
+    "&:hover": {
+      bgcolor: color === "error" ? "rgba(198, 40, 40, 0.08)" : "action.hover",
+    },
+  };
+  return (
+    <Tooltip title={title}>
+      <span>
+        {to ? (
+          <IconButton
+            size="small"
+            disabled={disabled}
+            component={Link}
+            to={to}
+            aria-label={title}
+            sx={sx}
+          >
+            {icon}
+          </IconButton>
+        ) : (
+          <IconButton
+            size="small"
+            disabled={disabled}
+            onClick={onClick}
+            aria-label={title}
+            sx={sx}
+          >
+            {icon}
+          </IconButton>
+        )}
+      </span>
+    </Tooltip>
+  );
+};
 
 export const RowCount = ({ value }: { value?: number }) => (
   <Box component="span" sx={{ fontVariantNumeric: "tabular-nums", fontWeight: 600 }}>

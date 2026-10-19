@@ -419,6 +419,28 @@ ENTITY      = "LAD"
 DATASOURCES = ["ipos_sales"]
 ```
 
+### Binding a rule to its datasources
+
+On the rule editor, a **Datasources** picker sits between the metadata and the
+Python source. It lists the tables registered for that entity — from the
+catalogue an admin maintains on the Data Sources screen — and writes the
+selection into the `DATASOURCES` constant above.
+
+It writes into the **file**, not a database column, and that is deliberate: the
+runner reads the file, so a column beside it would be a second source of truth
+that could quietly disagree with what actually runs.
+
+Three things it tells you that a declaration alone would not:
+
+| Message | Means |
+|---|---|
+| **not registered for this entity** | the table is retired, removed, or belongs to another entity — validation will refuse the rule |
+| **retired** | a live rule still reads it. It keeps running, and will fail once the ETL stops sending the file |
+| **read but not declared** | `ctx.table("x")` names a table the constant omits — add it so validation covers it |
+
+A rule whose declaration cannot be parsed is reported rather than rewritten: the
+picker shows what the code actually reads and leaves the file alone.
+
 Declared dependencies are surfaced in the UI, so *"this rule needs `lad.last_hour_ratio`, which does
 not exist"* is a warning **before** a scheduled run silently defaults it.
 

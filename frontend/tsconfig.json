@@ -16,5 +16,9 @@
     "noUnusedParameters": false,
     "noFallthroughCasesInSwitch": true
   },
-  "include": ["src"]
+  "include": ["src"],
+  // Runs under `npx tsx`, not in the browser: it reads backend/rules/*.py off
+  // disk to check the DATASOURCES rewrite against real files. It has no node
+  // types here, and it must never reach the bundle.
+  "exclude": ["src/**/*.check.ts"]
 }

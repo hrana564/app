@@ -220,6 +220,25 @@ losing it.
 
 Do not add a second way to express a rule.
 
+### `DATASOURCES` is in the file, so the picker edits the file
+
+The Data Sources picker on the rule editor writes `DATASOURCES = [...]` **into the
+Python source**. It does not save to a database column, and it must not be changed
+to do so.
+
+The runner reads the file. A column beside it would be a second source of truth
+that could disagree, and the runner would believe the file while the screen
+believed the row. The picker is a convenience over the declaration.
+
+`frontend/src/components/ruleSource.ts` holds that rewriting. It strips docstrings
+and comments first, because `_template.py` documents itself with
+`ctx.count_rows("name")` — reading raw text offered to bind a table called `name`
+that does not exist. A commented-out `DATASOURCES` is not a live declaration
+either.
+
+When the constant cannot be parsed, the picker refuses to write rather than
+guessing, and says what the code actually reads.
+
 ---
 
 ## 5. Running it
@@ -256,7 +275,15 @@ cd backend
 cd ../frontend
 npx tsc --noEmit
 npm run build
+npx tsx src/components/ruleSource.check.ts           # must report 0 failures
 ```
+
+`ruleSource.check.ts` is the exception to the pattern: a plain script, not a
+test suite, because this project has no frontend test runner and adding one for
+a single file is not a trade worth making. It exists because that file rewrites a
+Python rule an auditor wrote — "it looks right in the dropdown" is not evidence,
+so the rewrite is asserted against the real `backend/rules/*.py`. It is excluded
+in `tsconfig.json` so it never reaches the bundle.
 
 The smoke test is **idempotent** — run it twice. Assertions work on ticket
 *identity*, not absolute counts, so a previous run's tickets don't fail the next.

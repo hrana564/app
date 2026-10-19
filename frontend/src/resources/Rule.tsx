@@ -26,6 +26,7 @@ import ArrowDownwardIcon from "@mui/icons-material/ArrowDownward";
 import ScheduleIcon from "@mui/icons-material/Schedule";
 import { api, getStoredUser } from "../dataProvider";
 import { CadenceEditor, type CadenceConfig } from "../components/CadenceEditor";
+import { DatasourcePicker } from "../components/DatasourcePicker";
 import {
   ActionIcon, CodeBlock, DotLabel, EntityField, IdField, JsonBlock, RowsTable,
   RuleStateCell, SeverityField, StatusField, RowCountField,
@@ -1531,8 +1532,12 @@ const RuleEditForm = () => {
                 onChange={(e) =>
                   setForm({ ...form, lookback_days: Math.max(1, Number(e.target.value) || 1) })
                 }
-                sx={{ minWidth: 160 }}
-                helperText="1 = the anchor day only"
+                sx={{ minWidth: 200 }}
+                helperText={
+                  form.lookback_days === 1
+                    ? "1 — the anchor day only"
+                    : `${form.lookback_days} — T-${form.lookback_days - 1} to T, ${form.lookback_days} days of data staged per run`
+                }
               />
             </Stack>
             <MuiTextField
@@ -1544,6 +1549,23 @@ const RuleEditForm = () => {
               fullWidth
             />
           </Stack>
+        </CardContent>
+      </Card>
+
+      {/* Which tables this rule reads, then the Python that reads them.
+          The order matters: the binding is a decision, the code is the detail. */}
+      <Card>
+        <CardContent>
+          {!loading ? (
+            <DatasourcePicker
+              entity={record.entity}
+              source={source}
+              onChange={setSource}
+              disabled={busy}
+            />
+          ) : (
+            <CircularProgress size={22} />
+          )}
         </CardContent>
       </Card>
 

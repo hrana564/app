@@ -237,13 +237,9 @@ def main() -> int:
                   c.delete(f"/api/datasources/{probe_id}", headers=ah).status_code == 404)
             check("auditor CANNOT remove a datasource",
                   c.delete(f"/api/datasources/{probe_id}", headers=ud).status_code in (403, 404))
-
-            # Recreate so the next run starts from the same place.
-            c.post("/api/datasources", headers=ah, json={
-                "name": probe, "entity": "LAD", "system": "Smoke",
-                "description": "created by the smoke test",
-                "grain": "one row per nothing", "columns": {"id": "VARCHAR"},
-            })
+            # Deliberately NOT recreated. A test that leaves a table registered
+            # puts a permanent phantom row in the admin's datasource list, and
+            # the next run creates its own.
 
         if sales:
             refused = c.delete(f"/api/datasources/{sales['id']}", headers=ah)

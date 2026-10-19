@@ -96,6 +96,21 @@ class DatasourceOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class DatasourcePreview(BaseModel):
+    """The first rows of one landed file, so an admin can see what it holds.
+
+    `total_rows` is the whole file while `limit` is how much of it is shown, so
+    the screen can say "10 of 4,318" rather than implying it is all of it.
+    """
+
+    entity: str
+    name: str
+    data_date: str
+    total_rows: int | None = None
+    rows: list[dict[str, str | None]] = []
+    limit: int = 10
+
+
 class DatasourceRegister(BaseModel):
     """Register a table the ETL delivered.
 

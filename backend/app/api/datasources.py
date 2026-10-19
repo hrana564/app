@@ -6,6 +6,7 @@ these tables".
     GET    /                  registered tables, flat
     GET    /overview          registered + what landed today, in ONE call
     GET    /discovered        just what is on disk, read from the CSV headers
+    GET    /preview           the first rows of one landed file
     GET    /available-dates   days that have a folder
     POST   /                  register a table the ETL delivered
     DELETE /{id}              remove a registration
@@ -32,20 +33,29 @@ is the whole of the safety, and it is honest: nothing is silently half-removed.
 from __future__ import annotations
 
 from datetime import date
+from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+import polars as pl
+from fastapi import APIRouter, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import JSONB
 
 from app.api.deps import AdminUser, CurrentUser, SessionDep
 from app.engine.datasources import ENTITIES, SYSTEMS_BY_ENTITY
-from app.engine.discovery import available_dates, discover, latest_date
+from app.engine.discovery import (
+    available_dates,
+    discover,
+    entity_root,
+    latest_date,
+    preview_rows,
+)
 from app.models import Datasource, Rule
 from app.schemas import (
     DatasourceDiscovered,
     DatasourceOut,
     DatasourceOverview,
+    DatasourcePreview,
     DatasourceRegister,
 )
 from app.settings import settings
@@ -80,6 +90,55 @@ async def list_datasources(
         stmt = stmt.where(Datasource.entity == entity.upper())
     rows = (await session.execute(stmt.order_by(Datasource.entity, Datasource.name))).scalars().all()
     return [DatasourceOut.model_validate(d) for d in rows]
+
+
+@router.get("/preview", response_model=DatasourcePreview)
+async def preview(
+    _user: CurrentUser,
+    entity: str = "LAD",
+    name: str = "",
+    data_date: str | None = None,
+    limit: int = Query(10, ge=1, le=200),
+) -> DatasourcePreview:
+    """The first rows of one landed file, for a human to look at.
+
+    Reading, not querying. Nothing here touches the catalogue: an admin deciding
+    whether to trust a table needs to see what the ETL sent, and that is true
+    whether or not anyone has registered it yet.
+
+    The name arrives from the client and is joined onto a filesystem path, so it
+    is held to the same rule as registration - a table name is an identifier,
+    never a path fragment.
+    """
+    code = entity.upper()
+    if code not in ENTITIES:
+        raise HTTPException(404, f"Unknown entity '{entity}'")
+    if not name or "/" in name or "\\" in name or name.startswith("."):
+        raise HTTPException(400, f"'{name}' is not a usable table name")
+
+    day = data_date or latest_date(code) or ""
+    path = entity_root(code) / day / f"{name}.csv"
+    if not path.is_file():
+        raise HTTPException(
+            404, f"{name}.csv did not land for {code} on {day or '(no day)'}"
+        )
+
+    return DatasourcePreview(
+        entity=code,
+        name=name,
+        data_date=day,
+        total_rows=_row_count(path),
+        rows=preview_rows(path, limit),
+        limit=limit,
+    )
+
+
+def _row_count(path: Path) -> int | None:
+    """Total rows in the file, or None if the file will not parse."""
+    try:
+        return int(pl.scan_csv(path).select(pl.len().alias("n")).collect()["n"][0])
+    except Exception:  # noqa: BLE001 - the preview is best-effort
+        return None
 
 
 @router.get("/available-dates")

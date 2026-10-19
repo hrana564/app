@@ -244,19 +244,44 @@ export const CodeBlock = ({ code }: { code: string }) => (
 );
 
 /** Tabular viewer for the exception rows attached to a ticket or run. */
-export const RowsTable = ({ rows }: { rows: Record<string, unknown>[] }) => {
+/**
+ * A grid of records, scrollable in both directions with the header pinned.
+ *
+ * Shared by a run's exception rows and a datasource preview, which want the same
+ * thing from different data. The optional props exist because the defaults are
+ * tuned for the first: a run's rows are the reason the user is on the page, so
+ * they are capped and say so when empty, while a preview is for skimming and
+ * should show every column the file has.
+ */
+export const RowsTable = ({
+  rows,
+  emptyLabel = "No exception rows.",
+  maxColumns = 14,
+  caption,
+}: {
+  rows: Record<string, unknown>[];
+  emptyLabel?: string;
+  maxColumns?: number;
+  caption?: React.ReactNode;
+}) => {
   if (!rows || rows.length === 0) {
-    return <Box sx={{ color: "text.secondary", fontStyle: "italic" }}>No exception rows.</Box>;
+    return (
+      <Box sx={{ color: "text.secondary", fontStyle: "italic" }}>{emptyLabel}</Box>
+    );
   }
-  const columns = Array.from(
+  const all = Array.from(
     rows.reduce((set, row) => {
       Object.keys(row).forEach((k) => set.add(k));
       return set;
     }, new Set<string>()),
-  ).slice(0, 14);
+  );
+  const columns = all.slice(0, maxColumns);
+  const hidden = all.length - columns.length;
 
   return (
-    <Box sx={{ overflow: "auto", maxHeight: 420, border: "1px solid #e9edf4", borderRadius: 2 }}>
+    <Box>
+      {caption}
+      <Box sx={{ overflow: "auto", maxHeight: 420, border: "1px solid #e9edf4", borderRadius: 2 }}>
       <Box component="table" sx={{ borderCollapse: "collapse", width: "100%" }}>
         <Box component="thead" sx={{ position: "sticky", top: 0, zIndex: 1 }}>
           <Box component="tr" sx={{ bgcolor: "#f7f9fc" }}>
@@ -299,6 +324,12 @@ export const RowsTable = ({ rows }: { rows: Record<string, unknown>[] }) => {
             </Box>
           ))}
         </Box>
+      </Box>
+      {hidden > 0 && (
+        <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 0.75 }}>
+          {`${hidden} more column${hidden === 1 ? "" : "s"} not shown`}
+        </Typography>
+      )}
       </Box>
     </Box>
   );

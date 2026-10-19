@@ -155,6 +155,30 @@ def main() -> int:
         check("discovered column count matches the header",
               sales_file["column_count"] == len(sales_file["columns"]))
 
+        # --- preview: what the file actually holds --------------------------
+        prev = c.get("/api/datasources/preview", headers=ud, params={
+            "entity": "LAD", "name": "ipos_sales", "limit": 5}).json()
+        check("preview returns rows", len(prev["rows"]) == 5, str(len(prev["rows"])))
+        check("preview reports the whole file's size, not just what it sent",
+              prev["total_rows"] > 5, str(prev["total_rows"]))
+        check("preview rows carry the file's own columns",
+              "invoice_id" in prev["rows"][0], str(list(prev["rows"][0])[:4]))
+        check("preview values are strings, so they cross JSON intact",
+              all(isinstance(v, str) or v is None
+                  for row in prev["rows"] for v in row.values()))
+        check("preview defaults to the latest day the ETL sent",
+              prev["data_date"] == ov["data_date"], prev["data_date"])
+
+        # The name is client-supplied and becomes a path segment, so the same
+        # rule that guards registration guards this.
+        for bad in ("../../settings", "a/b", ".hidden"):
+            check(f"preview refuses a path fragment: {bad!r}",
+                  c.get("/api/datasources/preview", headers=ud,
+                        params={"entity": "LAD", "name": bad}).status_code == 400)
+        check("preview 404s a file that did not land",
+              c.get("/api/datasources/preview", headers=ud,
+                    params={"entity": "LAD", "name": "definitely_not_here"}).status_code == 404)
+
         # --- register, then retire, then restore ----------------------------
         probe = "smoke_probe_table"
         # Creating returns 201, a re-run returns 409. Asserting the same number

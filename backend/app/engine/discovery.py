@@ -106,6 +106,39 @@ def describe_csv(path: Path, entity: str, data_date: str) -> DiscoveredFile | No
     )
 
 
+def preview_rows(path: Path, limit: int = 10) -> list[dict[str, str | None]]:
+    """The first `limit` rows, as JSON-safe strings.
+
+    A preview exists so an admin can see what the ETL actually sent before
+    trusting a table with a rule. Strings, because this crosses JSON: a Polars
+    timestamp or a NaN is not serialisable, and a column that renders as `NaN`
+    down its length is itself worth seeing.
+
+    Reading is bounded by `limit`, so the cost does not grow with the file.
+    """
+    try:
+        frame = pl.read_csv(path, n_rows=limit)
+    except Exception:  # noqa: BLE001 - a malformed file is a finding, not a crash
+        return []
+
+    return [
+        {key: None if value is None else _as_text(value) for key, value in record.items()}
+        for record in frame.to_dicts()
+    ]
+
+
+def _as_text(value: object) -> str:
+    """Render one cell the way someone reading the CSV would have written it."""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, float):
+        # A whole number should not arrive as "3.0" when the CSV said "3".
+        return str(int(value)) if value.is_integer() else repr(value)
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    return str(value)
+
+
 def discover(
     entity: str,
     data_date: str,

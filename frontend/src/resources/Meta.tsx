@@ -12,10 +12,11 @@ import ErrorOutlineIcon from "@mui/icons-material/ErrorOutline";
 import LockOutlinedIcon from "@mui/icons-material/LockOutlined";
 import StorageIcon from "@mui/icons-material/Storage";
 import { useNotify } from "react-admin";
-import { EntityChip } from "../components/ui";
+import { EntityChip, RowsTable } from "../components/ui";
 import {
   api,
   type DatasourceOverview,
+  type DatasourcePreview,
   type DatasourceRow,
   type DiscoveredFile,
 } from "../dataProvider";
@@ -249,10 +250,23 @@ const RegisteredTable = ({
           <TableRow>
             <TableCell sx={{ width: 210 }}>Table</TableCell>
             <TableCell sx={{ width: 130 }}>System</TableCell>
-            <TableCell>Grain</TableCell>
+            {/* Sized to its content, not to the leftover space. The longest
+                grain in the catalogue is "one row per store per SKU per
+                snapshot" - 38 characters - so 330px is what that actually costs.
+                Unpinned, this column took half the table while showing a short
+                phrase in the middle of a very wide empty cell.
+
+                Narrower below 1536px, because the columns to its right are not
+                optional: at 1366 a fixed 330 left "Read by" 76px, which clipped
+                the rule chips. Grain degrades first - it is the only value in
+                this row that is purely descriptive. */}
+            <TableCell sx={{ width: { xs: 210, xl: 330 } }}>Grain</TableCell>
             <TableCell align="right" sx={{ width: 80 }}>Cols</TableCell>
             <TableCell align="right" sx={{ width: 90 }}>Rows</TableCell>
-            <TableCell sx={{ width: 150 }}>Read by</TableCell>
+            {/* Unpinned, so it absorbs the slack. It is the one column whose
+                content genuinely varies - a table is read by no rule, or by
+                four - so widening it is the least misleading place to spend it. */}
+            <TableCell>Read by</TableCell>
             <TableCell align="center" sx={{ width: 120 }}>Landing</TableCell>
             <TableCell align="right" sx={{ width: 72 }} />
           </TableRow>
@@ -332,6 +346,7 @@ const RegisteredTable = ({
                             {row.description}
                           </Typography>
                         )}
+                        <DataPreview entity={row.entity} name={row.name} day={row.last_seen} />
                         <ColumnGrid columns={row.columns} />
                         <Typography
                           variant="caption"
@@ -349,6 +364,82 @@ const RegisteredTable = ({
         </TableBody>
       </Table>
     </TableContainer>
+  );
+};
+
+/* ------------------------------------------------------------------ */
+/* Data preview - the first rows of the file itself                     */
+/* ------------------------------------------------------------------ */
+/**
+ * What the ETL actually sent, as a grid.
+ *
+ * Fetched when the row is opened rather than with the overview, because nine
+ * previews nobody asked for is nine files read for nothing. The expanded row is
+ * the only place a person decides whether this table looks right, so this is the
+ * only place a preview is worth having.
+ *
+ * "10 of 400" is stated rather than left implied - a grid that stops at ten rows
+ * and says nothing reads like the table has ten rows.
+ */
+const PREVIEW_ROWS = 10;
+
+const DataPreview = ({ entity, name, day }: {
+  entity: string; name: string; day?: string | null;
+}) => {
+  const [data, setData] = useState<DatasourcePreview | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let live = true;
+    setData(null);
+    setError(null);
+    api
+      .datasourcePreview(entity, name, day ?? undefined, PREVIEW_ROWS)
+      .then((p) => live && setData(p))
+      .catch((e) => live && setError((e as Error).message));
+    return () => {
+      live = false;
+    };
+  }, [entity, name, day]);
+
+  if (error) {
+    return (
+      <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+        No preview — {error}
+      </Typography>
+    );
+  }
+  if (!data) {
+    return (
+      <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 2, minHeight: 34 }}>
+        <CircularProgress size={16} />
+        <Typography variant="body2" color="text.secondary">Reading rows…</Typography>
+      </Stack>
+    );
+  }
+  if (!data.rows.length) {
+    return (
+      <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+        {data.name}.csv on {data.data_date} has no readable rows.
+      </Typography>
+    );
+  }
+
+  return (
+    <Box sx={{ mb: 2 }}>
+      <Stack direction="row" alignItems="baseline" spacing={1} sx={{ mb: 0.75 }}>
+        <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>Sample data</Typography>
+        <Typography variant="caption" color="text.secondary">
+          {`first ${data.rows.length} of ${data.total_rows ?? "?"} rows · ${data.data_date}`}
+        </Typography>
+      </Stack>
+      <RowsTable
+        rows={data.rows}
+        emptyLabel="No rows."
+        maxColumns={40}
+        caption={null}
+      />
+    </Box>
   );
 };
 

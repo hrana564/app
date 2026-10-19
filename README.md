@@ -648,10 +648,10 @@ app/
 │   │   ├── api/
 │   │   │   ├── deps.py             auth + role gating
 │   │   │   ├── auth.py  rules.py  schedules.py  runs.py  tickets.py
-│   │   │   └── datasources.py      register / remove + the one-call overview
+│   │   │   └── datasources.py      register / remove + overview + row preview
 │   │   └── engine/
 │   │       ├── catalog.py          THE CONTRACT: what an entity may read
-│   │       ├── discovery.py        what the ETL landed. Filesystem only.
+│   │       ├── discovery.py        what the ETL landed, and its first rows. Filesystem only.
 │   │       ├── datasources.py      client entities only (LAD/ABM and their systems)
 │   │       ├── ctx.py              RuleContext: a table -> a polars DataFrame
 │   │       ├── snapshot.py         stage one run's inputs. No ORM, no DB.
@@ -781,6 +781,7 @@ All endpoints except `/health`, `/api/auth/login` and `/api/dashboard` require
 | GET | `/api/datasources/entities` | any | The two entities and their systems |
 | GET | `/api/datasources/overview?entity=&data_date=` | any | **One call** — registered tables, what the ETL delivered, and which rules read each |
 | GET | `/api/datasources/discovered?entity=&data_date=` | any | Just what is on disk, read from the CSV headers |
+| GET | `/api/datasources/preview?entity=&name=&data_date=&limit=10` | any | First rows of one landed file, plus the file's true row count |
 | GET | `/api/datasources/available-dates?entity=LAD` | any | Day folders present, plus the latest |
 | POST | `/api/datasources` | admin | Register a table. Columns default to the file's header |
 | DELETE | `/api/datasources/{id}` | admin | Remove a registration. 409 naming the rules, while any active rule reads it |

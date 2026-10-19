@@ -220,6 +220,17 @@ export interface DatasourceRow {
   last_seen: string | null;
 }
 
+/** The first rows of one landed file. */
+export interface DatasourcePreview {
+  entity: string;
+  name: string;
+  data_date: string;
+  /** Rows in the whole file, so the screen can say "10 of 4,318". */
+  total_rows: number | null;
+  rows: Record<string, string | null>[];
+  limit: number;
+}
+
 /** One CSV on disk, described entirely by reading the file. */
 export interface DiscoveredFile {
   name: string;
@@ -387,6 +398,21 @@ export const api = {
     request<DatasourceOverview>(
       `/api/datasources/overview?entity=${entity}` +
         (dataDate ? `&data_date=${dataDate}` : ""),
+    ),
+
+  /**
+   * The first rows of one landed file.
+   *
+   * Read-only and catalogue-free: it works on any CSV the ETL dropped, including
+   * one nobody has registered, because deciding whether to register it is exactly
+   * when an admin needs to see what is in it.
+   */
+  datasourcePreview: (entity: string, name: string, dataDate?: string, limit = 10) =>
+    request<DatasourcePreview>(
+      `/api/datasources/preview?entity=${encodeURIComponent(entity)}` +
+        `&name=${encodeURIComponent(name)}` +
+        (dataDate ? `&data_date=${encodeURIComponent(dataDate)}` : "") +
+        `&limit=${limit}`,
     ),
 
   registerDatasource: (payload: {

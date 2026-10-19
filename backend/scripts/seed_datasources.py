@@ -95,6 +95,23 @@ _CLIENT_A = [
         },
     ),
     SeedSource(
+        name="ipos_discounts",
+        entity=_FIRST,
+        system="iPOS (SaaS)",
+        description="Discount and promotion lines applied at the till.",
+        grain="one row per discount line",
+        columns={
+            "discount_id": "VARCHAR",
+            "invoice_id": "VARCHAR",     # joins to ipos_sales
+            "store_id": "VARCHAR",
+            "staff_id": "VARCHAR",       # joins to hr_employees.employee_id
+            "sku": "VARCHAR",            # joins to ipos_items.sku
+            "discount_ts": "TIMESTAMP",
+            "discount_type": "VARCHAR",  # STAFF | CORPORATE | PROMOTION
+            "discount_value": "DOUBLE",
+        },
+    ),
+    SeedSource(
         name="ipos_voids",
         entity=_FIRST,
         system="iPOS (SaaS)",

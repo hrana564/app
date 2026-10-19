@@ -30,7 +30,7 @@ import {
 } from "../dataProvider";
 import { CadenceEditor, type CadenceConfig } from "../components/CadenceEditor";
 import { DatasourcePicker } from "../components/DatasourcePicker";
-import { STARTERS, starterPrompt } from "../components/rulePrompts";
+import { TEMPLATES, templatePrompt } from "../components/rulePrompts";
 import { RunOutcomeCell, RunStatusCell } from "./Run";
 import {
   ActionIcon, CodeBlock, DotLabel, EntityField, IdField, JsonBlock, RowsTable,
@@ -211,24 +211,6 @@ export const GenerateRuleDialog = () => {
     [overview],
   );
 
-  // The templates are written from the catalogue's own knowledge of each
-  // table - its grain, its description, its columns - so the user is left
-  // filling in the judgement, which is the only part that is theirs.
-  const promptTables = useMemo(
-    () =>
-      tables
-        .map((name) => options.find((o) => o.name === name))
-        .filter((o): o is DatasourceRow => Boolean(o))
-        .map((o) => ({
-          name: o.name,
-          system: o.system,
-          description: o.description,
-          grain: o.grain,
-          columns: o.columns ?? {},
-        })),
-    [tables, options],
-  );
-
   // A table whose file has not landed cannot be tested, and the trial will
   // say so - but it is better to say it before the model has been paid for.
   const absent = useMemo(
@@ -377,27 +359,56 @@ export const GenerateRuleDialog = () => {
                   Start from a template
                 </Button>
                 <Menu anchorEl={starterMenu} open={Boolean(starterMenu)} onClose={() => setStarterMenu(null)}>
-                  {STARTERS.map((s) => (
-                    <MenuItem
-                      key={s.id}
-                      onClick={() => {
-                        setPrompt(starterPrompt(s.id, promptTables, lookback));
-                        setStarterMenu(null);
-                      }}
-                    >
-                      <Box>
-                        <Typography variant="body2">{s.label}</Typography>
-                        <Typography variant="caption" color="text.secondary" display="block">
-                          {s.hint}
-                          {s.tables > 1 ? ` - needs ${s.tables} datasources` : ""}
-                        </Typography>
-                      </Box>
-                    </MenuItem>
-                  ))}
+                  {TEMPLATES.map((t) => {
+                    // A control that reads a feed the client has not registered
+                    // cannot be written, so the template says which feed is
+                    // missing rather than offering a prompt that will fail.
+                    const missing = t.tables.filter(
+                      (name) => !options.some((o) => o.name === name),
+                    );
+                    return (
+                      <MenuItem
+                        key={t.id}
+                        disabled={missing.length > 0}
+                        onClick={() => {
+                          // The template brings its own tables: a control reads
+                          // the data it is about, and the selection binds what
+                          // the model may read.
+                          setTables(t.tables);
+                          setPrompt(
+                            templatePrompt(
+                              t.id,
+                              t.tables.map((name) =>
+                                options.find((o) => o.name === name),
+                              ).filter((o): o is DatasourceRow => Boolean(o))
+                                .map((o) => ({
+                                  name: o.name,
+                                  system: o.system,
+                                  description: o.description,
+                                  grain: o.grain,
+                                  columns: o.columns ?? {},
+                                })),
+                            ),
+                          );
+                          setStarterMenu(null);
+                        }}
+                      >
+                        <Box>
+                          <Typography variant="body2">{t.label}</Typography>
+                          <Typography variant="caption" color="text.secondary" display="block">
+                            {missing.length > 0
+                              ? `needs ${missing.join(", ")} — not registered for this client`
+                              : t.programme}
+                          </Typography>
+                        </Box>
+                      </MenuItem>
+                    );
+                  })}
                 </Menu>
                 <Typography variant="caption" color="text.secondary">
-                  A template fills in what the catalogue already knows - the table,
-                  its grain, its columns - and leaves you the judgement.
+                  A template fills in what the catalogue already knows - the
+                  table, and what one row in it is - and leaves you the
+                  judgement.
                 </Typography>
               </Stack>
 

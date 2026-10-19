@@ -506,7 +506,7 @@ A rule only ever sees its own entity's tables, so one client's rule cannot accid
 
 | Entity | System | Tables |
 |---|---|---|
-| **CLIENT-A** | POS | `ipos_sales`, `ipos_items`, `ipos_voids` |
+| **CLIENT-A** | POS | `ipos_sales`, `ipos_items`, `ipos_voids`, `ipos_discounts` |
 | **CLIENT-A** | Warehouse | `syn_inventory`, `syn_recipes`, `syn_wastage`, `syn_stock_transfers` |
 | **CLIENT-A** | HRMS | `hr_employees`, `hr_attendance` |
 | **CLIENT-B** | POS | `ipos_sales`, `ipos_price_overrides`, `ipos_discounts` |
@@ -614,6 +614,13 @@ Generates `mount/SourceData/` for both entities across 6 days, with **deliberate
 | 2026-10-19 | clean | vendor/employee bank match |
 | 2026-10-20 | clean | vendor/employee bank match |
 
+And on **18 and 20 October**, in both estates, two more:
+
+| Planted | What it looks like | Read by |
+|---|---|---|
+| **early close** | one store's staff clock out at 21:00 and the tills keep selling until the day's end | `LAD-GEN-02` |
+| **outsized discounts** | one employee at one store gives four discounts of 400-900, against an estate range of 5-120 | `LAD-GEN-01` |
+
 Without planted breaches you cannot tell a working rule from a broken one.
 
 Person and company names come from Faker (`en_GB`), seeded per key so the same
@@ -695,10 +702,12 @@ app/
 │   │       └── trial.py            run a candidate rule without touching the ledger
 │   ├── rules/
 │   │   ├── _template.py
-│   │   ├── rule_1.py   CA-03   last-hour trading spike
-│   │   ├── rule_2.py   CA-04   single-staff cash dominance
-│   │   ├── rule_3.py   CA-22   vendor/employee bank match
-│   │   └── rule_4.py   CA-06   ex-staff still transacting
+│   │   ├── LAD-CA-03_v1.py   last-hour trading spike
+│   │   ├── LAD-CA-04_v1.py   single-staff cash dominance
+│   │   ├── ABM-CA-22_v1.py   vendor/employee bank match
+│   │   ├── LAD-CA-06_v1.py   ex-staff still transacting
+│   │   ├── LAD-GEN-01_v1.py  discounts beyond the limit
+│   │   └── LAD-GEN-02_v1.py  sales posted after the store closed
 │   └── scripts/
 │       ├── make_sample_data.py     generate SourceData with planted breaches
 │       ├── smoke_test.py           end-to-end test suite
@@ -996,6 +1005,15 @@ rule that has been executed, together with what it found.
 only the tables you tick, and a rule that reads any other is refused before it
 runs. You also set the lookback (how far back it reads) and the date it is
 tested against.
+
+**Start from a control you already have.** **Start from a template** offers the
+programme's own controls - *Sales posted / settled after the store closing
+hours* and *Discounts beyond a specified limit by store and by employee* -
+written out in the programme's words, with the catalogue's knowledge of each
+table filled in and the judgement left in angle brackets. Choosing one brings
+its datasources with it, because a control reads the data it is about. A
+control whose feed the client has not registered is not offered, and says
+which feed is missing.
 
 **Nothing is created until you press Save.** The trial writes no `rule_runs`
 row, raises no ticket, and takes no run folder - so a rule that has not been

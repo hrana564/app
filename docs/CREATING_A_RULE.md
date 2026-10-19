@@ -71,8 +71,10 @@ is created and you are told what it tried and why each attempt failed.
 ## 2. Writing the prompt
 
 > **In a hurry? Use the template, or the button in the dialog.**
-> **Start from a template** fills in everything the catalogue already knows -
-> the table, its grain, its columns - and leaves you the blanks.
+> **Start from a template** offers the programme's own controls - *Sales
+> posted / settled after the store closing hours* and *Discounts beyond a
+> specified limit by store and by employee* - with everything the catalogue
+> already knows filled in, and the judgement left in the blanks.
 
 The model is shown your datasources, their real columns, and a few real rows
 from each. It is never shown anything else. What it has to work out from your
@@ -103,10 +105,30 @@ are. Describe the control and let it work out the data.
 "`employment_status == 'exited'`" is a guess about the data that will be
 wrong the moment the ETL renames a column.
 
+### The two programme templates
+
+**Start from a template** is not a list of shapes to fill in - it is two
+controls from the audit programme, in the programme's own words:
+
+| Template | Control | Reads |
+|---|---|---|
+| Sales posted after the store closed | *Stores Management / Store Operations / Sales & discounts* - "Sales posted / settled after the store closing hours" | `ipos_sales`, `hr_attendance` |
+| Discounts beyond the limit | the same programme path - "Discounts beyond a specified limit by store and by employee" | `ipos_discounts`, `ipos_sales` |
+
+Choosing one brings its datasources with it, because a control reads the data
+it is about. What the template cannot decide for you is left in angle
+brackets: the limit, the grace period, the case that looks the same and is
+legitimate. Fill those in, or leave them and read what the agent did with
+them.
+
+A template whose feed the client has not registered is not offered - it says
+which feed is missing, because a control that cannot read its data cannot be
+written.
+
 ### The master template
 
-Copy this, fill in the blanks, and it is a good prompt. The blanks are in
-angle brackets.
+Writing your own prompt? Copy this, fill in the blanks, and it is a good
+prompt. The blanks are in angle brackets.
 
 ```
 Flag <the thing that should not happen> in <the table>.

@@ -1,132 +1,123 @@
 import polars as pl
 
-NAME = "POS transactions settled by departed employees"
-DESCRIPTION = "Identifies POS transactions settled by employees on or after their exit date, when access should already have been revoked, and groups the value settled per person."
-DATASOURCES = ["ipos_sales", "hr_employees"]
+NAME = "Discounts exceeding the single-discount and daily employee limits"
+DESCRIPTION = "Flags discount lines above the single-discount limit and discounts where an employee at one store exceeds the daily limit, excluding agreed promotions."
+DATASOURCES = ["ipos_discounts", "ipos_sales"]
 
-EXIT_DATE_FORMAT = "%Y-%m-%d"
-INVOICE_TIMESTAMP_FORMAT = "%Y-%m-%d %H:%M:%S"
+# Maximum value permitted for one individual discount line.
+SINGLE_DISCOUNT_LIMIT = 200.0
 
-def run(ctx) -> dict:
-    sales = ctx.table("ipos_sales").with_columns(
-        invoice_ts_parsed=pl.col("invoice_ts")
-        .cast(pl.String)
-        .str.to_datetime(INVOICE_TIMESTAMP_FORMAT, strict=False),
-    )
+# Maximum total discount value permitted for one employee at one store on one day.
+DAILY_EMPLOYEE_DISCOUNT_LIMIT = 200.0
 
-    if sales.height == 0:
+# Promotion discounts are excluded because they may represent agreed promotional activity.
+AGREED_DISCOUNT_TYPE = "PROMOTION"
+
+TS_FORMAT = "%Y-%m-%d %H:%M:%S"
+
+
+def run(ctx):
+    discounts = ctx.table("ipos_discounts")
+    sales = ctx.table("ipos_sales")
+
+    if discounts.height == 0 or sales.height == 0:
         return {
             "status": "success",
             "error_message": None,
-            "summary": "No POS transaction data was available for the audited period.",
+            "summary": "No discount or sales data available for the audit period.",
             "metrics": {},
             "rows": [],
         }
 
-    employees = ctx.table("hr_employees").with_columns(
-        exit_date_parsed=pl.col("exit_date")
-        .cast(pl.String, strict=False)
-        .str.to_date(EXIT_DATE_FORMAT, strict=False),
+    discounts = discounts.with_columns(
+        discount_date=pl.col("discount_ts")
+        .str.to_datetime(TS_FORMAT, strict=False)
+        .dt.date()
+        .cast(pl.String),
     )
 
-    if employees.height == 0:
-        return {
-            "status": "success",
-            "error_message": None,
-            "summary": "No employee data was available to test POS access after employee exit.",
-            "metrics": {},
-            "rows": [],
-        }
+    sales = sales.with_columns(
+        invoice_date=pl.col("invoice_ts")
+        .str.to_datetime(TS_FORMAT, strict=False)
+        .dt.date()
+        .cast(pl.String),
+    )
 
-    offending = (
-        sales.filter(pl.col("is_void") == pl.lit(False))
-        .with_columns(
-            invoice_date=pl.col("invoice_ts_parsed").dt.date(),
-        )
+    eligible_discounts = (
+        discounts.filter(pl.col("discount_type") != AGREED_DISCOUNT_TYPE)
         .join(
-            employees.select(
-                pl.col("employee_id").alias("staff_id"),
-                pl.col("full_name"),
-                pl.col("exit_date_parsed"),
-                pl.col("department"),
-                pl.col("home_store"),
+            sales.select(
+                "invoice_id",
+                "invoice_value",
+                "is_void",
             ),
-            on="staff_id",
+            on="invoice_id",
             how="inner",
         )
-        .filter(
-            pl.col("exit_date_parsed").is_not_null()
-            & pl.col("invoice_ts_parsed").is_not_null()
-            & (pl.col("invoice_date") >= pl.col("exit_date_parsed"))
-        )
+        .filter(pl.col("is_void") == False)  # noqa: E712
     )
 
-    if offending.height == 0:
+    if eligible_discounts.height == 0:
         return {
             "status": "success",
             "error_message": None,
-            "summary": "No POS transactions were settled by employees on or after their exit dates.",
-            "metrics": {},
+            "summary": "No eligible non-promotion discounts were found for the audit period.",
+            "metrics": {
+                "single_discount_limit": SINGLE_DISCOUNT_LIMIT,
+                "daily_employee_discount_limit": DAILY_EMPLOYEE_DISCOUNT_LIMIT,
+            },
             "rows": [],
         }
 
-    findings = (
-        offending.group_by(
+    daily_totals = (
+        eligible_discounts.group_by(
+            "discount_date",
+            "store_id",
             "staff_id",
-            "full_name",
-            "exit_date_parsed",
-            "department",
-            "home_store",
         )
         .agg(
-            transaction_count=pl.len(),
-            total_settled=pl.col("invoice_value").cast(pl.Float64, strict=False).sum(),
-            first_transaction=pl.col("invoice_ts_parsed").min(),
-            last_transaction=pl.col("invoice_ts_parsed").max(),
+            employee_daily_discount_total=pl.col("discount_value").sum(),
         )
-        .sort("total_settled", descending=True)
+    )
+
+    findings = (
+        eligible_discounts.join(
+            daily_totals,
+            on=["discount_date", "store_id", "staff_id"],
+            how="left",
+        )
+        .filter(
+            (pl.col("discount_value") > SINGLE_DISCOUNT_LIMIT)
+            | (pl.col("employee_daily_discount_total") > DAILY_EMPLOYEE_DISCOUNT_LIMIT)
+        )
         .select(
-            pl.col("staff_id").alias("employee_id"),
-            pl.col("full_name"),
-            pl.col("department"),
-            pl.col("home_store"),
-            pl.col("exit_date_parsed").alias("exit_date"),
-            pl.col("transaction_count"),
-            pl.col("total_settled"),
-            pl.col("first_transaction").alias("first_transaction_ts"),
-            pl.col("last_transaction").alias("last_transaction_ts"),
+            "store_id",
+            "staff_id",
+            "invoice_id",
+            "discount_id",
+            "discount_value",
+            "invoice_value",
+            "employee_daily_discount_total",
+        )
+        .sort(
+            "employee_daily_discount_total",
+            descending=True,
         )
         .to_dicts()
     )
-
-    total_settled = sum(float(row.get("total_settled") or 0) for row in findings)
-    employee_count = len(findings)
-    transaction_count = sum(int(row.get("transaction_count") or 0) for row in findings)
-
-    for row in findings:
-        row["total_settled"] = float(row.get("total_settled") or 0)
-        row["transaction_count"] = int(row.get("transaction_count") or 0)
-
-        if row.get("exit_date") is not None:
-            row["exit_date"] = str(row["exit_date"])
-
-        if row.get("first_transaction_ts") is not None:
-            row["first_transaction_ts"] = str(row["first_transaction_ts"])
-
-        if row.get("last_transaction_ts") is not None:
-            row["last_transaction_ts"] = str(row["last_transaction_ts"])
 
     return {
         "status": "success",
         "error_message": None,
         "summary": (
-            f"Found {transaction_count} POS transactions worth {total_settled:.2f} "
-            f"settled by {employee_count} departed employee(s) on or after their exit dates."
+            f"Found {len(findings)} discount lines breaching the "
+            f"{SINGLE_DISCOUNT_LIMIT:.2f} single-discount limit or the "
+            f"{DAILY_EMPLOYEE_DISCOUNT_LIMIT:.2f} daily employee limit."
         ),
         "metrics": {
-            "employee_count": employee_count,
-            "transaction_count": transaction_count,
-            "total_settled": total_settled,
+            "single_discount_limit": SINGLE_DISCOUNT_LIMIT,
+            "daily_employee_discount_limit": DAILY_EMPLOYEE_DISCOUNT_LIMIT,
+            "finding_count": len(findings),
         },
         "rows": findings,
     }

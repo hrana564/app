@@ -273,6 +273,15 @@ An agent that believes it can fix missing data will rewrite working code
 until it has nothing left to rewrite. The classification is the difference
 between "try again" and "stop and tell the user".
 
+**A template brings its own datasources.** The programme templates in
+`frontend/src/components/rulePrompts.ts` name the feeds their control reads,
+and choosing one selects them — because a control reads the data it is about,
+and a prompt that names a table the user did not pick is a prompt about the
+wrong data. A control whose feed the client has not registered is **not
+offered**: the menu item says which feed is missing, because a control that
+cannot read its data cannot be written, and a trial that fails on missing data
+is `data_missing` — the one failure the agent may not repair.
+
 Two implementations of "is this file allowed to run" would be two answers to
 the same question, so `scan_source()` in `validation.py` is the only one, and
 the trial and the validator both call it. The same is true of the call itself:

@@ -30,6 +30,8 @@ import random
 import sys
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
+from typing import Callable
+from typing import Callable
 
 from faker import Faker
 
@@ -79,11 +81,21 @@ DAYS = [
 A_STORES = ["LD-101", "LD-102", "LD-103", "LD-104", "LD-105", "LD-106"]
 B_STORES = ["ST-101", "ST-102", "ST-103", "ST-104", "ST-105"]
 
+# The days a planted exception lands on. Two of them, and never a day the
+# suite's "this control is quiet" assertions rely on - so a control has clean
+# days to stay quiet on, and a planted day to be loud on.
+PLANTED_DAYS = (date(2026, 10, 18), date(2026, 10, 20))
+
 A_ITEM_GROUPS = ["RETAIL", "BAKERY", "BAR"]
 B_ITEM_GROUPS = ["RETAIL", "GROCERY", "ELECTRONICS"]
 
 TRADING_START_HOUR = 10
-TRADING_END_HOUR = 23  # stores trade 10:00-23:59, so "last hour" = hour 23
+TRADING_END_HOUR = 23  # the last hour of trade is hour 23
+# The trade ends a quarter before the hour is over, and the staff clock out
+# over the last quarter of it. So the store is closed by the time its people
+# have gone, and a sale posted after closing only happens when a store shuts
+# early - which is what the planted exception does.
+TRADING_CLOSE_MINUTE = 45
 
 NATIONALITIES = ["UAE", "SAU", "IND", "PHL", "EGY", "GBR", "FRA"]
 WASTAGE_REASONS = ["SPOILAGE", "PREPARATION", "QUALITY", "OVERPRODUCTION", "DAMAGE"]
@@ -237,7 +249,12 @@ def a_sales(day: date, rng: random.Random, employees: list[dict]) -> list[dict]:
             else:
                 staff_id = rng.choice(live)["employee_id"]
 
-            ts = datetime.combine(day, time(hour, rng.randrange(60), rng.randrange(60)))
+            minute = (
+                rng.randrange(TRADING_CLOSE_MINUTE)
+                if hour == TRADING_END_HOUR
+                else rng.randrange(60)
+            )
+            ts = datetime.combine(day, time(hour, minute, rng.randrange(60)))
             rows.append(
                 {
                     "invoice_id": f"{_FIRST}-{day:%Y%m%d}-{seq:06d}",
@@ -393,6 +410,11 @@ def a_stock_transfers(day: date, rng: random.Random, items: list[dict]) -> list[
 
 def a_attendance(day: date, rng: random.Random, employees: list[dict]) -> list[dict]:
     live = [e for e in employees if e["employment_status"] == "active"]
+    # On a planted day one store shuts early and the tills keep selling. The
+    # store closes with the last hour it trades on every other day, so a
+    # control that watches for sales posted after closing has quiet days to be
+    # quiet on, and one day to be loud on.
+    early_store = _early_close(day, A_STORES)
     rows = []
     for emp in live:
         if rng.random() < 0.18:
@@ -404,7 +426,14 @@ def a_attendance(day: date, rng: random.Random, employees: list[dict]) -> list[d
                 "store_id": store,
                 "work_date": day.isoformat(),
                 "clock_in": datetime.combine(day, time(9, rng.randrange(60))).isoformat(sep=" "),
-                "clock_out": datetime.combine(day, time(23, rng.randrange(60))).isoformat(sep=" "),
+                "clock_out": datetime.combine(
+                    day,
+                    # The staff clock out as the store closes - the end of the
+                    # trading day. Only a planted early close leaves a store
+                    # trading on with nobody there to close it.
+                    time(21, rng.randrange(60)) if store == early_store
+                    else time(23, rng.randrange(TRADING_CLOSE_MINUTE, 60)),
+                ).isoformat(sep=" "),
                 "eod_closing": str(rng.random() < 0.22).lower(),
                 "was_regularised": str(rng.random() < 0.18).lower(),
                 "overtime_hours": f"{round(rng.uniform(0, 4.5), 1)}",
@@ -488,7 +517,14 @@ def b_sales(day: date, rng: random.Random, employees: list[dict]) -> list[dict]:
                 {
                     "invoice_id": f"{_SECOND}-{day:%Y%m%d}-{seq:06d}",
                     "invoice_ts": datetime.combine(
-                        day, time(hour, rng.randrange(60), rng.randrange(60))
+                        day,
+                        time(
+                            hour,
+                            rng.randrange(TRADING_CLOSE_MINUTE)
+                            if hour == TRADING_END_HOUR
+                            else rng.randrange(60),
+                            rng.randrange(60),
+                        ),
                     ).isoformat(sep=" "),
                     "store_id": rng.choice(B_STORES),
                     "staff_id": rng.choice(live),
@@ -522,29 +558,6 @@ def b_price_overrides(day: date, rng: random.Random, sales: list[dict], employee
                 "list_price": f"{list_price:.2f}",
                 "sold_price": f"{round(list_price * (1 - drop), 2):.2f}",
                 "quantity": str(rng.choice([1, 1, 1, 2, 3, 4, 6])),
-            }
-        )
-    return rows
-
-
-def b_discounts(day: date, rng: random.Random, sales: list[dict], employees: list[dict]) -> list[dict]:
-    live = [e["employee_id"] for e in employees if e["employment_status"] == "active"]
-    rows = []
-    for i in range(rng.randint(30, 50)):
-        rows.append(
-            {
-                "discount_id": f"DSC-{day:%Y%m%d}-{i + 1:04d}",
-                "invoice_id": rng.choice(sales)["invoice_id"] if sales else "",
-                "store_id": rng.choice(B_STORES),
-                "staff_id": rng.choice(live),
-                "sku": f"{_SECOND}-SKU-{rng.randrange(1000, 9999)}",
-                "discount_ts": datetime.combine(
-                    day, time(rng.randrange(10, 24), rng.randrange(60))
-                ).isoformat(sep=" "),
-                "discount_type": rng.choices(
-                    ["STAFF", "CORPORATE", "PROMOTION"], weights=[40, 25, 35], k=1
-                )[0],
-                "discount_value": f"{round(rng.uniform(5, 120), 2)}",
             }
         )
     return rows
@@ -603,6 +616,7 @@ def b_customer_credit(rng: random.Random) -> list[dict]:
 
 def b_attendance(day: date, rng: random.Random, employees: list[dict]) -> list[dict]:
     live = [e for e in employees if e["employment_status"] == "active"]
+    early_store = _early_close(day, B_STORES)
     rows = []
     for emp in live:
         if rng.random() < 0.2:
@@ -613,7 +627,14 @@ def b_attendance(day: date, rng: random.Random, employees: list[dict]) -> list[d
                 "store_id": emp["home_store"],
                 "work_date": day.isoformat(),
                 "clock_in": datetime.combine(day, time(9, rng.randrange(60))).isoformat(sep=" "),
-                "clock_out": datetime.combine(day, time(22, rng.randrange(60))).isoformat(sep=" "),
+                "clock_out": datetime.combine(
+                    day,
+                    # The staff clock out as the store closes - the end of the
+                    # trading day. Only a planted early close leaves a store
+                    # trading on with nobody there to close it.
+                    time(21, rng.randrange(60)) if emp["home_store"] == early_store
+                    else time(23, rng.randrange(TRADING_CLOSE_MINUTE, 60)),
+                ).isoformat(sep=" "),
                 "eod_closing": str(rng.random() < 0.25).lower(),
                 "was_regularised": str(rng.random() < 0.15).lower(),
                 "overtime_hours": f"{round(rng.uniform(0, 5), 1)}",
@@ -625,6 +646,80 @@ def b_attendance(day: date, rng: random.Random, employees: list[dict]) -> list[d
 # ---------------------------------------------------------------------------
 # helpers
 # ---------------------------------------------------------------------------
+def _early_close(day: date, stores: list[str]) -> str | None:
+    """The store that shuts early on a planted day, and nobody on other days.
+
+    The store's own stream, so the day draws exactly the numbers it would have
+    drawn without the exception.
+    """
+    if day not in PLANTED_DAYS:
+        return None
+    return random.Random(f"early-close-{day:%Y%m%d}-{stores[0]}").choice(stores)
+
+
+def _discounts(
+    day: date,
+    rng: random.Random,
+    sales: list[dict],
+    employees: list[dict],
+    stores: list[str],
+    sku_of: Callable[[random.Random], str],
+) -> list[dict]:
+    """One row per discount given at a till.
+
+    Both demo estates have a POS, so both have discounts - and the control that
+    watches them ("discounts beyond a limit, by store and by employee") has to
+    be runnable by either client. So one generator, two estates.
+
+    The normal range is 5-120, which is what makes an outsized discount
+    recognisable: it is not a big discount, it is a different thing.
+
+    Planted on two days: one employee at one store gives four outsized
+    discounts, so the control has something real to find, and every other day
+    it stays quiet.
+    """
+    live = [e["employee_id"] for e in employees if e["employment_status"] == "active"]
+    rows: list[dict] = []
+    for i in range(rng.randint(30, 50)):
+        rows.append(
+            {
+                "discount_id": f"DSC-{day:%Y%m%d}-{i + 1:04d}",
+                "invoice_id": rng.choice(sales)["invoice_id"] if sales else "",
+                "store_id": rng.choice(stores),
+                "staff_id": rng.choice(live),
+                "sku": sku_of(rng),
+                "discount_ts": datetime.combine(
+                    day, time(rng.randrange(TRADING_START_HOUR, TRADING_END_HOUR + 1), rng.randrange(60))
+                ).isoformat(sep=" "),
+                "discount_type": rng.choices(
+                    ["STAFF", "CORPORATE", "PROMOTION"], weights=[40, 25, 35], k=1
+                )[0],
+                "discount_value": f"{round(rng.uniform(5, 120), 2)}",
+            }
+        )
+
+    if day in PLANTED_DAYS and live and sales:
+        plant = random.Random(f"discount-abuse-{day:%Y%m%d}-{stores[0]}")
+        staff_id = plant.choice(live)
+        store_id = plant.choice(stores)
+        for _ in range(4):
+            rows.append(
+                {
+                    "discount_id": f"DSC-{day:%Y%m%d}-{len(rows) + 1:04d}",
+                    "invoice_id": plant.choice(sales)["invoice_id"],
+                    "store_id": store_id,
+                    "staff_id": staff_id,
+                    "sku": sku_of(plant),
+                    "discount_ts": datetime.combine(
+                        day, time(plant.randrange(TRADING_START_HOUR, TRADING_END_HOUR + 1), plant.randrange(60))
+                    ).isoformat(sep=" "),
+                    "discount_type": "STAFF",
+                    "discount_value": f"{round(plant.uniform(400, 900), 2)}",
+                }
+            )
+    return rows
+
+
 def _iban(rng: random.Random, seed: str) -> str:
     body = "".join(str(rng.randrange(10)) for _ in range(14))
     return f"AE{abs(hash(seed + body)) % 10**16:016d}"
@@ -722,6 +817,7 @@ def main() -> int:
 
     a_emp = a_employees(random.Random("demo-a-master"))
     a_item = a_items(random.Random("demo-a-items"))
+    a_skus = [i["sku"] for i in a_item]
     a_recipe = a_recipes(random.Random("demo-a-recipes"), a_item)
 
     b_emp = b_employees(master_rng, shared_ibans)
@@ -736,6 +832,9 @@ def main() -> int:
             "ipos_sales": sales,
             "ipos_items": a_item,
             "ipos_voids": a_voids(day, rng, sales, a_emp),
+            "ipos_discounts": _discounts(
+                day, rng, sales, a_emp, A_STORES, lambda r: r.choice(a_skus)
+            ),
             "syn_inventory": a_inventory(day, rng, a_item),
             "syn_recipes": a_recipe,
             "syn_wastage": a_wastage(day, rng, a_item, a_emp),
@@ -753,7 +852,10 @@ def main() -> int:
         b_rows = {
             "ipos_sales": b_sales_rows,
             "ipos_price_overrides": b_price_overrides(day, rng, b_sales_rows, b_emp),
-            "ipos_discounts": b_discounts(day, rng, b_sales_rows, b_emp),
+            "ipos_discounts": _discounts(
+                day, rng, b_sales_rows, b_emp, B_STORES,
+                lambda r: f"{_SECOND}-SKU-{r.randrange(1000, 9999)}",
+            ),
             "hr_employees": b_emp,
             "hr_attendance": b_attendance(day, rng, b_emp),
             "bc_purchase_orders": pos,
@@ -772,7 +874,7 @@ def main() -> int:
         )
 
     print()
-    print(f"  {_FIRST}  9 tables x {len(DAYS)} days  (POS, Warehouse, HRMS)")
+    print(f"  {_FIRST}  10 tables x {len(DAYS)} days  (POS, Warehouse, HRMS)")
     print(f"  {_SECOND}  9 tables x {len(DAYS)} days  (POS, HRMS, ERP)")
     print(f"  Planted cross-system bank matches: {len(shared_ibans)} "
           f"(hr_employees.bank_iban == bc_vendors.vendor_bank_iban)")

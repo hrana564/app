@@ -56,6 +56,15 @@ RULE_SPECS = [
     ("CA-06", "high",
      "Exited employees still settling POS transactions.",
      ESTATE_RETAIL),
+    # The two the rule agent wrote, kept as the demo estate's own controls:
+    # they read the planted exceptions, so a fresh deployment can see them
+    # working without anybody writing a prompt first.
+    ("GEN-01", "medium",
+     "Discounts given beyond the agreed limit, by store and by employee.",
+     ESTATE_RETAIL),
+    ("GEN-02", "medium",
+     "Sales posted after the store had closed for the day.",
+     ESTATE_RETAIL),
 ]
 
 EXEC_EXPECTATIONS = {
@@ -63,6 +72,8 @@ EXEC_EXPECTATIONS = {
     "CA-04": ("2026-10-19", "2026-10-17"),
     "CA-22": (None, "2026-10-15"),
     "CA-06": ("2026-10-16", "2026-10-15"),
+    "GEN-01": ("2026-10-19", "2026-10-20"),
+    "GEN-02": ("2026-10-19", "2026-10-20"),
 }
 
 # Which client each estate went to, and the code a rule is filed under. Both

@@ -25,7 +25,7 @@ DESCRIPTION = (
 )
 DATASOURCES = ["ipos_sales"]
 
-LAST_HOUR = 23  # stores trade 10:00-23:59, so the final trading hour is 23
+LAST_HOUR = 23  # the store's last hour of trade is hour 23
 
 # The last hour may settle at most this multiple of the hourly average.
 LAST_HOUR_RATIO_LIMIT = 2.0

@@ -29,16 +29,13 @@ from app.api.deps import AdminUser, CurrentUser, SessionDep
 from app.engine.catalog import database_catalog
 from app.engine.datasources import default_entity
 from app.engine.loader import read_source, write_source
-from app.engine.rule_generator import (
-    generate_rule_source,
-    is_configured,
-    preview_context,
-)
+from app.engine.rule_generator import is_configured, preview_context
 from app.engine.rules import CodeError, validate_code, versioned_filename
 from app.engine.runner import execute_rule
 from app.engine.validation import RuleValidator, declared_tables, now
 from app.models import Rule, RuleSchedule, Run, Ticket
 from app.schemas import (
+    GenerationAttempt,
     RuleCreate,
     RuleGenerateRequest,
     RuleGenerateResponse,
@@ -48,6 +45,7 @@ from app.schemas import (
     RuleUpdate,
     RuleVersionOut,
     RunRequest,
+    TrialOut,
     ValidationReport,
 )
 from app.settings import settings
@@ -211,55 +209,112 @@ async def generate_context(
 async def generate(
     payload: RuleGenerateRequest, session: SessionDep, admin: AdminUser
 ) -> RuleGenerateResponse:
-    """Prompt -> a new DRAFT rule. Never auto-approved."""
+    """Ask for a rule, and get back one that has been run.
+
+    Nothing is created here. The agent writes a rule, runs it against the
+    bytes the estate actually holds, and repairs it if it does not run - and
+    what comes back is a piece of source and the verdict on it. The rule row
+    and the file are written when the admin presses Save, so a rule that has
+    never been reviewed never reaches the catalogue.
+    """
     entity = (payload.entity or default_entity()).upper()
     target = payload.data_date or _latest_data_date(entity)
+
     catalog = await database_catalog(session)
-    generated = await run_in_threadpool(
-        generate_rule_source, catalog, payload.prompt, entity, target
+    registered = sorted(catalog.names_for(entity))
+    unknown = [t for t in payload.datasources if t not in registered]
+    if unknown:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"{', '.join(unknown)} is not registered for {entity}. "
+                f"Registered: {', '.join(registered) or '(none)'}"
+            ),
+        )
+
+    result = await run_in_threadpool(
+        _run_agent,
+        catalog,
+        payload.prompt,
+        entity,
+        target,
+        payload.datasources,
+        payload.lookback_days,
     )
 
-    seq = (
-        await session.execute(select(func.count()).select_from(Rule))
-    ).scalar_one()
-    try:
-        code = validate_code(f"AUTO-{entity}-{target:%Y%m%d}-{seq + 1:03d}")
-    except CodeError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    existing = await head(session, code)
-    if existing is not None:
-        raise HTTPException(status_code=409, detail=f"Rule {code} already exists")
-
-    filename = versioned_filename(code, 1)
-    write_source(filename, generated["source"], settings.rules_dir)
-
-    rule = Rule(
-        code=code,
-        version=1,
-        is_version_active=True,
-        status="draft",
-        source_file=filename,
-        name=generated["explanation"][:255],
-        entity=entity,
-        description=payload.prompt.strip()[:2000],
-        severity="medium",
-        lookback_days=1,
-        change_note=f"generated: {payload.prompt[:200]}",
-        created_by=admin.username,
-        origin="llm",
-    )
-    session.add(rule)
-    await session.flush()
-    await session.commit()
-    await session.refresh(rule)
+    trial = None
+    if result.trial is not None:
+        t = result.trial
+        trial = TrialOut(
+            status=t.status,
+            ok=t.ok,
+            outcome=t.outcome,
+            summary=t.summary,
+            rows=t.rows,
+            metrics=t.metrics,
+            error=t.error,
+            duration_ms=t.duration_ms,
+        )
 
     return RuleGenerateResponse(
-        rule=RuleOut.model_validate(rule),
-        source_code=generated["source"],
-        explanation=generated["explanation"],
-        datasources_used=generated["datasources_used"],
+        ok=result.ok,
+        entity=entity,
+        data_date=target,
+        lookback_days=payload.lookback_days,
+        source_code=result.source,
+        name=result.name,
+        description=result.description,
+        datasources_used=result.datasources_used,
+        trial=trial,
+        attempts=[
+            GenerationAttempt(
+                n=a["n"], ok=a["ok"], error=a.get("error"), traceback=a.get("traceback")
+            )
+            for a in result.attempts
+        ],
+        suggested_code=await _next_generated_code(session),
+        error=result.error,
     )
+
+
+def _run_agent(catalog, prompt, entity, data_date, tables, lookback_days):
+    """Run the agent in a worker thread.
+
+    The model call and the trial are both blocking, so the whole graph runs in
+    this thread and the endpoint awaits it. The bound comes from the model
+    client's own timeout and from the attempt cap, not from here: a request
+    that gives up early leaves a thread mid-thought, which is worse than one
+    that waits.
+    """
+    from app.engine.rule_agent import run_generation
+
+    return run_generation(
+        catalog=catalog,
+        prompt=prompt,
+        entity=entity,
+        data_date=data_date,
+        tables=tables,
+        lookback_days=lookback_days,
+        allowed=tables,
+    )
+
+
+async def _next_generated_code(session) -> str:
+    """The next free `GEN-nn`.
+
+    Generated rules are numbered separately from the audit programme's own
+    codes (`CA-03`), because a generated rule has not been through the
+    programme's numbering and must not look as though it has.
+    """
+    rows = (
+        await session.execute(select(Rule.code).where(Rule.code.like("GEN-%")))
+    ).scalars().all()
+    numbers = []
+    for code in rows:
+        tail = str(code).split("-", 1)[-1]
+        if tail.isdigit():
+            numbers.append(int(tail))
+    return f"GEN-{(max(numbers) + 1) if numbers else 1:02d}"
 
 
 @router.get("/{code}")
@@ -354,7 +409,7 @@ async def create_rule(
         lookback_days=payload.lookback_days,
         change_note="initial version",
         created_by=admin.username,
-        origin="manual",
+        origin=payload.origin,
         # Read from the source just written, so the rule's page and the
         # catalogue's "used by" are right from the moment it exists rather
         # than after someone remembers to validate it.

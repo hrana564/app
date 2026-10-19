@@ -347,7 +347,7 @@ export const RowsTable = ({
                   }}
                 >
                   {row[c] === null || row[c] === undefined
-                    ? "â€”"
+                    ? "—"
                     : String(row[c])}
                 </Box>
               ))}

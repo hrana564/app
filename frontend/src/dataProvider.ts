@@ -275,6 +275,41 @@ export interface DatasourceOverview {
   discovered: DiscoveredFile[];
 }
 
+/** One attempt at a working rule, and how it ended. */
+export interface GenerationAttempt {
+  n: number;
+  ok: boolean;
+  error: string | null;
+  traceback: string | null;
+}
+
+/** What the trial found when the candidate was run against real data. */
+export interface TrialResult {
+  status: string;
+  ok: boolean;
+  outcome: "pass" | "fail" | null;
+  summary: string;
+  rows: Record<string, any>[];
+  metrics: Record<string, any>;
+  error: string | null;
+  duration_ms: number;
+}
+
+export interface RuleGenerateResponse {
+  ok: boolean;
+  entity: string;
+  data_date: string;
+  lookback_days: number;
+  source_code: string | null;
+  name: string | null;
+  description: string | null;
+  datasources_used: string[];
+  trial: TrialResult | null;
+  attempts: GenerationAttempt[];
+  suggested_code: string | null;
+  error: string | null;
+}
+
 // --- custom endpoints used by the UI ---------------------------------------
 export const api = {
   login: (username: string, password: string) =>
@@ -411,11 +446,39 @@ export const api = {
   generateStatus: () => request<any>("/api/rules/generate/status"),
   generateContext: (entity: string) =>
     request<any>(`/api/rules/generate/context?entity=${entity}`),
-  generateRule: (prompt: string, entity: string) =>
-    request<any>("/api/rules/generate", {
+
+  /**
+   * Ask for a rule, and get back one that has been run.
+   *
+   * The selection binds: the model is shown only `datasources`, and a rule
+   * that reads any other table is rejected before it executes. Nothing is
+   * created by this call - the rule row and the file are written when the
+   * admin presses Save, so nothing reaches the catalogue that nobody read.
+   */
+  generateRule: (payload: {
+    prompt: string;
+    entity: string;
+    datasources: string[];
+    lookback_days: number;
+    data_date?: string;
+  }) =>
+    request<RuleGenerateResponse>("/api/rules/generate", {
       method: "POST",
-      body: JSON.stringify({ prompt, entity }),
+      body: JSON.stringify(payload),
     }),
+
+  createRule: (payload: {
+    code: string;
+    name: string;
+    entity: string;
+    description?: string;
+    severity?: string;
+    lookback_days?: number;
+    source_code: string;
+    status?: string;
+    origin?: string;
+  }) =>
+    request<any>("/api/rules", { method: "POST", body: JSON.stringify(payload) }),
 
   /**
    * The configured clients and the systems each one draws from.

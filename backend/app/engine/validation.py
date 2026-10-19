@@ -139,6 +139,54 @@ def declared_tables(source: str) -> list[str]:
     return sorted(set(declared_names(source)) | set(referenced_tables(source)))
 
 
+def scan_source(source: str) -> list[str]:
+    """Every reason this file may not run. Pure text - no file, no database.
+
+    The gate a rule must pass before it is allowed to execute. It is a function
+    of the source alone so that every caller gets the same answer: the
+    validator, and the trial that runs a candidate before it is saved.
+
+    A candidate that has not been through this gate is not executed. A rule is
+    code, and code that has not been read is code that does not get to run.
+    """
+    try:
+        tree = ast.parse(source)
+    except SyntaxError as exc:
+        return [f"syntax error on line {exc.lineno}: {exc.msg}"]
+
+    problems: list[str] = []
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                root = alias.name.split(".")[0]
+                if root in BANNED_IMPORTS:
+                    problems.append(
+                        f"line {node.lineno}: import of '{alias.name}' is not "
+                        f"allowed in a rule"
+                    )
+                elif root not in ALLOWED_IMPORTS:
+                    problems.append(
+                        f"line {node.lineno}: import of '{alias.name}' is not on "
+                        f"the allow-list ({', '.join(sorted(ALLOWED_IMPORTS))})"
+                    )
+        elif isinstance(node, ast.ImportFrom):
+            root = (node.module or "").split(".")[0]
+            if root in BANNED_IMPORTS:
+                problems.append(
+                    f"line {node.lineno}: 'from {node.module} import ...' is not "
+                    f"allowed in a rule"
+                )
+        elif isinstance(node, ast.Call):
+            name = getattr(node.func, "id", None) or getattr(node.func, "attr", None)
+            if name in BANNED_CALLS:
+                problems.append(
+                    f"line {node.lineno}: call to {name}() is not allowed in a rule"
+                )
+
+    return problems
+
+
 @dataclass
 class ValidationResult:
     status: str  # "valid" | "invalid"
@@ -235,49 +283,16 @@ class RuleValidator:
 
         Returns only what the scan is uniquely for - the problems. The table
         names come from `referenced_tables()` so there is one implementation of
-        the tables it reads come from the shared helper.
+        the tables it reads come from the shared helper, and the problems come
+        from `scan_source()` so there is one implementation of what is allowed
+        to run.
         """
         try:
             source = read_source(self.source_file, self.rules_dir)
         except FileNotFoundError:
             return [f"source file {self.source_file} does not exist"], []
 
-        try:
-            tree = ast.parse(source)
-        except SyntaxError as exc:
-            return [f"syntax error on line {exc.lineno}: {exc.msg}"], []
-
-        problems: list[str] = []
-
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Import):
-                for alias in node.names:
-                    root = alias.name.split(".")[0]
-                    if root in BANNED_IMPORTS:
-                        problems.append(
-                            f"line {node.lineno}: import of '{alias.name}' is not "
-                            f"allowed in a rule"
-                        )
-                    elif root not in ALLOWED_IMPORTS:
-                        problems.append(
-                            f"line {node.lineno}: import of '{alias.name}' is not on "
-                            f"the allow-list ({', '.join(sorted(ALLOWED_IMPORTS))})"
-                        )
-            elif isinstance(node, ast.ImportFrom):
-                root = (node.module or "").split(".")[0]
-                if root in BANNED_IMPORTS:
-                    problems.append(
-                        f"line {node.lineno}: 'from {node.module} import ...' is not "
-                        f"allowed in a rule"
-                    )
-            elif isinstance(node, ast.Call):
-                name = getattr(node.func, "id", None) or getattr(node.func, "attr", None)
-                if name in BANNED_CALLS:
-                    problems.append(
-                        f"line {node.lineno}: call to {name}() is not allowed in a rule"
-                    )
-
-        return problems, referenced_tables(source, tree)
+        return scan_source(source), referenced_tables(source)
 
 
 def _as_list(value: Any) -> list[str]:

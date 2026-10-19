@@ -119,3 +119,29 @@ class RuleContext:
     @property
     def logs(self) -> list[str]:
         return list(self._logs)
+
+
+def invoke_rule(
+    module: Any,
+    *,
+    data_date: date,
+    lookback_days: int,
+    rule_name: str = "",
+    registered: list[str] | None = None,
+    snapshot: Any = None,
+) -> tuple[dict[str, Any], list[str]]:
+    """Call a rule's `run(ctx)` and hand back what it returned and what it logged.
+
+    One call, used by the runner and by the trial that runs a candidate before
+    it is saved. Two implementations of "build the context and call the rule"
+    would be two different execution paths, and a trial that tests a different
+    path from production is not a trial at all.
+    """
+    ctx = RuleContext(
+        data_date=data_date,
+        lookback_days=lookback_days,
+        rule_name=rule_name,
+        registered=registered,
+        snapshot=snapshot,
+    )
+    return module.run(ctx), ctx.logs

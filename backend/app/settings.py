@@ -5,10 +5,10 @@ from __future__ import annotations
 import secrets
 from functools import lru_cache
 from pathlib import Path
+from typing import Any
 
 from pydantic import BaseModel, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
-
 # backend/app/settings.py -> backend/app -> backend
 BACKEND_DIR = Path(__file__).resolve().parent.parent
 APP_ROOT = BACKEND_DIR.parent
@@ -59,6 +59,27 @@ class Settings(BaseSettings):
     llm_api_key: str = ""
     llm_model: str = ""
 
+    # The provider's own knobs, passed through on every call. A reasoning
+    # model with a large thinking budget can spend minutes on a single rule;
+    # `{"reasoning_effort": "low"}` is the usual answer. It is optional and
+    # not standard: an endpoint that does not have it answers 400, and the
+    # call is retried once without it.
+    llm_extra_params: dict[str, Any] = Field(default_factory=dict)
+
+    # How many times the agent may try to produce a rule that runs. The first
+    # attempt is the generation; the rest are repairs of a failure it was shown.
+    # Three is enough for a broken column name and one wrong idea, and few
+    # enough that a hopeless prompt does not spend the client's money.
+    llm_max_attempts: int = 3
+
+    # How long one model call may take. Generous, because a reasoning model
+    # with a large thinking budget is slow and a timeout mid-answer wastes
+    # everything it had thought.
+    llm_timeout_seconds: int = 300
+
+    # How long a candidate rule may run before it is abandoned.
+    trial_timeout_seconds: int = 30
+
     # --- client identity ---------------------------------------------------
     # WHO this deployment audits. Configuration, not code, so the product ships
     # without naming anyone: a deployment writes CLIENT_ENTITIES into its .env
@@ -88,6 +109,12 @@ class Settings(BaseSettings):
     # Per-run execution folders. Each holds the exact rule source and the
     # exact CSVs one run read, so a failure can be replayed byte for byte.
     runs_dir: Path = APP_ROOT / "mount" / "Rules_Executions"
+
+    # Scratch space for a candidate rule that is being tested before it is
+    # saved. Separate from runs_dir on purpose: run folders are numbered from
+    # the same counter as `rule_runs`, so a trial that took one would make
+    # every later run fail with FileExistsError.
+    trials_dir: Path = APP_ROOT / "mount" / ".trials"
 
     rules_dir: Path = BACKEND_DIR / "rules"
 

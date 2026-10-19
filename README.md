@@ -29,7 +29,7 @@ server rather than by the browser filtering what it already downloaded. See
 9. [Configuration](#9-configuration)
 10. [API reference](#10-api-reference)
 11. [Writing a rule](#11-writing-a-rule)
-12. [Generating rules from a prompt](#12-generating-rules-from-a-prompt)
+12. [Creating a rule with the agent](#12-creating-a-rule-with-the-agent)
 13. [Licensing](#13-licensing)
 14. [Power Apps migration path](#14-power-apps-migration-path)
 15. [Testing](#15-testing)
@@ -669,7 +669,9 @@ app/
 │   │       ├── ticketing.py        run -> one ticket. Imports no Rule.
 │   │       ├── replay.py           re-run a captured folder. No DB, no network.
 │   │       ├── scheduler.py        APScheduler wiring
-│   │       └── rule_generator.py   prompt -> draft rule
+│   │       ├── rule_generator.py   the prompts: the connector contract + the data
+│   │       ├── rule_agent.py       the graph: write -> run -> repair
+│   │       └── trial.py            run a candidate rule without touching the ledger
 │   ├── rules/
 │   │   ├── _template.py
 │   │   ├── rule_1.py   CA-03   last-hour trading spike
@@ -679,7 +681,10 @@ app/
 │   └── scripts/
 │       ├── make_sample_data.py     generate SourceData with planted breaches
 │       ├── smoke_test.py           end-to-end test suite
-│       └── check_licenses.py       license gate
+│       ├── check_licenses.py       license gate
+│       └── write_third_party_notice.py  writes THIRD_PARTY_NOTICES.txt
+├── docs/
+│   └── CREATING_A_RULE.md          a guide for the people who write the controls
 └── frontend/
     ├── vite.config.ts              dev proxy to :8000
     └── src/
@@ -719,10 +724,14 @@ ADMIN_PASSWORD=Admin@2026
 AUDITOR_USERNAME=audit_user
 AUDITOR_PASSWORD=Audit@2026
 
-# --- LLM for rule generation (any OpenAI-compatible endpoint) ---
-LLM_BASE_URL=                 # blank disables prompt -> rule generation
+# --- LLM for the rule agent (any OpenAI-compatible endpoint) ---
+LLM_BASE_URL=                 # blank disables rule generation
 LLM_API_KEY=
 LLM_MODEL=
+LLM_EXTRA_PARAMS=             # e.g. {"reasoning_effort": "low"} - optional
+LLM_MAX_ATTEMPTS=3            # 1 write + 2 repairs
+LLM_TIMEOUT_SECONDS=300
+TRIAL_TIMEOUT_SECONDS=30
 
 # --- Paths ---
 SOURCEDATA_DIR=../mount/SourceData
@@ -782,7 +791,7 @@ rule that produced them, so those endpoints join to reach it — that join lives
 | GET | `/api/rules/{id}/validate-report` | any | Last stored verdict without re-running |
 | GET | `/api/rules/generate/status` | any | Is the LLM configured? |
 | GET | `/api/rules/generate/context?entity=CLIENT-A` | any | What the LLM would be shown |
-| POST | `/api/rules/generate` | admin | Prompt → **draft** rule |
+| POST | `/api/rules/generate` | admin | Prompt + selection + lookback → a rule **that has been run**. Creates nothing |
 
 ### Schedules / Runs / Tickets / Params / Datasources
 | Method | Path | Role | Description |
@@ -939,20 +948,43 @@ error — a lookback reaching back before the data starts still audits what ther
 
 ---
 
-## 12. Generating rules from a prompt
+## 12. Creating a rule with the agent
 
-Admin only. Available from **Rules → Generate rule from prompt**.
+Admin only. Available from **Rules → Create a rule**.
 
-1. Pick the client entity (the model only sees that entity's datasources).
-2. Describe the control in plain language.
-3. The model receives the datasource registry **with real column samples from the target date**
-   plus the rule contract and a reference implementation, so it cannot invent columns.
-4. Output is structurally validated (`def run(ctx)` present, both statuses used, no banned
-   imports) and stored as a **draft**.
-5. A human reads the source, runs a test against a real date, then promotes to `active`.
+The agent does not hand you a file and wish you luck. It writes a rule, **runs
+it against the bytes your estate actually holds**, and - when it fails - hands
+the error back and writes it again, up to three times. What comes back is a
+rule that has been executed, together with what it found.
 
-The generated rule is never auto-approved. For audit tooling, a human should read the logic
-before it raises tickets.
+```
+   write the rule
+         |
+         v
+   check it is allowed to run  ---->  not allowed? --> tell the model why
+         |
+         v
+   RUN IT against real data     ---->  it failed?  --> tell the model why
+         |                                      |
+         |                                      +--> write it again
+         v
+   it ran, and here is what it found
+```
+
+**You choose the scope.** The datasource selection binds: the model is shown
+only the tables you tick, and a rule that reads any other is refused before it
+runs. You also set the lookback (how far back it reads) and the date it is
+tested against.
+
+**Nothing is created until you press Save.** The trial writes no `rule_runs`
+row, raises no ticket, and takes no run folder - so a rule that has not been
+reviewed by a human never reaches the catalogue, and the trial does not put a
+finding in the ledger that nobody asked for. If the agent never gets it
+working, no rule is created and the screen says what it tried and why each
+attempt failed.
+
+The generated rule is saved as a **draft** and validated. It does not run on a
+schedule until you activate it.
 
 Configure any OpenAI-compatible endpoint — Azure AI Foundry, Azure OpenAI, Ollama, MiniMax:
 
@@ -961,6 +993,20 @@ LLM_BASE_URL=https://your-endpoint/v1
 LLM_API_KEY=sk-...
 LLM_MODEL=your-model
 ```
+
+A reasoning model can be slow, because it thinks before it answers. Most
+providers let you turn that down, and the portal passes the knob through:
+
+```ini
+LLM_EXTRA_PARAMS={"reasoning_effort": "low"}
+```
+
+It is optional. An endpoint that does not understand it answers 400, and the
+call is retried once without it.
+
+**A guide for the people who write the controls** - how to word the prompt,
+how to choose the datasources, what the messages mean, and when to write the
+rule yourself - is in **[docs/CREATING_A_RULE.md](docs/CREATING_A_RULE.md)**.
 
 ---
 

@@ -232,6 +232,54 @@ Two consequences worth keeping in mind:
   it. A truth the endpoint knows and the screen does not say is still a lie the
   user is told.
 
+### A rule is only created after it has run
+
+The agent writes a rule, runs it, and repairs it until it runs. The rule
+reaches the catalogue only when a human has read it and pressed Save.
+
+```
+app/engine/rule_agent.py:   the graph - write -> run -> repair
+app/engine/trial.py:         runs a candidate, touches nothing
+app/engine/rule_generator.py: the prompts - the connector contract, and the data
+```
+
+Three rules hold this together, and each one exists because breaking it would
+be invisible:
+
+| Rule | Why |
+|---|---|
+| The trial writes nothing to the ledger | No `rule_runs` row, no ticket, no run folder. A trial that raised a ticket would put a finding in the estate that nobody asked for |
+| The datasource selection binds | The model is shown only the selected tables, and a rule reading any other is refused **before it executes**. A picker the model may wander outside of is a picker that selects nothing |
+| Generation creates no rule row | The agent's output is source and a verdict. The rule row and the file are written by `POST /api/rules`, after a human has read the code |
+
+The trial stages with `capture()` - the production staging path - and runs the
+copy that `capture()` froze into the folder. A separate "test mode" would be a
+different execution path, and a rule that passes a different path has not been
+tested. It stages into `mount/.trials/<token>/` rather than
+`mount/Rules_Executions/`, because run folders are numbered from the same
+counter as `rule_runs` and a trial that took one would make every later run
+fail with `FileExistsError`.
+
+**The failures are classified, because only one of them can be repaired.**
+
+| Classification | Meaning | Repairable? |
+|---|---|---|
+| `code_error` | raised, or returned `failed` while the data exists | yes |
+| `not_allowed` | reads a table outside the selection | yes |
+| `banned` | the static gate refused it | yes |
+| `data_missing` | the ETL did not land a file | **no** |
+
+An agent that believes it can fix missing data will rewrite working code
+until it has nothing left to rewrite. The classification is the difference
+between "try again" and "stop and tell the user".
+
+Two implementations of "is this file allowed to run" would be two answers to
+the same question, so `scan_source()` in `validation.py` is the only one, and
+the trial and the validator both call it. The same is true of the call itself:
+`invoke_rule()` in `ctx.py` builds the context and calls `run(ctx)` for both
+the runner and the trial, because a trial that tests a different path from
+production is not a trial at all.
+
 ### The client scope lives in exactly one place in the frontend too
 
 ```
@@ -262,6 +310,9 @@ work per client and re-picking it on every reload is noise.
 | One `scoped()` for every query that filters by client | `backend/app/api/scope.py` | Runs and tickets have no entity column; they inherit the rule's. Five endpoints joining for it themselves is how the dashboard counts a different client than the list beside it. See §2. |
 | One `summarise_day()` for the assurance grid | `backend/app/api/assurance.py` | `passed + breached + errored + unchecked == assured` has to close, or the landing page reports incomplete assurance as complete. See §2. |
 | One `useEntityScope()` for every screen | `frontend/src/entityScope.tsx` | The app bar owns the client. A screen with its own dropdown can disagree with the header above it, and a "Clear" button can drop the scope silently. See §2. |
+| One `scan_source()` for every gate | `backend/app/engine/validation.py` | The static gate that decides a rule may run. The validator and the trial both call it, so a candidate cannot be stricter when it is tested than when it is activated. |
+| One `invoke_rule()` for every execution | `backend/app/engine/ctx.py` | Builds the context and calls `run(ctx)`. The runner and the trial both call it, because a trial that tests a different path from production is not a trial. |
+| The trial touches nothing | `backend/app/engine/trial.py` | No `rule_runs` row, no ticket, no run folder. A trial that raised a ticket would put a finding in the estate that nobody asked for. See §2. |
 | One licence policy for gate and notice | `backend/scripts/check_licenses.py` | `write_third_party_notice.py` imports `BLOCKING`/`PERMISSIVE`/`classify` rather than restating them. It once kept its own lists and they drifted within a single commit - `epl`, `cpal` and `commercial` were blocked by the gate and unknown to the notice, which is the one place a copyleft dependency could be declared into compliance. |
 | One `SEVERITIES` list for the frontend | `frontend/src/theme.ts` | Three screens sorted and filtered by severity with a copy each, and the ticket inbox held two. Derive from `SEVERITIES` / `SEVERITIES_ASC`; the backend equivalent is `SEVERITY_ORDER` in `app/api/assurance.py`, which the ticket group sort imports. |
 | Rules may only `import` from the allow-list | `app/engine/validation.py` | Enforced by AST scan, not convention. |
@@ -284,6 +335,16 @@ ETL team ──writes CSVs──> mount/SourceData/<ENTITY>/<date>/*.csv
      ┌──────────────┬───────────────┼──────────────┬─────────────────┐
    rules          runs           replay      rule_generator        UI
 (validate)    (ctx.table)   (own snapshot)    (LLM prompt)     (admin)
+                                    │
+                                    ▼
+                          engine/rule_agent.py    write → run → repair
+                                    │
+                                    ▼
+                            engine/trial.py         runs a candidate, in a
+                                    │               scratch folder, touching
+                                    │               nothing that is recorded
+                                    ▼
+                            the admin reads it, then Save
 ```
 
 Each stage knows only the stage before it, and the only thing crossing the

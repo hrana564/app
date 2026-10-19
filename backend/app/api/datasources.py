@@ -344,7 +344,7 @@ async def delete_datasource(
             detail={
                 "message": f"{row.name} is read by {len(dependents)} active rule(s)",
                 "dependents": dependents,
-                "hint": "Change or remove those rules first â€” a rule that reads a table which is no longer registered fails on its next run.",
+                "hint": "Change or remove those rules first — a rule that reads a table which is no longer registered fails on its next run.",
             },
         )
 

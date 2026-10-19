@@ -680,7 +680,7 @@ export const TicketList = () => {
     <>
       <Card>
         <Toolbar sx={{ gap: 1, flexWrap: "wrap", py: 1.5 }}>
-          <MuiTextField size="small" placeholder="Search ticket no, summaryâ€¦"
+          <MuiTextField size="small" placeholder="Search ticket no, summary…"
             value={search} onChange={(e) => setSearch(e.target.value)} sx={{ minWidth: 240 }} />
           <Picker label="status" options={STATUS_OPTIONS} value={filters.status}
             onPick={(v) => { setFilters((f) => ({ ...f, status: v })); setPage(0); }} />
@@ -789,8 +789,8 @@ export const TicketList = () => {
           labelRowsPerPage={groupBy ? "Groups per page" : "Rows per page"}
           labelDisplayedRows={({ from, to, count }) =>
             groupBy
-              ? `${from}â€“${to} of ${count} ${count === 1 ? "group" : "groups"}`
-              : `${from}â€“${to} of ${count} tickets`
+              ? `${from}–${to} of ${count} ${count === 1 ? "group" : "groups"}`
+              : `${from}–${to} of ${count} tickets`
           }
         />
       </Card>

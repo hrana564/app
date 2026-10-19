@@ -11,10 +11,15 @@ venv/
 *.log
 *.log.*
 
-# Rule source lives in git as <CODE>_v<version>.py. Generated drafts from the
-# prompt-to-rule feature are not: they arrive as a draft the user reviews and
-# commits, so v1 of any code is tracked.
+# Rule source lives in git as <CODE>_v<version>.py. A rule the agent wrote is
+# tracked like any other, because a rule that has been read and saved is a
+# rule like any other.
 backend/rules/AUTO-*
+
+# Scratch space for a candidate rule being tested before it is saved. Each
+# trial makes one folder and deletes it when it finishes, so anything left
+# here is a trial that died mid-way.
+mount/.trials/**
 
 # Secrets
 .env

@@ -16,13 +16,14 @@ from __future__ import annotations
 
 import re
 import sys
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 
 import httpx
 
 BASE = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8000"
 RULES_DIR = Path(__file__).resolve().parent.parent / "rules"
+MOUNT_DIR = Path(__file__).resolve().parent.parent.parent / "mount"
 
 ADMIN = ("admin_user", "Admin@2026")
 AUDITOR = ("audit_user", "Audit@2026")
@@ -77,6 +78,27 @@ def section(title: str) -> None:
     print(f"\n[{title}]")
 
 
+def _run_folder_count() -> int:
+    """How many run folders exist on disk."""
+    runs = MOUNT_DIR / "Rules_Executions"
+    if not runs.exists():
+        return 0
+    return len([d for d in runs.iterdir() if d.is_dir()])
+
+
+def _trial_folder_count() -> int:
+    """How many scratch folders a trial left behind.
+
+    A trial deletes its own scratch space when it finishes. One that survives
+    means a trial died in a way that skipped the cleanup, and the next one
+    would be reading a folder nobody owns.
+    """
+    trials = MOUNT_DIR / ".trials"
+    if not trials.exists():
+        return 0
+    return len([d for d in trials.iterdir() if d.is_dir()])
+
+
 def main() -> int:
     print("=" * 72)
     print(f"AUDIT PORTAL - smoke test against {BASE}")
@@ -129,7 +151,8 @@ def main() -> int:
                    json={"code": "RBAC-PROBE", "name": "nope",
                          "source_code": "def run(ctx):\n    return {}\n"})
         check("auditor CANNOT create rules", r.status_code == 403, f"got {r.status_code}")
-        r = c.post("/api/rules/generate", headers=ud, json={"prompt": "flag anything odd"})
+        r = c.post("/api/rules/generate", headers=ud, json={
+            "prompt": "flag anything odd", "entity": FIRST, "datasources": ["ipos_sales"]})
         check("auditor CANNOT generate rules", r.status_code == 403, f"got {r.status_code}")
 
         section("entities and datasources")
@@ -313,7 +336,14 @@ def main() -> int:
                   body["version"] == 1 and body["is_version_active"])
 
         all_rules = c.get("/api/rules", headers=ah).json()
-        check("four rules listed", all_rules["total"] == 4, str(all_rules["total"]))
+        # Not "there are four rules". The estate grows the moment an admin
+        # writes one - which is the product working - and an assertion about
+        # the count would fail for doing exactly what it is for. What has to
+        # hold is that the known rules are here and that each row is a head.
+        listed = {x["code"] for x in all_rules["data"]}
+        check("every known rule is listed",
+              all(code in listed for code, _, _, _ in RULE_SPECS),
+              str(sorted(listed)))
         check("every listed rule is a head version",
               all(x["is_version_active"] for x in all_rules["data"]))
 
@@ -958,6 +988,101 @@ def main() -> int:
         r = c.get("/api/rules/generate/context", headers=ud, params={"entity": FIRST})
         check(f"generate context lists {FIRST} datasources",
               r.status_code == 200 and "ipos_sales" in r.json()["datasources"])
+
+        # --- the generation request is a contract, and it is enforced -------
+        r = c.post("/api/rules/generate", headers=ah, json={
+            "prompt": "flag anything odd", "entity": FIRST, "datasources": []})
+        check("generation refuses an empty datasource selection",
+              r.status_code == 422, f"got {r.status_code}")
+        r = c.post("/api/rules/generate", headers=ah, json={
+            "prompt": "flag anything odd", "entity": FIRST,
+            "datasources": ["no_such_table_at_all"]})
+        check("generation refuses a datasource that is not registered",
+              r.status_code == 400, f"got {r.status_code} {r.text[:120]}")
+        r = c.post("/api/rules/generate", headers=ah, json={
+            "prompt": "x", "entity": FIRST, "datasources": ["ipos_sales"]})
+        check("generation refuses a prompt that says nothing",
+              r.status_code == 422, f"got {r.status_code}")
+
+        # A generation attempt must not create anything. This is the whole
+        # reason the agent runs in a scratch folder: a rule that has not been
+        # reviewed has no business in the catalogue, and a trial that wrote a
+        # run row would put a finding in the ledger that nobody asked for.
+        rules_before = c.get("/api/rules", headers=ah, params={"perPage": 500}).json()["total"]
+        runs_before = c.get("/api/rule-runs", headers=ah, params={"perPage": 1}).json()["total"]
+        folders_before = _run_folder_count()
+
+        section("the trial: a rule has to run before it is saved")
+        # The trial has no endpoint, deliberately - it must not be something
+        # the browser can ask for at will. So it is exercised here, directly,
+        # because it is the thing that decides whether a rule may be saved.
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+        from app.engine.loader import read_source
+        from app.engine.trial import run_trial
+        from app.settings import settings as app_settings
+
+        entity = rule_entity("CA-03_v1.py")
+        overview = c.get("/api/datasources/overview", headers=ah,
+                         params={"entity": entity}).json()
+        test_day = overview["data_date"]
+        registered = [d["name"] for d in overview["registered"]]
+        other_table = next((n for n in registered if n != "ipos_sales"), None)
+
+        good = read_source("CA-03_v1.py", app_settings.rules_dir)
+        t = run_trial(good, entity=entity, tables=["ipos_sales"],
+                      data_date=date.fromisoformat(test_day), lookback_days=1,
+                      allowed=["ipos_sales"])
+        check("a real rule runs in the trial", t.status == "ok", f"{t.status} {t.error}")
+        check("the trial reports what the control found",
+              t.outcome in ("pass", "fail"), str(t.outcome))
+        check("the trial reads the rule's own name",
+              bool(t.name) and "CA-03" in (t.name or ""), str(t.name))
+
+        broken = good.replace('pl.col("invoice_value")',
+                              'pl.col("invoice_value_typo")', 1)
+        t = run_trial(broken, entity=entity, tables=["ipos_sales"],
+                      data_date=date.fromisoformat(test_day), lookback_days=1,
+                      allowed=["ipos_sales"])
+        check("a rule with a column that does not exist is caught",
+              t.status == "code_error", f"{t.status} {t.error}")
+        check("and it is repairable, so the agent is told about it",
+              t.repairable is True, str(t.status))
+
+        banned = "import os\n\n\ndef run(ctx):\n    return {}\n"
+        t = run_trial(banned, entity=entity, tables=["ipos_sales"],
+                      data_date=date.fromisoformat(test_day), lookback_days=1,
+                      allowed=["ipos_sales"])
+        check("a rule that imports os is refused before it runs",
+              t.status == "banned", f"{t.status} {t.error}")
+
+        if other_table:
+            outside = good.replace('ctx.table("ipos_sales")',
+                                    f'ctx.table("{other_table}")', 1)
+            t = run_trial(outside, entity=entity, tables=["ipos_sales"],
+                          data_date=date.fromisoformat(test_day), lookback_days=1,
+                          allowed=["ipos_sales"])
+            check("a rule that reads a table outside the selection is refused",
+                  t.status == "not_allowed", f"{t.status} {t.error}")
+
+        t = run_trial(good, entity=entity, tables=["ipos_sales"],
+                      data_date=date(2019, 1, 1), lookback_days=1,
+                      allowed=["ipos_sales"])
+        check("a rule on a day the ETL never delivered is a data problem",
+              t.status == "data_missing", f"{t.status} {t.error}")
+        check("and a data problem is NOT repairable - the agent cannot fix it",
+              t.repairable is False, str(t.status))
+
+        rules_after = c.get("/api/rules", headers=ah, params={"perPage": 500}).json()["total"]
+        runs_after = c.get("/api/rule-runs", headers=ah, params={"perPage": 1}).json()["total"]
+        check("the trial created no rule", rules_after == rules_before,
+              f"{rules_before} -> {rules_after}")
+        check("the trial wrote nothing to the ledger",
+              runs_after == runs_before, f"{runs_before} -> {runs_after}")
+        check("the trial left no run folder behind",
+              _run_folder_count() == folders_before,
+              f"{folders_before} -> {_run_folder_count()}")
+        check("the trial left no scratch folder behind",
+              _trial_folder_count() == 0, str(_trial_folder_count()))
 
     print("\n" + "=" * 72)
     print(f"RESULT: {passes} passed, {failures} failed")

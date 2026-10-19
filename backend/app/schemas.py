@@ -18,6 +18,10 @@ CadenceKind = Literal[
     "HOURLY", "DAILY", "WEEKDAYS", "WEEKLY", "MONTHLY", "CUSTOM"
 ]
 ValidationStatus = Literal["unvalidated", "valid", "invalid"]
+# How a rule came to exist. "llm" means the source was machine-written and a
+# human read it before it was saved - a different thing from a hand-written
+# rule, and worth knowing when you are deciding how much to trust it.
+RuleOrigin = Literal["manual", "llm"]
 
 
 # ---------------------------------------------------------------------------
@@ -198,6 +202,10 @@ class RuleCreate(BaseModel):
     lookback_days: int = Field(default=1, ge=1, le=365)
     source_code: str
     status: RuleStatus = "draft"
+    # How the rule came to exist. "llm" says the source was machine-written and
+    # a human read it - which is a different thing from a hand-written rule,
+    # and a catalogue that cannot tell the two apart is not telling the truth.
+    origin: RuleOrigin = "manual"
 
 
 class RuleUpdate(BaseModel):
@@ -245,16 +253,62 @@ class RuleStatusUpdate(BaseModel):
 
 
 class RuleGenerateRequest(BaseModel):
+    """What the admin asked for, and the scope it may read.
+
+    `datasources` is the selection, and it binds: the model is shown only
+    those tables, and a rule that reads any other is rejected before it runs.
+    A selector the model may wander outside of is a selector that selects
+    nothing.
+    """
+
     prompt: str = Field(min_length=5)
     entity: str | None = None
+    datasources: list[str] = Field(min_length=1)
+    lookback_days: int = Field(default=1, ge=1, le=365)
     data_date: date | None = None
 
 
+class GenerationAttempt(BaseModel):
+    """One attempt at a working rule, and how it ended."""
+
+    n: int
+    ok: bool
+    error: str | None = None
+    traceback: str | None = None
+
+
+class TrialOut(BaseModel):
+    """What the trial found when the candidate was run against real data."""
+
+    status: str
+    ok: bool
+    outcome: str | None = None
+    summary: str = ""
+    rows: list[dict[str, Any]] = Field(default_factory=list)
+    metrics: dict[str, Any] = Field(default_factory=dict)
+    error: str | None = None
+    duration_ms: int = 0
+
+
 class RuleGenerateResponse(BaseModel):
-    rule: RuleOut
-    source_code: str
-    explanation: str
-    datasources_used: list[str]
+    """A rule that runs - or the reason there is not one.
+
+    Nothing is created by this call. The rule exists only after the admin has
+    read the code and pressed Save.
+    """
+
+    ok: bool
+    entity: str
+    data_date: date
+    lookback_days: int
+    source_code: str | None = None
+    name: str | None = None
+    description: str | None = None
+    datasources_used: list[str] = Field(default_factory=list)
+    trial: TrialOut | None = None
+    attempts: list[GenerationAttempt] = Field(default_factory=list)
+    suggested_code: str | None = None
+    error: str | None = None
 
 
 class RuleTestResponse(BaseModel):

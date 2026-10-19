@@ -5,8 +5,8 @@ import {
 } from "react-admin";
 import { useNavigate } from "react-router";
 import {
-  Alert, Box, Button, Card, CardContent, Chip, CircularProgress, Dialog,
-  DialogActions, DialogContent, DialogTitle, Divider, IconButton,
+  Alert, Autocomplete, Box, Button, Card, CardContent, Chip, CircularProgress,
+  Dialog, DialogActions, DialogContent, DialogTitle, Divider, IconButton,
   MenuItem, Stack, Table, TableBody, TableCell, TableContainer, TableHead,
   TableRow, TextField as MuiTextField, Tooltip, Typography,
 } from "@mui/material";
@@ -24,7 +24,10 @@ import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import ArrowUpwardIcon from "@mui/icons-material/ArrowUpward";
 import ArrowDownwardIcon from "@mui/icons-material/ArrowDownward";
 import ScheduleIcon from "@mui/icons-material/Schedule";
-import { api, getStoredUser, type DatasourceOverview, type DatasourceRow } from "../dataProvider";
+import {
+  api, getStoredUser, type DatasourceOverview, type DatasourceRow,
+  type RuleGenerateResponse,
+} from "../dataProvider";
 import { CadenceEditor, type CadenceConfig } from "../components/CadenceEditor";
 import { DatasourcePicker } from "../components/DatasourcePicker";
 import { RunOutcomeCell, RunStatusCell } from "./Run";
@@ -63,15 +66,42 @@ const isAdminUser = () => getStoredUser()?.role === "admin";
 /* ================================================================== */
 /* Rule toolbar: search + prompt-to-rule                               */
 /* ================================================================== */
+
+/**
+ * Ask for a rule, and get back one that has been run.
+ *
+ * The dialog has four states, and the order matters: what to build, the wait,
+ * the review, and the failure. Nothing is written until the review.
+ *
+ * THE REVIEW IS NOT A FORMALITY
+ * -----------------------------
+ * The agent writes a rule, runs it against the bytes the estate actually
+ * holds, and repairs it if it does not run. What comes back is the source and
+ * the verdict on it - including how many exception rows it found, which is
+ * the difference between a control that works and a control that is quiet.
+ *
+ * A rule that found nothing is not a failure, but it is worth a word: it may
+ * be correct, or it may be too loose to catch anything. The screen says which
+ * it cannot tell.
+ */
 export const GenerateRuleDialog = () => {
   const [open, setOpen] = useState(false);
+  const [step, setStep] = useState<"setup" | "working" | "review" | "failed">("setup");
   const [prompt, setPrompt] = useState("");
-  const [result, setResult] = useState<any>(null);
+  const [tables, setTables] = useState<string[]>([]);
+  const [lookback, setLookback] = useState(1);
+  const [testDate, setTestDate] = useState("");
+  const [overview, setOverview] = useState<DatasourceOverview | null>(null);
+  const [result, setResult] = useState<RuleGenerateResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [configured, setConfigured] = useState<boolean | null>(null);
+  const [name, setName] = useState("");
+  const [code, setCode] = useState("");
+  const [severity, setSeverity] = useState("medium");
   const notify = useNotify();
   const refresh = useRefresh();
+  const navigate = useNavigate();
 
   // A generated rule belongs to the client the portal is scoped to. The model
   // is only shown that client's registered datasources, so a second selector here
@@ -81,40 +111,116 @@ export const GenerateRuleDialog = () => {
 
   const openDialog = async () => {
     setOpen(true);
+    setStep("setup");
     setResult(null);
     setError(null);
+    setPrompt("");
+    setTables([]);
+    setLookback(1);
+    setTestDate("");
+    setName("");
+    setCode("");
+    setSeverity("medium");
     try {
       const s = await api.generateStatus();
       setConfigured(s.configured);
     } catch {
       setConfigured(false);
     }
+    try {
+      const ov = await api.datasourceOverview(entity);
+      setOverview(ov);
+      setTestDate(ov.data_date);
+    } catch {
+      setOverview(null);
+    }
   };
 
   const generate = async () => {
     setBusy(true);
     setError(null);
+    setStep("working");
     try {
-      const g = await api.generateRule(prompt, entity);
-      setResult(g);
-      notify(`Draft rule ${g.rule.code} created â€” validate it before activating`, {
-        type: "success",
+      const g = await api.generateRule({
+        prompt,
+        entity,
+        datasources: tables,
+        lookback_days: lookback,
+        data_date: testDate || undefined,
       });
-      refresh();
+      setResult(g);
+      setName(g.name ?? "");
+      setCode(g.suggested_code ?? "");
+      setStep(g.ok ? "review" : "failed");
     } catch (e: any) {
       setError(e.message ?? String(e));
+      setStep("failed");
     } finally {
       setBusy(false);
     }
   };
 
+  const save = async () => {
+    if (!result?.source_code) return;
+    setBusy(true);
+    try {
+      await api.createRule({
+        code,
+        name: name || code,
+        entity,
+        description: result.description || prompt,
+        severity,
+        lookback_days: result.lookback_days,
+        source_code: result.source_code,
+        status: "draft",
+        origin: "llm",
+      });
+      // The agent proved the rule runs; the validator proves it is allowed to.
+      // Both are cheap, and a rule that has not been validated cannot be
+      // activated - so it is validated now rather than leaving that to
+      // somebody to remember.
+      const report = await api.validateRule(code);
+      if (report?.ok === false) {
+        notify(
+          `${code} was created, but validation found problems: ${report.errors?.join("; ") ?? "see the rule page"}`,
+          { type: "warning" },
+        );
+      } else {
+        notify(`${code} created and validated as a draft - activate it when you are ready`, {
+          type: "success",
+        });
+      }
+      refresh();
+      setOpen(false);
+      navigate(`/rules/${encodeURIComponent(code)}/show`);
+    } catch (e: any) {
+      notify(e.message ?? String(e), { type: "error" });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const options = useMemo(
+    () => overview?.registered ?? [],
+    [overview],
+  );
+
+  // A table whose file has not landed cannot be tested, and the trial will
+  // say so - but it is better to say it before the model has been paid for.
+  const absent = useMemo(
+    () => tables.filter((t) => options.find((o) => o.name === t)?.landing === "absent"),
+    [tables, options],
+  );
+
+  const trial = result?.trial;
+
   return (
     <>
       <Button variant="contained" startIcon={<AutoAwesomeIcon />} onClick={openDialog}>
-        Generate rule from prompt
+        Create a rule
       </Button>
-      <Dialog open={open} onClose={() => setOpen(false)} maxWidth="md" fullWidth>
-        <DialogTitle>Generate a rule from a natural-language prompt</DialogTitle>
+      <Dialog open={open} onClose={() => !busy && setOpen(false)} maxWidth="md" fullWidth>
+        <DialogTitle>Create a rule</DialogTitle>
         <DialogContent>
           {configured === false ? (
             <Alert severity="warning" sx={{ mt: 1 }}>
@@ -123,13 +229,56 @@ export const GenerateRuleDialog = () => {
               <code>backend/.env</code>, then restart the API. Any OpenAI-compatible
               endpoint works.
             </Alert>
-          ) : result ? (
+          ) : step === "working" ? (
             <Stack spacing={2} sx={{ mt: 1 }}>
-              <Alert severity="success">
-                Draft <strong>{result.rule.code}</strong> created with status{" "}
-                <strong>draft</strong>. Read the code, run <strong>Validate</strong>,
-                then promote to <strong>active</strong>.
+              <Stack direction="row" spacing={1} alignItems="center">
+                <CircularProgress size={20} />
+                <Typography variant="body1">
+                  Writing the rule, then running it against real data
+                </Typography>
+              </Stack>
+              <Typography variant="body2" color="text.secondary">
+                The agent checks its own work by executing the rule, and repairs it
+                if it does not run. A reasoning model can take a minute or two for
+                this - it is thinking, not hanging.
+              </Typography>
+            </Stack>
+          ) : step === "review" && result ? (
+            <Stack spacing={2} sx={{ mt: 1 }}>
+              <Alert severity={trial?.outcome === "fail" ? "warning" : "success"}>
+                {trial?.outcome === "fail" ? (
+                  <>
+                    The rule ran and found{" "}
+                    <strong>{trial.rows.length}</strong> exception row
+                    {trial.rows.length === 1 ? "" : "s"} on{" "}
+                    {result.data_date}.
+                  </>
+                ) : (
+                  <>
+                    The rule ran and found nothing on {result.data_date}. That may be
+                    correct - but if the control should have caught something, the
+                    logic is too loose.
+                  </>
+                )}
+                {result.attempts.length > 1 && (
+                  <>
+                    {" "}It took <strong>{result.attempts.length}</strong> attempts
+                    to get there.
+                  </>
+                )}
               </Alert>
+
+              <Stack direction="row" spacing={2}>
+                <MuiTextField label="Rule name" value={name} onChange={(e) => setName(e.target.value)} fullWidth />
+                <MuiTextField label="Rule code" value={code} onChange={(e) => setCode(e.target.value)} fullWidth />
+                <MuiTextField select label="Severity" value={severity}
+                  onChange={(e) => setSeverity(e.target.value)} sx={{ minWidth: 140 }}>
+                  {SEVERITY_OPTIONS.map((s) => (
+                    <MenuItem key={s} value={s}>{s}</MenuItem>
+                  ))}
+                </MuiTextField>
+              </Stack>
+
               <Box>
                 <Typography variant="caption" sx={{ fontWeight: 700 }}>
                   DATASOURCES USED
@@ -144,29 +293,143 @@ export const GenerateRuleDialog = () => {
                   )}
                 </Stack>
               </Box>
-              <CodeBlock code={result.source_code} />
+
+              {trial?.summary && (
+                <Alert severity="info">{trial.summary}</Alert>
+              )}
+
+              <CodeBlock code={result.source_code ?? ""} />
+            </Stack>
+          ) : step === "failed" && result ? (
+            <Stack spacing={2} sx={{ mt: 1 }}>
+              <Alert severity="error">
+                <strong>No working rule was produced.</strong>{" "}
+                {result.error}
+              </Alert>
+              {result.attempts.length > 0 && (
+                <Box>
+                  <Typography variant="caption" sx={{ fontWeight: 700 }}>
+                    WHAT IT TRIED
+                  </Typography>
+                  <Stack spacing={0.5} sx={{ mt: 0.5 }}>
+                    {result.attempts.map((a) => (
+                      <Typography key={a.n} variant="body2" color="text.secondary">
+                        Attempt {a.n}:{" "}
+                        {a.ok ? "ran cleanly" : (a.error ?? "failed").split("\n")[0]}
+                      </Typography>
+                    ))}
+                  </Stack>
+                </Box>
+              )}
+              {result.source_code && (
+                <>
+                  <Typography variant="caption" sx={{ fontWeight: 700 }}>
+                    THE LAST ATTEMPT
+                  </Typography>
+                  <CodeBlock code={result.source_code} />
+                </>
+              )}
+              <Typography variant="body2" color="text.secondary">
+                Nothing was created. Try a narrower prompt, or add the datasource the
+                rule needs to the selection.
+              </Typography>
             </Stack>
           ) : (
             <Stack spacing={2} sx={{ mt: 1 }}>
               <Alert severity="info">
-                The draft will belong to{" "}
-                <strong>{current?.name ?? entity}</strong> â€” the client the app
-                bar is scoped to. Change it there to generate for the other one.
+                The rule will belong to{" "}
+                <strong>{current?.name ?? entity}</strong> - the client the app
+                bar is scoped to. Change it there to create for the other one.
               </Alert>
+
               <MuiTextField label="Describe the audit control" value={prompt}
                 onChange={(e) => setPrompt(e.target.value)} multiline minRows={4} fullWidth
                 placeholder="e.g. Flag POS transactions settled by an employee who exited the company in the last 30 days"
-                helperText="Plain language. The model only sees the datasources registered for the selected entity." />
+                helperText="Plain language. Say what should not happen, and what the finding should show." />
+
+              <Autocomplete multiple options={options} value={options.filter((o) => tables.includes(o.name))}
+                onChange={(_, next) => setTables(next.map((o) => o.name))}
+                getOptionLabel={(o) => o.name}
+                isOptionEqualToValue={(a, b) => a.name === b.name}
+                renderTags={(value, getTagProps) =>
+                  value.map((option, i) => (
+                    <Chip {...getTagProps({ index: i })} key={option.name} label={option.name}
+                      size="small" variant="outlined" sx={{ fontFamily: "monospace" }} />
+                  ))
+                }
+                renderOption={(props, option) => (
+                  <li {...props} key={option.name}>
+                    <Box>
+                      <Typography variant="body2" sx={{ fontFamily: "monospace", fontWeight: 600 }}>
+                        {option.name}
+                      </Typography>
+                      <Typography variant="caption" color="text.secondary" display="block">
+                        {option.grain || option.description}
+                        {Object.keys(option.columns ?? {}).length
+                          ? ` - ${Object.keys(option.columns).length} columns`
+                          : ""}
+                      </Typography>
+                    </Box>
+                  </li>
+                )}
+                renderInput={(params) => (
+                  <MuiTextField {...params} size="small"
+                    label="Datasources the rule may read"
+                    placeholder="Select the tables this rule reads" />
+                )}
+              />
+
+              <Stack direction="row" spacing={2} alignItems="flex-start">
+                <MuiTextField type="number" label="Lookback days" value={lookback}
+                  onChange={(e) => setLookback(Math.max(1, Number(e.target.value) || 1))}
+                  inputProps={{ min: 1, max: 365 }} sx={{ width: 160 }}
+                  helperText={
+                    lookback === 1
+                      ? "That day alone"
+                      : `T-${lookback - 1} to T, ${lookback} days staged per run`
+                  }
+                />
+                <MuiTextField select label="Test on" value={testDate}
+                  onChange={(e) => setTestDate(e.target.value)}
+                  sx={{ width: 190 }}
+                  helperText="The date the rule is run against">
+                  {(overview?.dates ?? []).map((d) => (
+                    <MenuItem key={d} value={d}>{d}</MenuItem>
+                  ))}
+                </MuiTextField>
+                <Box sx={{ pt: 0.5 }}>
+                  <Typography variant="caption" color="text.secondary" display="block">
+                    {overview
+                      ? `Tested against ${current?.name ?? entity} data for ${testDate}.`
+                      : "Loading the available datasources..."}
+                  </Typography>
+                  {absent.length > 0 && (
+                    <Alert severity="warning" sx={{ mt: 1 }}>
+                      {absent.join(", ")} has not been delivered for the test date.
+                      The rule cannot be tested until the ETL lands it.
+                    </Alert>
+                  )}
+                </Box>
+              </Stack>
+
               {error && <Alert severity="error">{error}</Alert>}
             </Stack>
           )}
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setOpen(false)}>Close</Button>
-          {!result && configured !== false && (
-            <Button onClick={generate} variant="contained" disabled={busy || prompt.trim().length < 5}
+          <Button onClick={() => setOpen(false)} disabled={busy}>
+            {step === "review" ? "Cancel" : "Close"}
+          </Button>
+          {step === "setup" && configured !== false && (
+            <Button onClick={generate} variant="contained"
+              disabled={busy || prompt.trim().length < 5 || tables.length === 0}
               startIcon={busy ? <CircularProgress size={16} color="inherit" /> : undefined}>
-              Generate draft
+              Write and test the rule
+            </Button>
+          )}
+          {step === "review" && (
+            <Button onClick={save} variant="contained" disabled={busy || !code.trim()}>
+              Save as draft
             </Button>
           )}
         </DialogActions>
@@ -246,7 +509,7 @@ const RuleToolbar = () => {
 
   return (
     <TopToolbar>
-      <MuiTextField size="small" placeholder="Search rule code or nameâ€¦" value={filters.q}
+      <MuiTextField size="small" placeholder="Search rule code or name…" value={filters.q}
         onChange={(e) => set({ q: e.target.value })} sx={{ minWidth: 220 }} />
       <FilterSelect label="status" options={STATUS_OPTIONS} value={filters.status} />
       <FilterSelect label="severity" options={SEVERITY_OPTIONS} value={filters.severity} />
@@ -419,7 +682,7 @@ export const RunRuleDialog = ({
 
             <Typography variant="body2">
               Run <strong>{rule.code}</strong> now, against{" "}
-              <strong>{day || "â€”"}</strong>?
+              <strong>{day || "—"}</strong>?
             </Typography>
 
             {error && <Alert severity="error">{error}</Alert>}
@@ -466,7 +729,7 @@ export const RunRuleDialog = ({
             disabled={busy || !day}
             startIcon={busy ? <CircularProgress size={16} color="inherit" /> : <PlayArrowIcon />}
           >
-            {busy ? "Runningâ€¦" : "Run now"}
+            {busy ? "Running…" : "Run now"}
           </Button>
         )}
       </DialogActions>
@@ -643,7 +906,7 @@ export const VersionSourceDialog = ({
           <Tooltip title="Copies this source forward into a new draft version. It does not rewind history.">
             <span>
               <Button onClick={restore} disabled={busy || !found} startIcon={<HistoryIcon />}>
-                {busy ? "Restoringâ€¦" : "Restore this version"}
+                {busy ? "Restoring…" : "Restore this version"}
               </Button>
             </span>
           </Tooltip>
@@ -701,7 +964,7 @@ const ScheduleDialog = ({
           }} />
           <MuiTextField select size="small" fullWidth label="Audit which day's data"
             value={dataLag} onChange={(e) => setDataLag(Number(e.target.value))}
-            helperText="Yesterday is the usual choice â€” a day's CSVs are rarely complete when the job fires.">
+            helperText="Yesterday is the usual choice — a day's CSVs are rarely complete when the job fires.">
             <MenuItem value={0}>Same day</MenuItem>
             <MenuItem value={1}>Yesterday</MenuItem>
             <MenuItem value={2}>2 days ago</MenuItem>
@@ -930,7 +1193,7 @@ const RuleDetails = () => {
               <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" gap={1}>
                 <Button size="small" startIcon={<FactCheckIcon />} onClick={runValidation}
                   disabled={validating}>
-                  {validating ? "Validatingâ€¦" : "Validate"}
+                  {validating ? "Validating…" : "Validate"}
                 </Button>
                 <Button
                   size="small"
@@ -966,11 +1229,11 @@ const RuleDetails = () => {
           <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 0.5 }}>
             {errors.length ? "Validation errors" : "Validation warnings"}
           </Typography>
-          {errors.map((e: string) => (
-            <Typography key={e} variant="body2">â€¢ {e}</Typography>
+          {errors.map((e: string, i: number) => (
+            <Typography key={`${i}-${e}`} variant="body2">• {e}</Typography>
           ))}
-          {warnings.map((w: string) => (
-            <Typography key={w} variant="body2">â€¢ {w}</Typography>
+          {warnings.map((w: string, i: number) => (
+            <Typography key={`${i}-${w}`} variant="body2">• {w}</Typography>
           ))}
         </Alert>
       )}
@@ -993,7 +1256,13 @@ const RuleDetails = () => {
             <Typography variant="h6" sx={{ mb: 1 }}>Version history</Typography>
             <Stack spacing={1}>
               {versions.map((v) => (
-                <Box key={v.id}
+                // The version, not the row id: RuleVersionOut carries no id,
+                // so `v.id` was undefined - which React reads as *no key at
+                // all*, and warns about once per version. The warning is
+                // harmless and the list still renders, which is why it went
+                // unnoticed: a console error that changes nothing is easy to
+                // mistake for noise from someone else's library.
+                <Box key={v.version}
                   sx={{ p: 1.25, borderRadius: 1.5, border: "1px solid #e9edf4",
                         bgcolor: v.version === record.version ? "#eef6ff" : "#fafbfe" }}>
                   <Stack direction="row" spacing={1} alignItems="center">
@@ -1096,7 +1365,7 @@ const RuleDatasources = ({ entity, names }: { entity: string; names: string[] })
                 {name}
               </Typography>
               <Typography variant="body2" color="text.secondary">
-                {registered === null ? "Â " : row?.system || "â€”"}
+                {registered === null ? "—" : row?.system || "—"}
               </Typography>
               <Typography variant="caption" color="text.secondary">
                 {registered === null
@@ -1123,7 +1392,7 @@ const RuleDatasources = ({ entity, names }: { entity: string; names: string[] })
             registered for {entity}
           </Typography>
           <Typography variant="body2" sx={{ mb: 1 }}>
-            <strong>{missing.join(", ")}</strong> â€” this rule fails on its next
+            <strong>{missing.join(", ")}</strong> — this rule fails on its next
             run, not eventually. Remove it from the rule or register the table
             again.
           </Typography>
@@ -1693,8 +1962,8 @@ const RuleEditForm = () => {
                 sx={{ minWidth: 200 }}
                 helperText={
                   form.lookback_days === 1
-                    ? "1 â€” the anchor day only"
-                    : `${form.lookback_days} â€” T-${form.lookback_days - 1} to T, ${form.lookback_days} days of data staged per run`
+                    ? "1 — the anchor day only"
+                    : `${form.lookback_days} — T-${form.lookback_days - 1} to T, ${form.lookback_days} days of data staged per run`
                 }
               />
             </Stack>
@@ -1784,7 +2053,7 @@ const RuleEditForm = () => {
           disabled={busy || !dirty || !form.name.trim()}
           startIcon={busy ? <CircularProgress size={16} color="inherit" /> : undefined}
         >
-          {busy ? "Publishingâ€¦" : `Publish v${nextVersion}`}
+          {busy ? "Publishing…" : `Publish v${nextVersion}`}
         </Button>
       </Stack>
     </Stack>

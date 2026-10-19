@@ -243,11 +243,11 @@ export const CodeBlock = ({ code }: { code: string }) => (
   </Box>
 );
 
-/** Tabular viewer for the exception rows attached to a ticket or run. */
+/** Tabular viewer for the Exception lines attached to a ticket or run. */
 /**
  * A grid of records, scrollable in both directions with the header pinned.
  *
- * Shared by a run's exception rows and a datasource preview, which want the same
+ * Shared by a run's Exception lines and a datasource preview, which want the same
  * thing from different data. The optional props exist because the defaults are
  * tuned for the first: a run's rows are the reason the user is on the page, so
  * they are capped and say so when empty, while a preview is for skimming and
@@ -255,7 +255,7 @@ export const CodeBlock = ({ code }: { code: string }) => (
  */
 export const RowsTable = ({
   rows,
-  emptyLabel = "No exception rows.",
+  emptyLabel = "No Exception lines.",
   maxColumns = 14,
   types,
   caption,
@@ -334,7 +334,7 @@ export const RowsTable = ({
                   }}
                 >
                   {row[c] === null || row[c] === undefined
-                    ? "—"
+                    ? "â€”"
                     : String(row[c])}
                 </Box>
               ))}

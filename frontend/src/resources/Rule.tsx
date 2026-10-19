@@ -94,7 +94,7 @@ export const GenerateRuleDialog = () => {
     try {
       const g = await api.generateRule(prompt, entity);
       setResult(g);
-      notify(`Draft rule ${g.rule.code} created — validate it before activating`, {
+      notify(`Draft rule ${g.rule.code} created â€” validate it before activating`, {
         type: "success",
       });
       refresh();
@@ -147,7 +147,7 @@ export const GenerateRuleDialog = () => {
             <Stack spacing={2} sx={{ mt: 1 }}>
               <Alert severity="info">
                 The draft will belong to{" "}
-                <strong>{current?.name ?? entity}</strong> — the client the app
+                <strong>{current?.name ?? entity}</strong> â€” the client the app
                 bar is scoped to. Change it there to generate for the other one.
               </Alert>
               <MuiTextField label="Describe the audit control" value={prompt}
@@ -243,7 +243,7 @@ const RuleToolbar = () => {
 
   return (
     <TopToolbar>
-      <MuiTextField size="small" placeholder="Search rule code or name…" value={filters.q}
+      <MuiTextField size="small" placeholder="Search rule code or nameâ€¦" value={filters.q}
         onChange={(e) => set({ q: e.target.value })} sx={{ minWidth: 220 }} />
       <FilterSelect label="status" options={STATUS_OPTIONS} value={filters.status} />
       <FilterSelect label="severity" options={SEVERITY_OPTIONS} value={filters.severity} />
@@ -410,13 +410,13 @@ export const RunRuleDialog = ({
 
             <Alert severity="warning">
               This executes the rule against real staged data and is recorded as
-              a run. <strong>If it finds a breach, a ticket is raised.</strong> It
+              a run. <strong>If it raises an observation, a ticket is opened.</strong> It
               is not a dry run.
             </Alert>
 
             <Typography variant="body2">
               Run <strong>{rule.code}</strong> now, against{" "}
-              <strong>{day || "—"}</strong>?
+              <strong>{day || "â€”"}</strong>?
             </Typography>
 
             {error && <Alert severity="error">{error}</Alert>}
@@ -443,7 +443,7 @@ export const RunRuleDialog = ({
 
             <Box>
               <Typography variant="caption" sx={{ fontWeight: 700 }}>
-                EXCEPTION ROWS ({out.rows?.length ?? 0}) · {out.duration_ms} ms
+                Exception lines ({out.rows?.length ?? 0}) Â· {out.duration_ms} ms
               </Typography>
               <Box sx={{ mt: 0.5 }}><RowsTable rows={out.rows ?? []} /></Box>
             </Box>
@@ -463,7 +463,7 @@ export const RunRuleDialog = ({
             disabled={busy || !day}
             startIcon={busy ? <CircularProgress size={16} color="inherit" /> : <PlayArrowIcon />}
           >
-            {busy ? "Running…" : "Run now"}
+            {busy ? "Runningâ€¦" : "Run now"}
           </Button>
         )}
       </DialogActions>
@@ -617,10 +617,10 @@ export const VersionSourceDialog = ({
   return (
     <Dialog open onClose={onClose} maxWidth="lg" fullWidth>
       <DialogTitle sx={{ pb: 1 }}>
-        {code} · version {version}
+        {code} Â· version {version}
         {found && (
           <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
-            {found.change_note || "(no note)"} · {found.created_by} ·{" "}
+            {found.change_note || "(no note)"} Â· {found.created_by} Â·{" "}
             {new Date(found.created_at).toLocaleString()}
           </Typography>
         )}
@@ -640,7 +640,7 @@ export const VersionSourceDialog = ({
           <Tooltip title="Copies this source forward into a new draft version. It does not rewind history.">
             <span>
               <Button onClick={restore} disabled={busy || !found} startIcon={<HistoryIcon />}>
-                {busy ? "Restoring…" : "Restore this version"}
+                {busy ? "Restoringâ€¦" : "Restore this version"}
               </Button>
             </span>
           </Tooltip>
@@ -698,7 +698,7 @@ const ScheduleDialog = ({
           }} />
           <MuiTextField select size="small" fullWidth label="Audit which day's data"
             value={dataLag} onChange={(e) => setDataLag(Number(e.target.value))}
-            helperText="Yesterday is the usual choice — a day's CSVs are rarely complete when the job fires.">
+            helperText="Yesterday is the usual choice â€” a day's CSVs are rarely complete when the job fires.">
             <MenuItem value={0}>Same day</MenuItem>
             <MenuItem value={1}>Yesterday</MenuItem>
             <MenuItem value={2}>2 days ago</MenuItem>
@@ -779,8 +779,8 @@ const SchedulesSection = ({ ruleCode, isAdmin }: { ruleCode: string; isAdmin: bo
                   <Typography variant="caption" color="text.secondary">
                     next {s.next_run_relative ?? "unknown"}
                     {s.upcoming_runs?.[1] &&
-                      ` · then ${new Date(s.upcoming_runs[1]).toLocaleString()}`}
-                    {s.last_run_at && ` · last ran ${new Date(s.last_run_at).toLocaleString()}`}
+                      ` Â· then ${new Date(s.upcoming_runs[1]).toLocaleString()}`}
+                    {s.last_run_at && ` Â· last ran ${new Date(s.last_run_at).toLocaleString()}`}
                   </Typography>
                   <Typography variant="caption" sx={{ display: "block", color: "#8d99ae", fontFamily: "monospace" }}>
                     cron: {s.cron}
@@ -831,7 +831,7 @@ const RuleDetails = () => {
 
   // react-admin does not export a title hook, so set the document title directly.
   useEffect(() => {
-    if (record?.code) document.title = `${record.code} · ABM Audit Portal`;
+    if (record?.code) document.title = `${record.code} Â· ABM Audit Portal`;
   }, [record?.code]);
 
   const load = () => {
@@ -927,7 +927,7 @@ const RuleDetails = () => {
               <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" gap={1}>
                 <Button size="small" startIcon={<FactCheckIcon />} onClick={runValidation}
                   disabled={validating}>
-                  {validating ? "Validating…" : "Validate"}
+                  {validating ? "Validatingâ€¦" : "Validate"}
                 </Button>
                 <Button
                   size="small"
@@ -964,10 +964,10 @@ const RuleDetails = () => {
             {errors.length ? "Validation errors" : "Validation warnings"}
           </Typography>
           {errors.map((e: string) => (
-            <Typography key={e} variant="body2">• {e}</Typography>
+            <Typography key={e} variant="body2">â€¢ {e}</Typography>
           ))}
           {warnings.map((w: string) => (
-            <Typography key={w} variant="body2">• {w}</Typography>
+            <Typography key={w} variant="body2">â€¢ {w}</Typography>
           ))}
         </Alert>
       )}
@@ -999,7 +999,7 @@ const RuleDetails = () => {
                     <Typography variant="body2">{v.change_note || "(no note)"}</Typography>
                   </Stack>
                   <Typography variant="caption" color="text.secondary">
-                    {v.created_by} · {new Date(v.created_at).toLocaleString()}
+                    {v.created_by} Â· {new Date(v.created_at).toLocaleString()}
                   </Typography>
                 </Box>
               ))}
@@ -1093,7 +1093,7 @@ const RuleDatasources = ({ entity, names }: { entity: string; names: string[] })
                 {name}
               </Typography>
               <Typography variant="body2" color="text.secondary">
-                {registered === null ? " " : row?.system || "—"}
+                {registered === null ? "Â " : row?.system || "â€”"}
               </Typography>
               <Typography variant="caption" color="text.secondary">
                 {registered === null
@@ -1120,7 +1120,7 @@ const RuleDatasources = ({ entity, names }: { entity: string; names: string[] })
             registered for {entity}
           </Typography>
           <Typography variant="body2" sx={{ mb: 1 }}>
-            <strong>{missing.join(", ")}</strong> — this rule fails on its next
+            <strong>{missing.join(", ")}</strong> â€” this rule fails on its next
             run, not eventually. Remove it from the rule or register the table
             again.
           </Typography>
@@ -1184,7 +1184,7 @@ const RuleActivity = ({ ruleCode }: { ruleCode: string }) => {
                     prevent. */}
                 <RunStatusCell source="status" label="Ran" />
                 <RunOutcomeCell source="outcome" label="Outcome" />
-                <TextField source="summary" label="Finding" />
+                <TextField source="summary" label="Observation" />
                 <RowCountField source="rows" />
                 <TextField source="triggered_by" label="By" />
               </Datagrid>
@@ -1445,7 +1445,7 @@ const RuleTable = () => {
                           </Typography>
                           {totalVersions > 1 && (
                             <Typography variant="caption" color="text.secondary">
-                              · {totalVersions} versions
+                              Â· {totalVersions} versions
                             </Typography>
                           )}
                         </Stack>
@@ -1515,7 +1515,7 @@ const RuleTable = () => {
                               {v.change_note || "(no note)"}
                             </Typography>
                             <Typography variant="caption" color="text.secondary" noWrap>
-                              · {v.created_by} · {new Date(v.created_at).toLocaleDateString()}
+                              Â· {v.created_by} Â· {new Date(v.created_at).toLocaleDateString()}
                             </Typography>
                           </Stack>
                         </TableCell>
@@ -1690,8 +1690,8 @@ const RuleEditForm = () => {
                 sx={{ minWidth: 200 }}
                 helperText={
                   form.lookback_days === 1
-                    ? "1 — the anchor day only"
-                    : `${form.lookback_days} — T-${form.lookback_days - 1} to T, ${form.lookback_days} days of data staged per run`
+                    ? "1 â€” the anchor day only"
+                    : `${form.lookback_days} â€” T-${form.lookback_days - 1} to T, ${form.lookback_days} days of data staged per run`
                 }
               />
             </Stack>
@@ -1781,7 +1781,7 @@ const RuleEditForm = () => {
           disabled={busy || !dirty || !form.name.trim()}
           startIcon={busy ? <CircularProgress size={16} color="inherit" /> : undefined}
         >
-          {busy ? "Publishing…" : `Publish v${nextVersion}`}
+          {busy ? "Publishingâ€¦" : `Publish v${nextVersion}`}
         </Button>
       </Stack>
     </Stack>

@@ -259,8 +259,8 @@ export const RunList = () => {
         <TextLike source="rule_code" label="Rule" mono />
         <TextLike source="data_date" label="Data date" secondary />
         <RunStatusCell source="status" label="Ran" />
-        <RunOutcomeCell source="outcome" label="Outcome" />
-        <RunSummary source="summary" label="Finding" />
+        <RunOutcomeCell source="outcome" label="Observations" />
+        <RunSummary source="summary" label="What it found" />
         <TextLike source="duration_ms" label="Took" render={duration} secondary />
         <TextLike source="triggered_by" label="By" render={(v: string) => TRIGGER_LABEL[v] ?? v} secondary />
         <TextLike source="started_at" label="Started" render={stamp} secondary />
@@ -306,22 +306,22 @@ const RunDetails = () => {
             </Box>
             <Box>
               <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5 }}>
-                Control outcome
+                Rule outcome
               </Typography>
               <Typography variant="body1" sx={{ fontWeight: 600, textTransform: "capitalize" }}>
                 {record.outcome ?? "none"}
               </Typography>
               <Typography variant="caption" color="text.secondary" display="block">
                 {!record.outcome
-                  ? "the control never got an answer"
+                  ? "the rule never got an answer"
                   : record.outcome === "fail"
-                    ? "breach found - a ticket was raised"
-                    : "no breach found"}
+                    ? "an observation was raised - a ticket was opened"
+                    : "no observations"}
               </Typography>
             </Box>
             <Box>
               <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5 }}>
-                Exception rows
+                Exception lines
               </Typography>
               <Typography variant="body1" sx={{ fontWeight: 600 }}>
                 {record.rows?.length ?? 0}
@@ -352,8 +352,8 @@ const RunDetails = () => {
             {new Date(record.started_at).toLocaleString()}
           </Typography>
 
-          {/* Only a run that failed to execute has a fault to report. A breach
-              is the product working and is not shown as an error. */}
+          {/* Only a run that failed to execute has a fault to report. A raised
+              observation is the product working and is not shown as an error. */}
           {record.status === "failed" && (
             <Alert severity="error" sx={{ mt: 2 }}>
               <Typography variant="body2" sx={{ fontWeight: 700, mb: 0.5 }}>
@@ -363,7 +363,7 @@ const RunDetails = () => {
                 {record.error_detail || "no detail recorded"}
               </Box>
               <Typography variant="caption" display="block" sx={{ mt: 1 }}>
-                No ticket was raised: a rule that never ran has no finding to report.
+                No ticket was opened: a rule that never ran has no observation to report.
                 This day is unchecked, not clean.
               </Typography>
             </Alert>
@@ -381,7 +381,7 @@ const RunDetails = () => {
       <Card sx={{ mt: 2 }}>
         <CardContent>
           <Typography variant="h6" sx={{ mb: 1.5 }}>
-            Exception rows ({record.rows?.length ?? 0})
+            Exception lines ({record.rows?.length ?? 0})
           </Typography>
           <RowsTable rows={record.rows ?? []} />
         </CardContent>

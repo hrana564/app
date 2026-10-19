@@ -129,7 +129,7 @@ const AcknowledgeButton = ({ record: explicit }: { record?: any }) => {
             />
             <Alert severity="info">
               Acknowledging marks this ticket reviewed. It does not close the underlying
-              control - the next scheduled run will still raise a ticket if the breach persists.
+              control - the next scheduled run will still raise a ticket if the observation recurs.
             </Alert>
           </Stack>
         </DialogContent>
@@ -444,9 +444,9 @@ const GroupedInbox = ({
                     <TableCell>
                       <Typography variant="body2" sx={{ lineHeight: 1.45 }}>{t.summary}</Typography>
                       <Typography variant="caption" color="text.secondary">
-                        {t.rows?.length ?? 0} row{(t.rows?.length ?? 0) === 1 ? "" : "s"} ·{" "}
+                        {t.rows?.length ?? 0} row{(t.rows?.length ?? 0) === 1 ? "" : "s"} Â·{" "}
                         {new Date(t.created_at).toLocaleString()}
-                        {t.acknowledged_by ? ` · reviewed by ${t.acknowledged_by}` : ""}
+                        {t.acknowledged_by ? ` Â· reviewed by ${t.acknowledged_by}` : ""}
                       </Typography>
                     </TableCell>
                     <TableCell align="right" onClick={(e) => e.stopPropagation()}>
@@ -466,7 +466,7 @@ const GroupedInbox = ({
         <TableFooterRow>
           <Typography variant="body2" color="text.secondary" sx={{ flex: 1 }}>
             <strong>{groups.length}</strong> of <strong>{totalGroups}</strong>{" "}
-            {totalGroups === 1 ? "group" : "groups"} ·{" "}
+            {totalGroups === 1 ? "group" : "groups"} Â·{" "}
             <strong>{totalTickets}</strong> ticket{totalTickets === 1 ? "" : "s"} in total
           </Typography>
           <Button size="small" onClick={onToggleAll}>
@@ -488,7 +488,7 @@ const FlatInbox = ({ tickets, total }: { tickets: any[]; total: number }) => {
           <TableCell sx={{ ...headCellSx, width: 180 }}>Ticket</TableCell>
           <TableCell sx={{ ...headCellSx, width: 120 }}>Severity</TableCell>
           <TableCell sx={{ ...headCellSx, width: 140 }}>Status</TableCell>
-          <TableCell sx={headCellSx}>Finding</TableCell>
+          <TableCell sx={headCellSx}>Observation</TableCell>
           <TableCell sx={{ ...headCellSx, width: 80 }}>Rows</TableCell>
           <TableCell sx={{ ...headCellSx, width: 170 }}>Raised</TableCell>
           <TableCell align="right" sx={{ ...headCellSx, width: 200 }}>Actions</TableCell>
@@ -522,7 +522,7 @@ const FlatInbox = ({ tickets, total }: { tickets: any[]; total: number }) => {
               <Stack direction="row" spacing={0.5} justifyContent="flex-end" alignItems="center">
                 {t.acknowledged_by && (
                   <Tooltip
-                    title={`${t.acknowledged_by} · ${new Date(t.acknowledged_at).toLocaleString()}${t.ack_note ? ` · ${t.ack_note}` : ""}`}
+                    title={`${t.acknowledged_by} Â· ${new Date(t.acknowledged_at).toLocaleString()}${t.ack_note ? ` Â· ${t.ack_note}` : ""}`}
                   >
                     <Chip size="small" label={t.acknowledged_by} sx={{ fontSize: FONT.label }} />
                   </Tooltip>
@@ -680,7 +680,7 @@ export const TicketList = () => {
     <>
       <Card>
         <Toolbar sx={{ gap: 1, flexWrap: "wrap", py: 1.5 }}>
-          <MuiTextField size="small" placeholder="Search ticket no, summary…"
+          <MuiTextField size="small" placeholder="Search ticket no, summaryâ€¦"
             value={search} onChange={(e) => setSearch(e.target.value)} sx={{ minWidth: 240 }} />
           <Picker label="status" options={STATUS_OPTIONS} value={filters.status}
             onPick={(v) => { setFilters((f) => ({ ...f, status: v })); setPage(0); }} />
@@ -737,7 +737,7 @@ export const TicketList = () => {
         <Box sx={{ px: 2, py: 1, bgcolor: "#fafbfe" }}>
           <Typography variant="body2" color="text.secondary">
             <strong>{rowCount}</strong> {groupBy ? (totalCount === 1 ? "group" : "groups") : "tickets"}{" "}
-            on this page · <strong>{openOnPage}</strong> open in view ·{" "}
+            on this page Â· <strong>{openOnPage}</strong> open in view Â·{" "}
             <strong>{ticketTotal}</strong> ticket{ticketTotal === 1 ? "" : "s"} match
             {groupBy ? ", counted before paging so no rule is split across pages" : ""}
           </Typography>
@@ -776,8 +776,8 @@ export const TicketList = () => {
           labelRowsPerPage={groupBy ? "Groups per page" : "Rows per page"}
           labelDisplayedRows={({ from, to, count }) =>
             groupBy
-              ? `${from}–${to} of ${count} ${count === 1 ? "group" : "groups"}`
-              : `${from}–${to} of ${count} tickets`
+              ? `${from}â€“${to} of ${count} ${count === 1 ? "group" : "groups"}`
+              : `${from}â€“${to} of ${count} tickets`
           }
         />
       </Card>
@@ -805,7 +805,7 @@ const TicketDetails = () => {
   const navigate = useNavigate();
 
   useEffect(() => {
-    if (record?.ticket_no) document.title = `${record.ticket_no} · ABM Audit Portal`;
+    if (record?.ticket_no) document.title = `${record.ticket_no} Â· ABM Audit Portal`;
   }, [record?.ticket_no]);
 
   if (!record) return null;
@@ -867,7 +867,7 @@ const TicketDetails = () => {
                 </Box>
               }
             />
-            <Fact label="Exception rows" value={record.rows?.length ?? 0} />
+            <Fact label="Exception lines" value={record.rows?.length ?? 0} />
             <Fact label="Raised" value={new Date(record.created_at).toLocaleString()} />
             <Fact
               label="Trigger"
@@ -900,7 +900,7 @@ const TicketDetails = () => {
             <Alert severity="warning">
               Not yet reviewed. Acknowledging records your username and the time
               against this ticket. It does not close the underlying control - the
-              next scheduled run will raise again if the breach persists.
+              next scheduled run will raise again if the observation recurs.
             </Alert>
           )}
         </CardContent>
@@ -909,7 +909,7 @@ const TicketDetails = () => {
       <Card>
         <CardContent>
           <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 1.5 }}>
-            <Typography variant="h6">Exception rows</Typography>
+            <Typography variant="h6">Exception lines</Typography>
             <Typography variant="body2" color="text.secondary">
               {record.rows?.length ?? 0} row{(record.rows?.length ?? 0) === 1 ? "" : "s"}
             </Typography>

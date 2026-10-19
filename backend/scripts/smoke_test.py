@@ -314,7 +314,7 @@ def main() -> int:
         # repository never accumulates version files from test runs.
         section("versioning")
         VCODE = "SMOKE-VERSION-PROBE"
-        vsrc = "def run(ctx):\n    return {'status': 'no_rows_returned'}\n"
+        vsrc = "DATASOURCES = ['ipos_sales']\n\n\ndef run(ctx):\n    return {'status': 'no_rows_returned'}\n"
         created = c.post("/api/rules", headers=ah, json={
             "code": VCODE, "name": "versioning probe", "source_code": vsrc,
             "status": "draft"})
@@ -325,6 +325,16 @@ def main() -> int:
             c.delete(f"/api/rules/{VCODE}", headers=ah)
 
         if created.status_code == 201:
+            # Recorded from the source at creation, not only once someone
+            # remembers to validate. Before this, a brand new rule reported no
+            # datasources at all until Validate was pressed, so the rule page
+            # said "reads no data sources" about a rule whose file declared one.
+            check("a new rule records its datasources before validation",
+                  created.json()["declared_datasources"] == ["ipos_sales"],
+                  str(created.json()["declared_datasources"]))
+            check("and it is unvalidated at that point",
+                  created.json()["validation_status"] == "unvalidated")
+
             v0 = created.json()["version"]
             src0 = c.get(f"/api/rules/{VCODE}/source", headers=ud).json()
             check("source filename encodes code and version",
@@ -332,13 +342,19 @@ def main() -> int:
             check("probe file written to disk",
                   (RULES_DIR / f"{VCODE}_v{v0}.py").exists())
 
-            # An edit publishes the next version and moves the head flag.
+            # An edit publishes the next version and moves the head flag. The new
+            # version records the NEW source. Copying the previous version's list
+            # left the recorded truth describing a file nobody was running.
             u = c.put(f"/api/rules/{VCODE}", headers=ah, json={
-                "source_code": vsrc + "\n# smoke-edit\n",
+                "source_code": "DATASOURCES = ['ipos_sales', 'hr_employees']\n\n\n"
+                               "def run(ctx):\n    return {'status': 'no_rows_returned'}\n",
                 "change_note": "smoke: bump"})
             check("edit publishes the next version",
                   u.status_code == 200 and u.json()["version"] == v0 + 1,
                   f"{u.status_code} {u.text[:140]}")
+            check("new version records the NEW source's datasources",
+                  u.json()["declared_datasources"] == ["hr_employees", "ipos_sales"],
+                  str(u.json()["declared_datasources"]))
             check("new version is the head", u.json()["is_version_active"])
             check("new version starts as draft", u.json()["status"] == "draft",
                   u.json()["status"])

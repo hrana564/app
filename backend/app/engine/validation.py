@@ -14,10 +14,20 @@ Checks:
   5. every ctx.table() in the SQL is registered, whether declared or not
   6. a declared ENTITY matches the one the rule is registered under
 
-Check 4 reads the live catalogue, so retiring a datasource stops a NEW rule
+Check 4 reads the live catalogue, so removing a datasource stops a NEW rule
 referencing it. That is the enforcement point for the admin's decision - a rule
 that has already been validated against a table keeps running, because silently
 breaking a live control is worse than leaving it visible.
+
+WHAT A RULE READS
+-----------------
+`declared_tables()` below is the single answer to "which tables does this source
+touch", and every caller goes through it. It is pure text: no file, no database,
+no catalogue. That matters because the answer is needed in two places with
+different access - validating a rule reads the catalogue, while writing one only
+has the text it was just handed. Deriving it twice would let the two drift, and
+that drift is invisible: the rule would run correctly while the catalogue and
+the rule's own page disagreed about what it reads.
 """
 
 from __future__ import annotations
@@ -31,7 +41,7 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.engine.catalog import database_catalog
-from app.engine.loader import load_rule
+from app.engine.loader import load_rule, read_source
 
 # Imports a rule may legitimately use.
 #
@@ -56,6 +66,77 @@ _CTX_TABLE_REF = re.compile(
 )
 
 BANNED_CALLS = {"open", "eval", "exec", "compile", "__import__", "input"}
+
+
+# ---------------------------------------------------------------------------
+# What a rule reads - pure, shared by validation and by every write path
+# ---------------------------------------------------------------------------
+def _declared_constant(tree: ast.Module) -> list[str]:
+    """The module-level `DATASOURCES = [...]` literal, or [] if there isn't one.
+
+    Parsed rather than executed. A rule that built the list at import time would
+    need the module to run to be understood, and the write path has only text.
+    Rules are plain files holding a literal constant; anything else is treated
+    as "declares nothing", which validation then flags.
+    """
+    for node in tree.body:
+        if not isinstance(node, ast.Assign):
+            continue
+        if not any(isinstance(t, ast.Name) and t.id == "DATASOURCES" for t in node.targets):
+            continue
+        try:
+            return _as_list(ast.literal_eval(node.value))
+        except (ValueError, TypeError, SyntaxError):
+            return []
+    return []
+
+
+def declared_names(source: str) -> list[str]:
+    """Only the module-level `DATASOURCES` literal - not what the code reads.
+
+    Kept separate from `declared_tables` because the difference is the whole
+    point of the warning in check 4: a rule that reads a table it never
+    declared is covered by validation but should still say so.
+    """
+    try:
+        return _declared_constant(ast.parse(source))
+    except SyntaxError:
+        return []
+
+
+def referenced_tables(source: str, tree: ast.Module | None = None) -> list[str]:
+    """Every table this source reads with ctx.table("x") or ctx.count_rows("x").
+
+    Both the plain call and the one written inside an SQL string, which no AST
+    pass can see. Union both, because a rule that skips the declaration and
+    names the table only in its SQL still reads it.
+    """
+    if tree is None:
+        try:
+            tree = ast.parse(source)
+        except SyntaxError:
+            return sorted(set(_CTX_TABLE_REF.findall(source)))
+
+    found: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            name = getattr(node.func, "id", None) or getattr(node.func, "attr", None)
+            if name in ("table", "count_rows") and node.args:
+                first = node.args[0]
+                if isinstance(first, ast.Constant) and isinstance(first.value, str):
+                    found.append(first.value)
+    found.extend(_CTX_TABLE_REF.findall(source))
+    return sorted(set(found))
+
+
+def declared_tables(source: str) -> list[str]:
+    """Every table this source declares or reads, sorted and deduplicated.
+
+    The union, because a rule can name a table in `DATASOURCES` and never touch
+    it, or read one it never declared. Recording only half of that is how the
+    catalogue ends up disagreeing with the code that reads it.
+    """
+    return sorted(set(declared_names(source)) | set(referenced_tables(source)))
 
 
 @dataclass
@@ -98,39 +179,44 @@ class RuleValidator:
             "description": getattr(module, "DESCRIPTION", None),
             "entity": getattr(module, "ENTITY", None),
         }
-        result.declared_datasources = _as_list(getattr(module, "DATASOURCES", None))
+        # One derivation, shared with the write path, so what is validated
+        # and what is recorded can never disagree.
+        try:
+            text = read_source(self.source_file, self.rules_dir)
+        except FileNotFoundError:
+            text = ""
+        result.declared_datasources = declared_tables(text)
 
         # --- 3: static scan of the source ----------------------------------
-        scan_errors, referenced_tables = self._scan_source()
+        scan_errors, read_by_rule = self._scan_source()
         result.errors.extend(scan_errors)
 
         # --- 4: datasources must exist for this entity --------------------
-        # The catalogue, not a constant: an admin who retires a table must be
-        # able to stop a NEW rule referencing it. A rule that already reads a
-        # retired table keeps running - that is the admin's decision to make,
-        # and retirement deliberately does not break what already works.
+        # The catalogue, not a constant. A table removed from the catalogue is
+        # refused here, so a new rule cannot bind to a name that resolves to
+        # nothing - and ctx.table() would refuse it at run time anyway.
         catalog = await database_catalog(session)
         known = set(catalog.names_for(self.entity))
 
-        # Check BOTH the declared DATASOURCES list and every ctx.table("x")
-        # found in the SQL. Checking only the declaration lets a rule smuggle
-        # in a cross-entity table reference that only fails at run time.
-        used = sorted(set(result.declared_datasources) | set(referenced_tables))
-        if referenced_tables and not result.declared_datasources:
+        # `declared_datasources` is already the union of the declaration and
+        # every ctx.table() in the SQL, so this one list is the whole surface.
+        # Checking only DATASOURCES would let a rule smuggle in a cross-entity
+        # reference that otherwise fails only at run time.
+        if read_by_rule and not declared_names(text):
             result.warnings.append(
                 "rule uses ctx.table("
-                + ", ".join(f'"{t}"' for t in referenced_tables)
-                + ") but declares no DATASOURCES - add it so validation can cover it"
+                + ", ".join(f'"{t}"' for t in read_by_rule)
+                + ") but declares no DATASOURCES - add it so the declaration "
+                "matches what the code reads"
             )
 
-        for name in used:
+        for name in result.declared_datasources:
             if name not in known:
                 result.errors.append(
                     f"references datasource '{name}', which is not registered for "
                     f"{self.entity}. Available: {', '.join(sorted(known))}"
                 )
                 result.status = "invalid"
-        result.declared_datasources = used
 
         # --- 5: declared ENTITY must match the database --------------------
         declared_entity = result.metadata.get("entity")
@@ -145,9 +231,12 @@ class RuleValidator:
         return result
 
     def _scan_source(self) -> tuple[list[str], list[str]]:
-        """AST scan for banned imports/calls, and collect ctx.table("x") refs."""
-        from app.engine.loader import read_source
+        """AST scan for banned imports/calls, and collect ctx.table("x") refs.
 
+        Returns only what the scan is uniquely for - the problems. The table
+        names come from `referenced_tables()` so there is one implementation of
+        the tables it reads come from the shared helper.
+        """
         try:
             source = read_source(self.source_file, self.rules_dir)
         except FileNotFoundError:
@@ -159,7 +248,6 @@ class RuleValidator:
             return [f"syntax error on line {exc.lineno}: {exc.msg}"], []
 
         problems: list[str] = []
-        referenced_tables: list[str] = []
 
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
@@ -188,17 +276,8 @@ class RuleValidator:
                     problems.append(
                         f"line {node.lineno}: call to {name}() is not allowed in a rule"
                     )
-                # ctx.table("x") used from Python
-                if name in ("table", "count_rows") and node.args:
-                    first = node.args[0]
-                    if isinstance(first, ast.Constant) and isinstance(first.value, str):
-                        referenced_tables.append(first.value)
 
-        # ...and the common case: ctx.table("x") written inside an SQL string,
-        # which no AST pass can see. Union both sources.
-        referenced_tables.extend(_CTX_TABLE_REF.findall(source))
-
-        return problems, sorted(set(referenced_tables))
+        return problems, referenced_tables(source, tree)
 
 
 def _as_list(value: Any) -> list[str]:

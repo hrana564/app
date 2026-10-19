@@ -35,7 +35,7 @@ from app.engine.rule_generator import (
 )
 from app.engine.rules import CodeError, validate_code, versioned_filename
 from app.engine.runner import execute_rule
-from app.engine.validation import RuleValidator, now
+from app.engine.validation import RuleValidator, declared_tables, now
 from app.models import Rule, RuleSchedule, Run, Ticket
 from app.schemas import (
     RuleCreate,
@@ -123,7 +123,11 @@ async def publish_version(
         validation_messages=[],
         validated_at=None,
         validated_by=None,
-        declared_datasources=list(source.declared_datasources or []),
+        # From the NEW source, not the old rule. Copying the previous version's
+        # list left the recorded truth describing the previous file until
+        # somebody pressed Validate - which meant the rule's own page and the
+        # catalogue's "used by" both answered for a version nobody was running.
+        declared_datasources=declared_tables(new_source),
     )
     for field in CARRIED_FIELDS:
         setattr(nxt, field, getattr(source, field))
@@ -349,6 +353,10 @@ async def create_rule(
         change_note="initial version",
         created_by=admin.username,
         origin="manual",
+        # Read from the source just written, so the rule's page and the
+        # catalogue's "used by" are right from the moment it exists rather
+        # than after someone remembers to validate it.
+        declared_datasources=declared_tables(payload.source_code),
     )
     session.add(rule)
     try:

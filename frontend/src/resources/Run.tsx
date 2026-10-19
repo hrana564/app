@@ -89,7 +89,7 @@ const RerunButton = ({ label }: { label?: string }) => {
  * something; it is not a broken system. Only `failed` is a broken system, and
  * it now sits in the column that actually answers that question.
  */
-const RunStatusCell = ({ source }: { source: string; label?: string }) => {
+export const RunStatusCell = ({ source }: { source: string; label?: string }) => {
   const record = useRecordContext<any>();
   const theme = useTheme();
   const status = record?.[source];
@@ -108,7 +108,7 @@ const RunStatusCell = ({ source }: { source: string; label?: string }) => {
   );
 };
 
-const RunOutcomeCell = ({ source }: { source: string; label?: string }) => {
+export const RunOutcomeCell = ({ source }: { source: string; label?: string }) => {
   const record = useRecordContext<any>();
   const theme = useTheme();
   const outcome = record?.[source];

@@ -138,7 +138,7 @@ rules_master   ONE ROW PER VERSION OF A RULE
                id, code, version, is_version_active, status, source_file,
                name, entity, description, severity, lookback_days,
                validation_status, validation_messages, validated_at, validated_by,
-               declared_datasources,
+               declared_datasources,   -- derived from the source, at write time
                change_note, created_by, origin, created_at, updated_at
 
                UNIQUE (code, version)

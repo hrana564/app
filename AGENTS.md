@@ -113,6 +113,32 @@ inline the derivation at a second call site. The replay tool's own docstring say
 why: *"if the two derived them differently, a replay would report a difference
 that is not one."*
 
+### "What does this rule read" also lives in exactly one place
+
+`app/engine/validation.py`:
+
+```python
+declared_names(source)     -> the DATASOURCES literal only
+referenced_tables(source)  -> every ctx.table("x") / ctx.count_rows("x")
+declared_tables(source)    -> the union of both, sorted
+```
+
+All three are **pure text**: no file, no database, no catalogue. That is what
+lets the same answer come out of two callers with different access — validating a
+rule holds the catalogue, while creating or editing one holds only the source
+text it was just handed.
+
+`create_rule` and `new_version` both call `declared_tables` on the source they
+have just written. They used not to, and `new_version` copied the *previous*
+version's list instead. That was wrong twice over: a brand new rule reported no
+datasources until somebody pressed Validate, and an edited rule reported the
+datasources of a file nobody was running. The rule page then said *"reads no data
+sources"* about a rule whose file declared two, and the Data Sources screen's
+"used by" answered for the wrong version.
+
+Derive this twice and the two drift invisibly: the rule still runs correctly
+while the catalogue and the rule's own page disagree about what it reads.
+
 ---
 
 ## 3. Invariants — break these and something will be quietly wrong
@@ -124,6 +150,7 @@ that is not one."*
 | `frequency.py` is the only module that knows cron | `backend/app/engine/` | Users never see a cron expression. Friendly cadence in, derived cron out. |
 | `snapshot.py` does no ORM and no DB work | `backend/app/engine/` | A run's inputs are frozen before the rule sees them. That is what makes `replay` work with no database and no network. |
 | The runner and replay share the mapping | see §2 | Otherwise replay reports differences that aren't real. |
+| One `declared_tables` for every caller | `app/engine/validation.py` | Validating a rule and writing one must answer "what does it read" identically, or the rule page and the catalogue disagree about it. See §2. |
 | Rules may only `import` from the allow-list | `app/engine/validation.py` | Enforced by AST scan, not convention. |
 | The catalogue lives in the `datasources` table, not in `app/` | see §3a | A module under `app/` that also answered "what tables exist" would be a second source of truth, and the two would drift the first time an admin registered something. |
 | Consumers take a `Catalog`, never a storage mechanism | `app/engine/catalog.py` | Keeps the ETL, the catalogue, the rules and the runner decoupled. See §3a. |

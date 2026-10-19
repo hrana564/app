@@ -24,9 +24,10 @@ import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import ArrowUpwardIcon from "@mui/icons-material/ArrowUpward";
 import ArrowDownwardIcon from "@mui/icons-material/ArrowDownward";
 import ScheduleIcon from "@mui/icons-material/Schedule";
-import { api, getStoredUser } from "../dataProvider";
+import { api, getStoredUser, type DatasourceOverview, type DatasourceRow } from "../dataProvider";
 import { CadenceEditor, type CadenceConfig } from "../components/CadenceEditor";
 import { DatasourcePicker } from "../components/DatasourcePicker";
+import { RunOutcomeCell, RunStatusCell } from "./Run";
 import {
   ActionIcon, CodeBlock, DotLabel, EntityField, IdField, JsonBlock, RowsTable,
   RuleStateCell, SeverityField, StatusField, RowCountField,
@@ -908,12 +909,10 @@ const RuleDetails = () => {
 
           <Stack direction="row" spacing={1} flexWrap="wrap" gap={1}>
             <Chip size="small" label={`file: ${record.source_file}`} />
-            {record.declared_datasources?.length > 0 && (
-              <Chip size="small" color="secondary"
-                label={`reads: ${record.declared_datasources.join(", ")}`} />
-            )}
             <Chip size="small" label={`by ${record.created_by}`} />
           </Stack>
+
+          <RuleDatasources entity={record.entity} names={record.declared_datasources ?? []} />
 
           {isAdmin && (
             <>
@@ -1010,6 +1009,123 @@ const RuleDetails = () => {
   );
 };
 
+/* ================================================================== */
+/* What this control reads                                              */
+/* ================================================================== */
+/**
+ * The rule's inputs, one row per table, joined with the catalogue.
+ *
+ * `declared_datasources` is what the rule reads; the catalogue is what those
+ * names currently resolve to. Neither is duplicated here - the join happens at
+ * read time, so an admin who registers a system next month sees it appear on
+ * this page without a migration.
+ *
+ * The system matters more than it looks. A cross-system control like
+ * ABM-CA-22 joins Business Central to HRMS, and that fact was previously only
+ * stated in the rule's Python docstring, where nobody looks.
+ */
+const RuleDatasources = ({ entity, names }: { entity: string; names: string[] }) => {
+  const [registered, setRegistered] = useState<DatasourceRow[] | null>(null);
+  const [failed, setFailed] = useState(false);
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    if (!names.length) return;
+    let live = true;
+    api
+      .datasourceOverview(entity)
+      .then((o: DatasourceOverview) => live && setRegistered(o.registered ?? []))
+      .catch(() => live && setFailed(true));
+    return () => {
+      live = false;
+    };
+  }, [entity, names.length]);
+
+  if (!names.length) {
+    return (
+      <Box sx={{ mt: 2 }}>
+        <Divider sx={{ my: 1.5 }} />
+        <Typography variant="body2" color="text.secondary">
+          This rule reads no data sources.
+        </Typography>
+      </Box>
+    );
+  }
+
+  const missing = registered
+    ? names.filter((n) => !registered.some((r) => r.name === n))
+    : [];
+
+  return (
+    <Box sx={{ mt: 2 }}>
+      <Divider sx={{ my: 1.5 }} />
+      <Stack direction="row" alignItems="baseline" justifyContent="space-between" sx={{ mb: 1 }}>
+        <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>
+          Data sources
+          <Typography component="span" variant="caption" color="text.secondary"
+            sx={{ ml: 1, fontWeight: 400 }}>
+            {names.length} table{names.length === 1 ? "" : "s"}
+          </Typography>
+        </Typography>
+        <Button size="small" onClick={() => navigate("/datasources")}>
+          Manage in Data Sources
+        </Button>
+      </Stack>
+
+      {/* Three fixed columns rather than a flex row, so the systems line up and
+          the eye can compare them down the page instead of re-reading each. */}
+      <Box sx={{ display: "grid", rowGap: 0.5 }}>
+        {names.map((name) => {
+          const row = registered?.find((r) => r.name === name);
+          return (
+            <Box key={name}
+              sx={{ display: "grid", alignItems: "baseline", columnGap: 2,
+                    gridTemplateColumns: { xs: "1fr", sm: "200px 170px 1fr" } }}>
+              <Typography variant="body2"
+                sx={{ fontFamily: "monospace", fontWeight: 600, color: "primary.main" }}>
+                {name}
+              </Typography>
+              <Typography variant="body2" color="text.secondary">
+                {registered === null ? " " : row?.system || "—"}
+              </Typography>
+              <Typography variant="caption" color="text.secondary">
+                {registered === null
+                  ? ""
+                  : row?.grain || (row ? "" : "not registered")}
+              </Typography>
+            </Box>
+          );
+        })}
+      </Box>
+
+      {failed && (
+        <Alert severity="warning" sx={{ mt: 1.5 }}>
+          Could not load the datasource catalogue, so the systems above are
+          blank. The table names are this rule&apos;s own declaration and are
+          still correct.
+        </Alert>
+      )}
+
+      {missing.length > 0 && (
+        <Alert severity="error" sx={{ mt: 1.5 }}>
+          <Typography variant="body2" sx={{ fontWeight: 600, mb: 0.5 }}>
+            {missing.length === 1 ? "1 table is" : `${missing.length} tables are`} no longer
+            registered for {entity}
+          </Typography>
+          <Typography variant="body2" sx={{ mb: 1 }}>
+            <strong>{missing.join(", ")}</strong> — this rule fails on its next
+            run, not eventually. Remove it from the rule or register the table
+            again.
+          </Typography>
+          <Button size="small" color="error" onClick={() => navigate("/datasources")}>
+            Go to Data Sources
+          </Button>
+        </Alert>
+      )}
+    </Box>
+  );
+};
+
 const RuleActivity = ({ ruleCode }: { ruleCode: string }) => {
   const [tab, setTab] = useState<"runs" | "tickets">("runs");
   return (
@@ -1025,20 +1141,46 @@ const RuleActivity = ({ ruleCode }: { ruleCode: string }) => {
         </Stack>
         {tab === "runs" ? (
           <Box sx={{ "& .RaDatagrid-root": { boxShadow: "none" } }}>
+            {/* Pagination goes in as the `pagination` prop, not as a child.
+                A <Pagination> child renders a second footer underneath the one
+                the Datagrid already draws - two identical page pickers, stacked,
+                which is what this tab showed. */}
             <List
               resource="runs"
               perPage={10}
               filterDefaultValues={{ rule_code: ruleCode }}
+              pagination={<Pagination rowsPerPageOptions={[10, 25]} />}
             >
-              <Datagrid bulkActionButtons={false} rowClick="show">
-                <IdField source="id" />
+              <Datagrid bulkActionButtons={false} rowClick="show" size="small"
+                sx={{
+                  // Deliberately NOT tableLayout:fixed. Pinning the columns
+                  // leaves FINDING a fixed box, which truncates the longest
+                  // findings - and the finding is the reason anyone reads this
+                  // table. Short rows leave a gap instead, which costs nothing.
+                  "& .RaDatagrid-headerCell": {
+                    py: 0.75, px: 1.25, fontSize: FONT.label, fontWeight: 700,
+                    textTransform: "uppercase", letterSpacing: 0.5,
+                    color: "#5b6b82", backgroundColor: "#fafbfe", whiteSpace: "nowrap",
+                  },
+                  "& .RaDatagrid-rowCell": {
+                    py: 0.75, px: 1.25, fontSize: FONT.body,
+                    whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+                  },
+                }}
+              >
+                <IdField source="id" label="#" />
                 <TextField source="data_date" label="Data date" />
-                <StatusField source="status" />
-                <TextField source="summary" label="Summary" />
+                {/* Two columns, because they answer different questions. One
+                    column reading `status` showed a blue SUCCESS for a run that
+                    found three breaches - a working control dressed as a clean
+                    day, which is the one misreading the ledger split exists to
+                    prevent. */}
+                <RunStatusCell source="status" label="Ran" />
+                <RunOutcomeCell source="outcome" label="Outcome" />
+                <TextField source="summary" label="Finding" />
                 <RowCountField source="rows" />
-                <TextField source="triggered_by" label="Triggered by" />
+                <TextField source="triggered_by" label="By" />
               </Datagrid>
-              <Pagination rowsPerPageOptions={[10, 25]} />
             </List>
           </Box>
         ) : (

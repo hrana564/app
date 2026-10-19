@@ -9,9 +9,37 @@ from sqlalchemy import func, select
 
 from app.api.deps import CurrentUser, SessionDep
 from app.models import Rule, Run, Ticket
-from app.schemas import TicketAck, TicketOut
+from app.schemas import BulkAck, TicketAck, TicketOut
 
 router = APIRouter(prefix="/api/tickets", tags=["tickets"])
+
+
+def _filtered(stmt, count_stmt, *, status, rule_code, severity, q):
+    """Narrow the page query and the count query identically.
+
+    Both always join rule_runs: the ticket's summary is the run's summary, and
+    free-text search needs it too. Keeping the join here means the two queries
+    can never disagree about which rows match - and `total` is what pagination
+    trusts.
+
+    count_stmt is unused by the bulk endpoint, which passes a throwaway.
+    """
+    stmt = stmt.join(Run, Ticket.run_id == Run.id)
+    count_stmt = count_stmt.join(Run, Ticket.run_id == Run.id)
+
+    for value, column in ((status, Ticket.status), (severity, Ticket.severity)):
+        if value:
+            stmt = stmt.where(column == value)
+            count_stmt = count_stmt.where(column == value)
+    if rule_code is not None:
+        stmt = stmt.where(Ticket.rule_code == rule_code)
+        count_stmt = count_stmt.where(Ticket.rule_code == rule_code)
+    if q:
+        # Ticket number is searchable too, because that is what people paste in.
+        like = f"%{q}%"
+        stmt = stmt.where(Ticket.ticket_no.ilike(like) | Run.summary.ilike(like))
+        count_stmt = count_stmt.where(Ticket.ticket_no.ilike(like) | Run.summary.ilike(like))
+    return stmt, count_stmt
 
 
 @router.get("", response_model=dict)
@@ -23,32 +51,23 @@ async def list_tickets(
     status_: str | None = Query(None, alias="status"),
     rule_code: str | None = None,
     severity: str | None = None,
+    q: str | None = None,
     sort: str = "created_at",
     order: str = "DESC",
 ) -> dict:
     stmt = select(Ticket)
-    count_stmt = select(func.count()).select_from(Ticket)
-
-    for value, column in ((status_, Ticket.status), (severity, Ticket.severity)):
-        if value:
-            stmt = stmt.where(column == value)
-            count_stmt = count_stmt.where(column == value)
-    if rule_code is not None:
-        stmt = stmt.where(Ticket.rule_code == rule_code)
-        count_stmt = count_stmt.where(Ticket.rule_code == rule_code)
+    stmt, count_stmt = _filtered(
+        stmt,
+        select(func.count()).select_from(Ticket),
+        status=status_, rule_code=rule_code, severity=severity, q=q,
+    )
 
     col = getattr(Ticket, sort, Ticket.created_at)
-    stmt = stmt.order_by(col.desc() if order.upper() == "DESC" else col.asc())
-    stmt = stmt.offset((page - 1) * perPage).limit(perPage)
-
-    # Join rule_runs to get the summary text - one source of truth
-    stmt = stmt.join(Run, Ticket.run_id == Run.id)
     stmt = stmt.add_columns(Run.summary.label("run_summary"))
     stmt = stmt.order_by(col.desc() if order.upper() == "DESC" else col.asc())
     stmt = stmt.offset((page - 1) * perPage).limit(perPage)
 
-    result = await session.execute(stmt)
-    rows = result.all()
+    rows = (await session.execute(stmt)).all()
     total = (await session.execute(count_stmt)).scalar_one()
 
     data = []
@@ -57,6 +76,48 @@ async def list_tickets(
         d["summary"] = run_summary or ""
         data.append(d)
     return {"data": data, "total": total}
+
+
+@router.post("/acknowledge-all", response_model=dict)
+async def acknowledge_all(
+    payload: BulkAck,
+    session: SessionDep,
+    user: CurrentUser,
+) -> dict:
+    """
+    Acknowledge every OPEN ticket matching the given filters, in one transaction.
+
+    Scoped by the same parameters as the list so the toolbar can act on exactly
+    what is on screen, and never on the whole table by accident. The filters are
+    echoed back: a bulk audit action that does not report what it did is its own
+    problem.
+    """
+    stmt = select(Ticket).where(Ticket.status == "open")
+    stmt, _ = _filtered(
+        stmt,
+        select(func.count()).select_from(Ticket),
+        status=None,  # already pinned to "open"
+        rule_code=payload.rule_code,
+        severity=payload.severity,
+        q=payload.q,
+    )
+    tickets = (await session.execute(stmt)).scalars().all()
+
+    now = datetime.now(timezone.utc)
+    for ticket in tickets:
+        ticket.status = payload.status
+        ticket.acknowledged_by = user.username
+        ticket.acknowledged_at = now
+        ticket.ack_note = payload.note
+    await session.commit()
+
+    return {
+        "acknowledged": len(tickets),
+        "ticket_nos": [t.ticket_no for t in tickets],
+        "rule_code": payload.rule_code,
+        "severity": payload.severity,
+        "q": payload.q,
+    }
 
 
 @router.get("/summary")

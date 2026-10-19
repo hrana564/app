@@ -212,6 +212,25 @@ export const api = {
       body: JSON.stringify({ status, note }),
     }),
 
+  /**
+   * Acknowledge every OPEN ticket matching the given filters, server-side.
+   *
+   * The filters are the ones the inbox is showing, so the action can never
+   * reach a ticket the auditor cannot see. Doing this from the browser would
+   * mean one request per ticket.
+   */
+  acknowledgeAllTickets: (payload: {
+    status?: "acknowledged" | "dismissed";
+    note?: string;
+    rule_code?: string;
+    severity?: string;
+    q?: string;
+  }) =>
+    request<any>("/api/tickets/acknowledge-all", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+
   reopenTicket: (id: number | string) =>
     request<any>(`/api/tickets/${id}/reopen`, { method: "POST" }),
 

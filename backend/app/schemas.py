@@ -305,11 +305,33 @@ class TicketOut(BaseModel):
     ack_note: str | None
     created_at: datetime
 
+    # The finding text lives on the run, not the ticket, so every endpoint that
+    # returns a ticket fills this in. It has to be declared here or Pydantic
+    # strips it - which is why the ticket detail page showed no summary at all.
+    summary: str = ""
+
     model_config = {"from_attributes": True}
 
 
 class TicketAck(BaseModel):
     status: Literal["acknowledged", "dismissed"] = "acknowledged"
     note: str = Field(default="", max_length=4000)
+
+
+class BulkAck(BaseModel):
+    """
+    Acknowledge many tickets at once.
+
+    Carries the same filters the inbox is showing, so the action can never
+    reach tickets the auditor cannot see. Only ever applies to `open` tickets -
+    the endpoint pins that itself, so a client cannot acknowledge something
+    another reviewer already closed.
+    """
+
+    status: Literal["acknowledged", "dismissed"] = "acknowledged"
+    note: str = Field(default="", max_length=4000)
+    rule_code: str | None = None
+    severity: Severity | None = None
+    q: str | None = None
 
 

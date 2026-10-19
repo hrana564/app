@@ -405,22 +405,22 @@ const ScheduleOverview = () => {
   const notify = useNotify();
 
   useEffect(() => {
-    const headers = { Authorization: `Bearer ${localStorage.getItem("abm.token")}` };
-    fetch("/api/rule-schedules", { headers })
-      .then((r) => r.json())
-      .then((d) => setRows(d.data ?? []))
-      .catch(() => setRows([]));
-    fetch("/api/rules?perPage=500", { headers })
-      .then((r) => r.json())
+    let live = true;
+    api.listSchedules()
+      .then((d) => live && setRows(d.data ?? []))
+      .catch(() => live && setRows([]));
+    api.listRules()
       .then((d) => {
+        if (!live) return;
         const map: Record<number, any> = {};
-        (d.data ?? []).forEach((x: any) => (map[x.id] = x));
+        d.data.forEach((x: any) => (map[x.id] = x));
         setRules(map);
       })
       .catch(() => {});
     api.schedulerJobs()
-      .then((j) => setJobs((j.jobs ?? []).map((x: any) => x.id)))
-      .catch(() => setJobs([]));
+      .then((j) => live && setJobs((j.jobs ?? []).map((x: any) => x.id)))
+      .catch(() => live && setJobs([]));
+    return () => { live = false; };
   }, []);
 
   if (!rows) return <CircularProgress size={24} />;

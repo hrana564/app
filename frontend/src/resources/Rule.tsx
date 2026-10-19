@@ -1053,12 +1053,11 @@ const RuleActivity = ({ ruleCode }: { ruleCode: string }) => {
 const TicketsForRule = ({ ruleCode }: { ruleCode: string }) => {
   const [tickets, setTickets] = useState<any[] | null>(null);
   useEffect(() => {
-    fetch(`/api/tickets?rule_code=${ruleCode}&perPage=50`, {
-      headers: { Authorization: `Bearer ${localStorage.getItem("abm.token")}` },
-    })
-      .then((r) => r.json())
-      .then((d) => setTickets(d.data ?? []))
-      .catch(() => setTickets([]));
+    let live = true;
+    api.listTickets({ rule_code: ruleCode, perPage: "50" })
+      .then((d) => live && setTickets(d.data ?? []))
+      .catch(() => live && setTickets([]));
+    return () => { live = false; };
   }, [ruleCode]);
 
   if (!tickets) return <CircularProgress size={22} />;

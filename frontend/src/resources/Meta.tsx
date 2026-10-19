@@ -1,22 +1,48 @@
 import { useEffect, useState } from "react";
 import {
-  Box, Card, CardContent, Chip, Stack, Typography,
+  Alert, Box, Card, CardContent, Chip, CircularProgress, Stack, Typography,
 } from "@mui/material";
 import StorageIcon from "@mui/icons-material/Storage";
 import { EntityChip } from "../components/ui";
+import { api, type EntityOut } from "../dataProvider";
 
 /* ================= Datasources ================= */
 export const DatasourceList = () => {
-  const [entities, setEntities] = useState<any[] | null>(null);
+  const [entities, setEntities] = useState<EntityOut[] | null>(null);
   const [sources, setSources] = useState<any[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    const headers = { Authorization: `Bearer ${localStorage.getItem("abm.token")}` };
-    fetch("/api/datasources/entities", { headers }).then((r) => r.json()).then(setEntities);
-    fetch("/api/datasources", { headers }).then((r) => r.json()).then(setSources);
+    let live = true;
+    Promise.all([api.entities(), api.listDatasources()])
+      .then(([e, s]) => {
+        if (!live) return;
+        setEntities(e);
+        setSources(s);
+      })
+      .catch((e: Error) => live && setError(e.message));
+    // A render that outlives its request must not set state on it.
+    return () => { live = false; };
   }, []);
 
-  if (!entities || !sources) return <Typography>Loading…</Typography>;
+  // A failed load is a fact to show, not an empty list to render. Rendering on
+  // a rejected fetch is what turned a 401 into "entities.map is not a function".
+  if (error) {
+    return (
+      <Alert severity="error">
+        Could not load datasources — {error}
+      </Alert>
+    );
+  }
+
+  if (!entities || !sources) {
+    return (
+      <Stack direction="row" spacing={1} alignItems="center">
+        <CircularProgress size={20} />
+        <Typography variant="body2" color="text.secondary">Loading datasources…</Typography>
+      </Stack>
+    );
+  }
 
   return (
     <Box>

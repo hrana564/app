@@ -196,6 +196,12 @@ export const dataProvider: DataProvider = {
   },
 };
 
+export interface EntityOut {
+  code: string;
+  name: string;
+  systems: string[];
+}
+
 // --- custom endpoints used by the UI ---------------------------------------
 export const api = {
   login: (username: string, password: string) =>
@@ -317,9 +323,22 @@ export const api = {
       body: JSON.stringify({ prompt, entity }),
     }),
 
-  entities: () => request<any>("/api/datasources/entities"),
+  /**
+   * The two client entities and the systems each one draws from.
+   *
+   * The endpoint wraps its list in `{ entities: [...] }`. The unwrap belongs
+   * here so a caller cannot treat the envelope as the list - which is how this
+   * read `entities.map is not a function`.
+   */
+  entities: () =>
+    request<{ entities: EntityOut[] }>("/api/datasources/entities").then((d) => d.entities),
+
+  listDatasources: () => request<any[]>("/api/datasources"),
+
   availableDates: (entity: string) =>
-    request<any>(`/api/datasources/available-dates?entity=${entity}`),
+    request<{ dates: string[]; root: string }>(
+      `/api/datasources/available-dates?entity=${entity}`,
+    ),
 
   // --- rule schedules (friendly cadence, never raw cron) ---
   cadenceOptions: () => request<any>("/api/rule-schedules/cadence-options"),

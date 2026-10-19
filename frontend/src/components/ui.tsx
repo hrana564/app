@@ -101,10 +101,17 @@ export const RuleStateCell = ({ record }: { record: any }) => {
 /* react-admin's TextField has no `render` prop - these read the row   */
 /* record from context instead.                                        */
 /* ------------------------------------------------------------------ */
-const fieldFromRecord =
+/**
+ * Build a react-admin Datagrid cell that reads its value off the row record.
+ *
+ * `source` is still required on the element: the Datagrid inspects children's
+ * `source` prop to decide which columns are sortable.
+ */
+export const fieldFromRecord =
   (render: (value: any, record: any) => React.ReactNode) =>
   // eslint-disable-next-line react/display-name
-  ({ source }: { source: string }) => {
+  ({ source, label }: { source: string; label?: string }) => {
+    void label; // read by the Datagrid to title the column; nothing to render
     const record = useRecordContext<any>();
     return <>{render(record?.[source], record)}</>;
   };

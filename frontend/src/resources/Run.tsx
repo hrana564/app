@@ -1,23 +1,71 @@
 import { useEffect, useState } from "react";
 import {
-  Datagrid, DateField, List, Pagination, ShowBase,
-  TextField, useNotify, useRecordContext,
+  Datagrid, List, Pagination, ShowBase,
+  useNotify, useRecordContext,
 } from "react-admin";
 import {
-  Alert, Box, Button, Card, CardContent, Chip, CircularProgress, Stack, Typography,
+  Alert, Box, Button, Card, CardContent, Chip, CircularProgress, Stack,
+  Tooltip, Typography, useTheme,
 } from "@mui/material";
 import ReplayIcon from "@mui/icons-material/Replay";
 import { api } from "../dataProvider";
-import { IdField, JsonBlock, RowsTable, StatusField } from "../components/ui";
+import {
+  IdField, JsonBlock, RowsTable, StatusField, ActionIcon,
+} from "../components/ui";
+import { statusColor, FONT } from "../theme";
+
+/**
+ * A run summary is written for a detail page, so it runs to 160 characters and
+ * wraps a list cell onto three lines - which is what turns a scannable table
+ * into a scroll.
+ *
+ * Only the FIRST clause carries the finding. What follows it is commentary
+ * ("Payments to these vendors require review") or a worked example ("Worst:
+ * Garry Vaughan (1 txns, last active ...)"), and the row either way is decided
+ * by the Result column beside it. So: cut at the first sentence, cut again at
+ * the first dash if what remains is still substantial, and only truncate at a
+ * word boundary as a last resort. The full text stays on the tooltip and on
+ * the run page.
+ */
+export const shortenSummary = (text?: string | null, cap = 120): string => {
+  if (!text) return "";
+  let s = text.split(/\.\s+/)[0];
+  const lead = s.split(/\s+[-–—]\s+/)[0];
+  if (lead.length >= 32) s = lead;
+  s = s.trim().replace(/[\s.,;:]+$/, "");
+  if (s.length > cap) {
+    s = s.slice(0, cap - 1);
+    const cut = s.lastIndexOf(" ");
+    if (cut > cap * 0.6) s = s.slice(0, cut);
+    s += "…";
+  }
+  return s;
+};
+
+const duration = (ms?: number) =>
+  ms == null ? "—" : ms < 1000 ? `${ms} ms` : `${(ms / 1000).toFixed(1)} s`;
+
+const TRIGGER_LABEL: Record<string, string> = {
+  manual_test: "manual",
+  schedule: "scheduled",
+};
+
+const stamp = (v?: string) =>
+  v
+    ? new Date(v).toLocaleString(undefined, {
+        day: "2-digit", month: "short",
+        hour: "2-digit", minute: "2-digit", hour12: false,
+      })
+    : "—";
 
 /* ================= Runs ================= */
-const RerunButton = () => {
+const RerunButton = ({ label }: { label?: string }) => {
   const record = useRecordContext<any>();
   const notify = useNotify();
   return (
-    <Button
-      size="small"
-      startIcon={<ReplayIcon />}
+    <ActionIcon
+      title={`Re-run rule for ${record?.data_date ?? "today"}`}
+      icon={<ReplayIcon fontSize="small" />}
       onClick={async (e) => {
         e.stopPropagation();
         try {
@@ -29,27 +77,158 @@ const RerunButton = () => {
           notify(`Re-run failed: ${err.message}`, { type: "error" });
         }
       }}
-    >
-      Re-run
-    </Button>
+    />
   );
 };
+
+/**
+ * Result as coloured words rather than a filled chip.
+ *
+ * A chip per row is a block of colour the size of a postage stamp, and on a list
+ * of 100 runs it out-shouts the one thing being scanned for. The word still
+ * carries the colour, so it is not weaker - it just stops competing.
+ */
+const RunResult = ({ source }: { source: string; label?: string }) => {
+  const record = useRecordContext<any>();
+  const theme = useTheme();
+  const status = record?.[source];
+  const palette = theme.palette as unknown as Record<string, { main?: string } | undefined>;
+  return (
+    <Typography
+      variant="body2"
+      sx={{
+        color: palette[statusColor[status] ?? "info"]?.main ?? "#8d99ae",
+        fontWeight: 700,
+        textTransform: "capitalize",
+      }}
+    >
+      {status ?? "—"}
+    </Typography>
+  );
+};
+
+const RunSummary = ({ source }: { source: string; label?: string }) => {
+  const record = useRecordContext<any>();
+  const full = record?.[source];
+  return (
+    <Tooltip
+      title={full || ""}
+      placement="top-start"
+      slotProps={{ tooltip: { sx: { maxWidth: 620, whiteSpace: "normal" } } }}
+    >
+      <Typography
+        variant="body2"
+        noWrap
+        sx={{
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          color: record?.status === "error" ? "error.main" : "text.primary",
+        }}
+      >
+        {shortenSummary(full)}
+      </Typography>
+    </Tooltip>
+  );
+};
+
+const cellSx = {
+  py: 0.65,
+  px: 1.25,
+  borderColor: "#eef1f6",
+  overflow: "hidden",
+  lineHeight: 1.5,
+};
+
+/**
+ * A one-line text cell. `mono` for identifiers, `secondary` for the values that
+ * should recede beside the finding, `render` to format on the way out.
+ */
+const TextLike = ({
+  source, mono, secondary, render, label,
+}: {
+  source: string;
+  label?: string;
+  mono?: boolean;
+  secondary?: boolean;
+  render?: (value: any) => string;
+}) => {
+  const record = useRecordContext<any>();
+  const raw = record?.[source];
+  return (
+    <Typography
+      variant="body2"
+      noWrap
+      sx={{
+        fontFamily: mono ? "monospace" : undefined,
+        fontWeight: mono ? 700 : undefined,
+        color: secondary ? "text.secondary" : "text.primary",
+      }}
+    >
+      {render ? render(raw) : (raw ?? "—")}
+    </Typography>
+  );
+};
+
+/**
+ * Fixed widths for the columns around the finding, so the finding absorbs
+ * whatever width is left instead of the browser redistributing against the
+ * longest cell in the row. Column 5 is deliberately absent - that is the one
+ * that takes the remainder.
+ */
+const columnWidth = (i: number, w: number) => ({
+  [`& .RaDatagrid-headerCell:nth-of-type(${i}), & .RaDatagrid-rowCell:nth-of-type(${i})`]:
+    { width: w },
+});
+
+const FIXED_WIDTHS: Array<[number, number]> = [
+  [1, 60], [2, 116], [3, 100], [4, 78], [6, 72], [7, 84], [8, 126], [9, 52],
+];
+
+const widthSx = FIXED_WIDTHS.reduce<Record<string, { width: number }>>(
+  (acc, [i, w]) => Object.assign(acc, columnWidth(i, w)),
+  {},
+);
 
 export const RunList = () => (
   <List
     pagination={<Pagination rowsPerPageOptions={[10, 25, 50, 100]} />}
     sort={{ field: "started_at", order: "DESC" }}
   >
-    <Datagrid rowClick="show" bulkActionButtons={false}>
-      <IdField source="id" />
-      <TextField source="rule_code" label="Rule" />
-      <TextField source="data_date" label="Data date" />
-      <StatusField source="status" />
-      <TextField source="summary" label="Summary" />
-      <TextField source="duration_ms" label="ms" />
-      <TextField source="triggered_by" label="Triggered by" />
-      <DateField source="started_at" label="Started" showTime />
-      <RerunButton />
+    <Datagrid
+      rowClick="show"
+      bulkActionButtons={false}
+      size="small"
+      sx={{
+        // Fixed layout is what makes "one row, one line" enforceable: columns
+        // take their declared width and the summary absorbs the remainder
+        // instead of the browser redistributing it against the longest cell.
+        "& .RaDatagrid-table": { tableLayout: "fixed" },
+        "& .RaDatagrid-headerCell": {
+          py: 0.75,
+          px: 1.25,
+          fontSize: FONT.label,
+          fontWeight: 700,
+          textTransform: "uppercase",
+          letterSpacing: 0.5,
+          color: "#5b6b82",
+          backgroundColor: "#fafbfe",
+          whiteSpace: "nowrap",
+          overflow: "hidden",
+        },
+        "& .RaDatagrid-rowCell": cellSx,
+        "& .RaDatagrid-headerRow:hover": { backgroundColor: "#f3f6fb" },
+        ...widthSx,
+      }}
+    >
+      <IdField source="id" label="#" />
+      <TextLike source="rule_code" label="Rule" mono />
+      <TextLike source="data_date" label="Data date" secondary />
+      <RunResult source="status" label="Result" />
+      <RunSummary source="summary" label="Finding" />
+      <TextLike source="duration_ms" label="Took" render={duration} secondary />
+      <TextLike source="triggered_by" label="By" render={(v: string) => TRIGGER_LABEL[v] ?? v} secondary />
+      <TextLike source="started_at" label="Started" render={stamp} secondary />
+      <RerunButton label="" />
     </Datagrid>
   </List>
 );

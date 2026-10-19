@@ -4,6 +4,30 @@ import { createTheme } from "@mui/material/styles";
  * A deliberately restrained navy/teal palette. High contrast for the severity
  * chips, and generous spacing because the tables carry long audit summaries.
  */
+/**
+ * Type scale, in rem.
+ *
+ * Measured on a 1920x1080 screen at 100% scaling, the app was rendering 12px
+ * table headers, 12px captions and 14px body - so almost everything sat below
+ * the sizes the accessibility guidance points at:
+ *
+ *   WCAG 2.1 has no hard minimum, but requires 200% resize without loss
+ *   USWDS   "use at least an effective size of 16px" for body text
+ *   508     15-16px typical for web
+ *   Material 3 body runs 14-16px, with 12px as the floor for small labels
+ *
+ * So: body at 16px, secondary at 15px, and an absolute floor of 13px for
+ * captions and table headers. Nothing in the app should render below that.
+ *
+ * Sizes are rem, not px, so the browser's own default-font-size and zoom
+ * settings scale the whole interface instead of fighting them.
+ */
+export const FONT = {
+  body: "1rem", // 16px
+  bodyAlt: "0.9375rem", // 15px
+  label: "0.8125rem", // 13px - the floor
+} as const;
+
 export const theme = createTheme({
   palette: {
     mode: "light",
@@ -19,10 +43,17 @@ export const theme = createTheme({
   typography: {
     fontFamily:
       '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif',
-    h5: { fontWeight: 700, letterSpacing: -0.2 },
-    h6: { fontWeight: 650 },
-    subtitle2: { fontWeight: 600 },
-    button: { textTransform: "none", fontWeight: 600 },
+    htmlFontSize: 16,
+    h4: { fontSize: "1.75rem", fontWeight: 700, letterSpacing: -0.3 },
+    h5: { fontSize: "1.5rem", fontWeight: 700, letterSpacing: -0.2 },
+    h6: { fontSize: "1.25rem", fontWeight: 650 },
+    subtitle1: { fontSize: "1rem", fontWeight: 600 },
+    subtitle2: { fontSize: FONT.bodyAlt, fontWeight: 600 },
+    body1: { fontSize: FONT.body, lineHeight: 1.5 },
+    body2: { fontSize: FONT.bodyAlt, lineHeight: 1.5 },
+    button: { fontSize: FONT.bodyAlt, fontWeight: 600, textTransform: "none" },
+    caption: { fontSize: FONT.label, lineHeight: 1.45 },
+    overline: { fontSize: FONT.label, fontWeight: 700, letterSpacing: 0.6 },
   },
   components: {
     MuiCard: {
@@ -38,10 +69,15 @@ export const theme = createTheme({
     },
     MuiTableCell: {
       styleOverrides: {
-        root: { borderColor: "#eef1f6" },
+        root: {
+          borderColor: "#eef1f6",
+          // size="small" halves the default padding, which reads as cramped once
+          // the type is larger. Give dense tables room to breathe.
+          padding: "10px 16px",
+        },
         head: {
           fontWeight: 700,
-          fontSize: 12,
+          fontSize: FONT.label,
           textTransform: "uppercase",
           letterSpacing: 0.5,
           color: "#5b6b82",
@@ -49,7 +85,42 @@ export const theme = createTheme({
         },
       },
     },
-    MuiChip: { styleOverrides: { root: { fontWeight: 600 } } },
+    MuiChip: {
+      styleOverrides: {
+        root: { fontWeight: 600 },
+        label: { fontSize: FONT.label, paddingLeft: 10, paddingRight: 10 },
+        sizeSmall: { height: 24 },
+      },
+    },
+    MuiTooltip: {
+      styleOverrides: { tooltip: { fontSize: FONT.label } },
+    },
+    MuiOutlinedInput: {
+      styleOverrides: {
+        notchedOutline: {
+          // The floating label sits at 0.8125em of the input type, which put it
+          // at 11.25px - the only text anywhere on screen below the 13px floor.
+          "& legend": { fontSize: "0.875em" },
+        },
+      },
+    },
+    MuiInputLabel: {
+      styleOverrides: { root: { fontSize: FONT.bodyAlt } },
+    },
+    MuiInputBase: {
+      styleOverrides: {
+        root: {
+          fontSize: FONT.bodyAlt,
+          // size="small" inputs shrink their type as well as their box. Small
+          // inputs keep the same type as normal ones here.
+          "& input": { fontSize: "inherit" },
+          "& .MuiSelect-select": { fontSize: "inherit" },
+        },
+      },
+    },
+    MuiMenuItem: {
+      styleOverrides: { root: { fontSize: FONT.bodyAlt, minHeight: 40 } },
+    },
   },
 });
 

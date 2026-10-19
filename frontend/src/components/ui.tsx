@@ -3,7 +3,7 @@ import {
 } from "@mui/material";
 import { Link } from "react-router-dom";
 import { useRecordContext } from "react-admin";
-import { severityColor, statusColor, entityColor } from "../theme";
+import { severityColor, statusColor, entityColor, FONT } from "../theme";
 
 export const SeverityChip = ({ value }: { value?: string }) =>
   value ? (
@@ -202,10 +202,10 @@ export const JsonBlock = ({ value }: { value: Record<string, unknown> | undefine
             borderRadius: 1.5, px: 1.25, py: 1,
           }}
         >
-          <Box sx={{ fontSize: 11, textTransform: "uppercase", letterSpacing: 0.5, color: "text.secondary", fontWeight: 700 }}>
+          <Box sx={{ fontSize: FONT.label, textTransform: "uppercase", letterSpacing: 0.5, color: "text.secondary", fontWeight: 700 }}>
             {k.replace(/_/g, " ")}
           </Box>
-          <Box sx={{ fontFamily: "monospace", fontSize: 14, fontWeight: 600, wordBreak: "break-word" }}>
+          <Box sx={{ fontFamily: "monospace", fontSize: FONT.bodyAlt, fontWeight: 600, wordBreak: "break-word" }}>
             {typeof v === "number" ? v.toLocaleString() : String(v)}
           </Box>
         </Box>
@@ -226,8 +226,8 @@ export const CodeBlock = ({ code }: { code: string }) => (
       borderRadius: 2,
       overflow: "auto",
       maxHeight: 560,
-      fontSize: 13,
-      lineHeight: 1.55,
+      fontSize: "0.9375rem",
+      lineHeight: 1.6,
       fontFamily: '"JetBrains Mono", "Fira Code", Consolas, "Courier New", monospace',
       msoOutline: "none",
     }}
@@ -250,7 +250,7 @@ export const RowsTable = ({ rows }: { rows: Record<string, unknown>[] }) => {
 
   return (
     <Box sx={{ overflow: "auto", maxHeight: 420, border: "1px solid #e9edf4", borderRadius: 2 }}>
-      <Box component="table" sx={{ borderCollapse: "collapse", width: "100%", fontSize: 13 }}>
+      <Box component="table" sx={{ borderCollapse: "collapse", width: "100%" }}>
         <Box component="thead" sx={{ position: "sticky", top: 0, zIndex: 1 }}>
           <Box component="tr" sx={{ bgcolor: "#f7f9fc" }}>
             {columns.map((c) => (
@@ -258,7 +258,7 @@ export const RowsTable = ({ rows }: { rows: Record<string, unknown>[] }) => {
                 key={c}
                 component="th"
                 sx={{
-                  textAlign: "left", px: 1.5, py: 1, fontSize: 11, fontWeight: 700,
+                  textAlign: "left", px: 1.5, py: 1, fontSize: FONT.label, fontWeight: 700,
                   textTransform: "uppercase", letterSpacing: 0.5, color: "text.secondary",
                   borderBottom: "1px solid #e9edf4", whiteSpace: "nowrap",
                 }}
@@ -281,7 +281,7 @@ export const RowsTable = ({ rows }: { rows: Record<string, unknown>[] }) => {
                   component="td"
                   sx={{
                     px: 1.5, py: 0.85, borderBottom: "1px solid #f0f3f8",
-                    fontFamily: "monospace", fontSize: 12.5, whiteSpace: "nowrap",
+                    fontFamily: "monospace", fontSize: FONT.bodyAlt, whiteSpace: "nowrap",
                   }}
                 >
                   {row[c] === null || row[c] === undefined

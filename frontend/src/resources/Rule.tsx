@@ -30,7 +30,7 @@ import {
   ActionIcon, CodeBlock, DotLabel, EntityField, IdField, JsonBlock, RowsTable,
   RuleStateCell, SeverityField, StatusField, RowCountField,
 } from "../components/ui";
-import { severityColor, statusColor } from "../theme";
+import { severityColor, statusColor, FONT } from "../theme";
 
 /* ================================================================== */
 /* Filter vocabulary - mirrors the Literals in backend/app/schemas.py */
@@ -421,7 +421,7 @@ export const RunRuleDialog = ({
 
             {out.status === "error" && (
               <Alert severity="error" icon={<BugReportIcon />}>
-                <Box component="pre" sx={{ m: 0, whiteSpace: "pre-wrap", fontSize: 12 }}>
+                <Box component="pre" sx={{ m: 0, whiteSpace: "pre-wrap", fontSize: FONT.label }}>
                   {out.error_detail}
                 </Box>
               </Alert>
@@ -1114,9 +1114,9 @@ const SortableHeader = ({
         <span>{label}</span>
         <Box component="span" sx={{ display: "inline-flex", opacity: active ? 0.85 : 0.25 }}>
           {ascending ? (
-            <ArrowUpwardIcon sx={{ fontSize: 12 }} />
+            <ArrowUpwardIcon sx={{ fontSize: 14 }} />
           ) : (
-            <ArrowDownwardIcon sx={{ fontSize: 12 }} />
+            <ArrowDownwardIcon sx={{ fontSize: 14 }} />
           )}
         </Box>
       </Stack>
@@ -1126,7 +1126,7 @@ const SortableHeader = ({
 
 const headCellSx = {
   fontWeight: 700,
-  fontSize: 12,
+  fontSize: FONT.label,
   textTransform: "uppercase" as const,
   letterSpacing: 0.5,
   color: "#5b6b82",
@@ -1578,8 +1578,8 @@ const RuleEditForm = () => {
               sx={{
                 width: "100%",
                 fontFamily: '"JetBrains Mono", Consolas, "Courier New", monospace',
-                fontSize: 13,
-                lineHeight: 1.55,
+                fontSize: FONT.bodyAlt,
+                lineHeight: 1.6,
                 p: 2,
                 border: "1px solid #d9e0ea",
                 borderRadius: 2,

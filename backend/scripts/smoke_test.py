@@ -118,6 +118,150 @@ def main() -> int:
             d = c.get("/api/datasources/available-dates", headers=ud,
                       params={"entity": ent}).json()
             check(f"{ent} day folders present", len(d["dates"]) == 6, str(d["dates"]))
+            check(f"{ent} reports a latest day", bool(d.get("latest")), str(d.get("latest")))
+
+        # --- the admin's job: see what landed, register it, retire what we
+        # --- no longer consume. Every assertion below is idempotent.
+        ov = c.get("/api/datasources/overview", headers=ud,
+                   params={"entity": "LAD"}).json()
+        check("overview names the entity", ov["entity"] == "LAD")
+        check("overview resolved a data date", bool(ov["data_date"]), ov["data_date"])
+        check("overview lists registered tables", len(ov["registered"]) >= 9,
+              str(len(ov["registered"])))
+        check("overview lists what the ETL delivered", len(ov["discovered"]) >= 9,
+              str(len(ov["discovered"])))
+
+        landed = {d["name"] for d in ov["discovered"]}
+        registered = {d["name"]: d for d in ov["registered"]}
+        check("every landed file is classified",
+              all(d["state"] in ("new", "registered", "retired") for d in ov["discovered"]))
+        check("landing status is reported per table",
+              all(d["landing"] in ("landed", "absent") for d in ov["registered"]))
+        check("a landed registered table reports its row count",
+              any(d["row_count"] for d in ov["registered"] if d["name"] == "ipos_sales"))
+
+        check("rule dependency is reported",
+              "LAD-CA-03" in registered["ipos_sales"]["used_by"],
+              str(registered["ipos_sales"]["used_by"]))
+        check("a table no rule reads shows no dependents",
+              registered.get("syn_wastage", {}).get("used_by") == [],
+              str(registered.get("syn_wastage", {}).get("used_by")))
+
+        # Discovery reads the header, so the columns are real.
+        sales_file = next(d for d in ov["discovered"] if d["name"] == "ipos_sales")
+        check("discovered columns come from the CSV header",
+              {"invoice_id", "store_id", "invoice_value"} <= set(sales_file["columns"]),
+              str(list(sales_file["columns"])[:4]))
+        check("discovered column count matches the header",
+              sales_file["column_count"] == len(sales_file["columns"]))
+
+        # --- register, then retire, then restore ----------------------------
+        probe = "smoke_probe_table"
+        # Creating returns 201, a re-run returns 409. Asserting the same number
+        # of things either way is what keeps the suite idempotent - a branch that
+        # checks one more thing on first run makes run counts drift.
+        new_row = c.post("/api/datasources", headers=ah, json={
+            "name": probe, "entity": "LAD", "system": "Smoke",
+            "description": "created by the smoke test", "grain": "one row per nothing",
+            "columns": {"id": "VARCHAR"},
+        })
+        check("register is accepted, or reports it already exists",
+              new_row.status_code in (201, 409),
+              f"{new_row.status_code} {new_row.text[:140]}")
+
+        listed = c.get("/api/datasources", headers=ud,
+                       params={"entity": "LAD"}).json()
+        probe_row = next((d for d in listed if d["name"] == probe), None)
+        check("registered table is listed", probe_row is not None)
+        check("registered table is active", bool(probe_row) and probe_row["is_active"] is True)
+        check("registered table keeps its declared columns",
+              bool(probe_row) and probe_row["columns"] == {"id": "VARCHAR"},
+              str(probe_row["columns"]) if probe_row else "missing")
+        probe_id = probe_row["id"] if probe_row else None
+
+        if probe_id is not None:
+            check("auditor CANNOT register a datasource",
+                  c.post("/api/datasources", headers=ud, json={
+                      "name": "x", "entity": "LAD"}).status_code == 403)
+            check("auditor CANNOT retire a datasource",
+                  c.post(f"/api/datasources/{probe_id}/retire", headers=ud,
+                         json={}).status_code == 403)
+
+            ret = c.post(f"/api/datasources/{probe_id}/retire", headers=ah, json={})
+            check("admin can retire a table", ret.status_code == 200,
+                  f"{ret.status_code} {ret.text[:120]}")
+            check("retired row is inactive", ret.json()["is_active"] is False)
+            check("retiring is idempotent",
+                  c.post(f"/api/datasources/{probe_id}/retire", headers=ah,
+                         json={}).status_code == 200)
+
+            ov2 = c.get("/api/datasources/overview", headers=ud,
+                        params={"entity": "LAD"}).json()
+            check("a retired table stays visible, marked inactive",
+                  any(d["name"] == probe and d["is_active"] is False
+                      for d in ov2["registered"]))
+            if probe in landed:
+                check("a retired file shows as 'retired' in discovery",
+                      any(d["name"] == probe and d["state"] == "retired"
+                          for d in ov2["discovered"]))
+
+            res = c.post(f"/api/datasources/{probe_id}/restore", headers=ah, json={})
+            check("admin can restore a retired table", res.status_code == 200)
+            check("restored row is active again", res.json()["is_active"] is True)
+
+        # --- the guard that matters: retiring a table live rules read --------
+        sales = registered.get("ipos_sales")
+        if sales:
+            blocked = c.post(f"/api/datasources/{sales['id']}/retire", headers=ah, json={})
+            check("retiring a table live rules read is refused", blocked.status_code == 409,
+                  f"got {blocked.status_code}")
+            body = blocked.json().get("detail", {})
+            check("the refusal names the dependent rules",
+                  "LAD-CA-03" in (body.get("dependents") or []), str(body)[:160])
+            check("the refusal warns that the rules keep running",
+                  "keep running" in (body.get("hint") or "").lower()
+                  or "will fail" in (body.get("hint") or "").lower(),
+                  str(body.get("hint"))[:120])
+
+        # --- hard delete, and the refusal that protects rule history --------
+        if probe_id is not None:
+            # The probe is read by no rule, so removal is allowed.
+            gone = c.delete(f"/api/datasources/{probe_id}", headers=ah)
+            check("a table no rule reads can be removed", gone.status_code == 204,
+                  f"{gone.status_code} {gone.text[:120]}")
+            check("removal is real - it is gone from the list",
+                  not any(d["name"] == probe for d in c.get(
+                      "/api/datasources", headers=ud,
+                      params={"entity": "LAD"}).json()))
+            check("deleting it twice 404s",
+                  c.delete(f"/api/datasources/{probe_id}", headers=ah).status_code == 404)
+            check("auditor CANNOT remove a datasource",
+                  c.delete(f"/api/datasources/{probe_id}", headers=ud).status_code in (403, 404))
+
+            # Recreate so the next run starts from the same place.
+            c.post("/api/datasources", headers=ah, json={
+                "name": probe, "entity": "LAD", "system": "Smoke",
+                "description": "created by the smoke test",
+                "grain": "one row per nothing", "columns": {"id": "VARCHAR"},
+            })
+
+        if sales:
+            refused = c.delete(f"/api/datasources/{sales['id']}", headers=ah)
+            check("removing a table live rules read is refused",
+                  refused.status_code == 409, f"got {refused.status_code}")
+            check("the refusal points at retiring instead",
+                  "etire" in str(refused.json().get("detail", {}).get("hint") or ""),
+                  str(refused.json().get("detail", {}).get("hint"))[:120])
+
+        check("unknown entity is rejected",
+              c.get("/api/datasources/overview", headers=ud,
+                    params={"entity": "ZZZ"}).status_code == 404)
+        check("a path-traversal name is refused",
+              c.post("/api/datasources", headers=ah, json={
+                  "name": "../escape", "entity": "LAD"}).status_code == 400)
+        check("re-registering an active table is a conflict",
+              c.post("/api/datasources", headers=ah, json={
+                  "name": "ipos_sales", "entity": "LAD"}).status_code == 409)
 
         section("params removed")
         check("GET /api/params returns 404",

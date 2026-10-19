@@ -13,6 +13,11 @@ Checks:
   4. every DATASOURCES entry is registered for the rule's entity
   5. every ctx.table() in the SQL is registered, whether declared or not
   6. a declared ENTITY matches the one the rule is registered under
+
+Check 4 reads the live catalogue, so retiring a datasource stops a NEW rule
+referencing it. That is the enforcement point for the admin's decision - a rule
+that has already been validated against a table keeps running, because silently
+breaking a live control is worse than leaving it visible.
 """
 
 from __future__ import annotations
@@ -25,7 +30,7 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.engine.datasources import registry_for
+from app.engine.catalog import database_catalog
 from app.engine.loader import load_rule
 
 # Imports a rule may legitimately use.
@@ -100,12 +105,12 @@ class RuleValidator:
         result.errors.extend(scan_errors)
 
         # --- 4: datasources must exist for this entity --------------------
-        try:
-            known = set(registry_for(self.entity).keys())
-        except KeyError as exc:
-            result.status = "invalid"
-            result.errors.append(str(exc))
-            return result
+        # The catalogue, not a constant: an admin who retires a table must be
+        # able to stop a NEW rule referencing it. A rule that already reads a
+        # retired table keeps running - that is the admin's decision to make,
+        # and retirement deliberately does not break what already works.
+        catalog = await database_catalog(session)
+        known = set(catalog.names_for(self.entity))
 
         # Check BOTH the declared DATASOURCES list and every ctx.table("x")
         # found in the SQL. Checking only the declaration lets a rule smuggle

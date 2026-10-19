@@ -31,7 +31,7 @@ from datetime import date
 from pathlib import Path
 
 from app.engine.ctx import RuleContext
-from app.engine.datasources import registry_for
+from app.engine.catalog import SnapshotCatalog
 from app.engine.loader import load_rule_at
 from app.engine.snapshot import RULE_COPY_NAME, Snapshot
 from app.engine.ticketing import run_outcome_for, run_status_for
@@ -127,11 +127,16 @@ def replay(folder: Path, *, save_to: str | None = None) -> int:
     recorded = _load_result(folder)
     try:
         module = load_rule_at(rule_path)
+        # The snapshot's own tables, not the live catalogue. A replay answers
+        # "what did that run see" - and if a table has since been retired, a
+        # replay that consulted today's catalogue would fail on a run that was
+        # perfectly valid. It also keeps replay working with no database.
+        frozen = SnapshotCatalog(snap.entity, snap.tables.keys())
         ctx = RuleContext(
             data_date=snap.data_date,
             lookback_days=snap.lookback_days,
             rule_name=snap.rule_code,
-            registered=list(registry_for(snap.entity).keys()),
+            registered=sorted(frozen.names_for(snap.entity)),
             snapshot=snap,
         )
         result = module.run(ctx)

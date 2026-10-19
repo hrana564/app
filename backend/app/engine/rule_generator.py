@@ -16,7 +16,8 @@ import csv
 from datetime import date
 from typing import Any
 
-from app.engine.datasources import ENTITIES, SYSTEMS_BY_ENTITY, registry_for
+from app.engine.catalog import Catalog
+from app.engine.datasources import ENTITIES, SYSTEMS_BY_ENTITY
 from app.settings import settings
 
 CONTRACT_INSTRUCTIONS = """\
@@ -177,16 +178,17 @@ def _sample_csv(
     return "\n".join([line(header), *(line(r) for r in data)])
 
 
-def sample_datasources(entity: str, data_date: date, limit: int = 3) -> str:
+def sample_datasources(
+    catalog: Catalog, entity: str, data_date: date, limit: int = 3
+) -> str:
     """Render declared columns plus real sample rows so the LLM cannot invent fields."""
-    registry = registry_for(entity)
     base = settings.sourcedata_dir / entity.upper()
     if not base.exists():
         return "(SourceData not generated yet - run scripts/make_sample_data.py)"
 
     blocks: list[str] = []
-    for name in sorted(registry):
-        src = registry[name]
+    for src in catalog.entries_for(entity):
+        name = src.name
         cols = ", ".join(f"{c} {t}" for c, t in src.columns.items())
         block = (
             f"### {name}\n"
@@ -206,7 +208,9 @@ def sample_datasources(entity: str, data_date: date, limit: int = 3) -> str:
     return "\n\n".join(blocks)
 
 
-def build_prompt(natural_language: str, entity: str, data_date: date) -> str:
+def build_prompt(
+    catalog: Catalog, natural_language: str, entity: str, data_date: date
+) -> str:
     return f"""
 {natural_language.strip()}
 
@@ -214,7 +218,7 @@ def build_prompt(natural_language: str, entity: str, data_date: date) -> str:
 CLIENT ENTITY: {ENTITIES.get(entity.upper(), entity)}
 AVAILABLE SYSTEMS: {', '.join(SYSTEMS_BY_ENTITY.get(entity.upper(), []))}
 AVAILABLE DATASOURCES (date {data_date.isoformat()})
-{sample_datasources(entity, data_date)}
+{sample_datasources(catalog, entity, data_date)}
 
 ---
 RULE CONTRACT
@@ -229,7 +233,9 @@ Write the Python module for the rule described above.
 """.strip()
 
 
-def generate_rule_source(prompt: str, entity: str, data_date: date) -> dict[str, Any]:
+def generate_rule_source(
+    catalog: Catalog, prompt: str, entity: str, data_date: date
+) -> dict[str, Any]:
     """Call the LLM and return {source, explanation, datasources_used}."""
     if not is_configured():
         raise RuntimeError(
@@ -257,7 +263,7 @@ def generate_rule_source(prompt: str, entity: str, data_date: date) -> dict[str,
                     "reference the datasources you are shown."
                 ),
             },
-            {"role": "user", "content": build_prompt(prompt, entity, data_date)},
+            {"role": "user", "content": build_prompt(catalog, prompt, entity, data_date)},
         ],
     )
 
@@ -267,14 +273,8 @@ def generate_rule_source(prompt: str, entity: str, data_date: date) -> dict[str,
 
     return {
         "source": source,
-        "explanation": _explain_usage(source, entity),
-        "datasources_used": sorted(
-            {
-                n
-                for n in registry_for(entity)
-                if f'"{n}"' in source or f'ctx.table("{n}")' in source
-            }
-        ),
+        "explanation": _explain_usage(source, catalog, entity),
+        "datasources_used": _tables_referenced_by(source, catalog, entity),
     }
 
 
@@ -310,34 +310,35 @@ def _validate_shape(source: str) -> None:
         raise ValueError("Generated rule rejected - " + "; ".join(problems))
 
 
-def _explain_usage(source: str, entity: str) -> str:
-    used = sorted(
-        {
-            n
-            for n in registry_for(entity)
-            if f'"{n}"' in source or f'ctx.table("{n}")' in source
-        }
+def _tables_referenced_by(source: str, catalog: Catalog, entity: str) -> list[str]:
+    return sorted(
+        n
+        for n in catalog.names_for(entity)
+        if f'"{n}"' in source or f'ctx.table("{n}")' in source
     )
+
+
+def _explain_usage(source: str, catalog: Catalog, entity: str) -> str:
+    used = _tables_referenced_by(source, catalog, entity)
     if not used:
         return "No registered datasource referenced - check the generated logic."
     return "Reads: " + ", ".join(used)
 
 
-def preview_context(entity: str, data_date: date) -> dict[str, Any]:
+def preview_context(catalog: Catalog, entity: str, data_date: date) -> dict[str, Any]:
     """What the LLM will be shown - also handy for debugging in the UI."""
-    registry = registry_for(entity)
     return {
         "entity": entity,
         "entity_name": ENTITIES.get(entity.upper(), entity),
         "systems": SYSTEMS_BY_ENTITY.get(entity.upper(), []),
         "data_date": data_date.isoformat(),
         "datasources": {
-            name: {
+            src.name: {
                 "system": src.system,
                 "grain": src.grain,
                 "columns": src.columns,
             }
-            for name, src in registry.items()
+            for src in catalog.entries_for(entity)
         },
         "llm_configured": is_configured(),
     }

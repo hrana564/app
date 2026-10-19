@@ -33,8 +33,17 @@ from pathlib import Path
 
 from faker import Faker
 
-APP_ROOT = Path(__file__).resolve().parent.parent.parent
+BACKEND_DIR = Path(__file__).resolve().parent.parent
+APP_ROOT = BACKEND_DIR.parent
 SOURCEDATA_DIR = APP_ROOT / "mount" / "SourceData"
+
+# The catalogue seeder imports app.db and the ORM models. This script generates
+# CSVs and is otherwise pure filesystem work, so the backend only goes on the
+# path inside seed_catalog() rather than at import time.
+if str(BACKEND_DIR) not in sys.path:
+    sys.path.insert(0, str(BACKEND_DIR))
+if str(Path(__file__).resolve().parent) not in sys.path:
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 DAYS = [
     date(2026, 10, 15),
@@ -618,6 +627,67 @@ def _write(entity: str, day: date, table: str, rows: list[dict]) -> None:
         writer.writerows(rows)
 
 
+def seed_catalog(verbose: bool = True) -> int:
+    """Write the starting datasource catalogue into the database.
+
+    The catalogue is DATA now - an admin owns it from the Data Sources screen -
+    so a fresh database needs seeding rather than deriving it on first read. That
+    change is why this exists: `GET /api/datasources` used to silently mirror a
+    hardcoded registry into the table on every call.
+
+    Idempotent. An existing row is left exactly as the admin left it, including
+    a retirement, so re-running the generator never resurrects a table somebody
+    deliberately switched off.
+    """
+    import asyncio
+
+    from sqlalchemy import select
+
+    from app.db import SessionLocal, init_models
+    from app.models import Datasource
+
+    from seed_datasources import SEED_SOURCES
+
+    async def run() -> int:
+        await init_models()
+        async with SessionLocal() as session:
+            existing = {
+                (entity, name)
+                for entity, name in (
+                    await session.execute(select(Datasource.entity, Datasource.name))
+                ).all()
+            }
+            added = 0
+            for src in SEED_SOURCES:
+                if (src["entity"], src["name"]) in existing:
+                    continue
+                session.add(
+                    Datasource(
+                        name=src["name"],
+                        entity=src["entity"],
+                        system=src["system"],
+                        description=src["description"],
+                        path_template=(
+                            f"mount/SourceData/{src['entity']}/{{date}}/{src['name']}.csv"
+                        ),
+                        grain=src["grain"],
+                        columns=dict(src["columns"]),
+                        is_active=True,
+                    )
+                )
+                added += 1
+            if added:
+                await session.commit()
+            total = (
+                await session.execute(select(Datasource))
+            ).scalars().all()
+        if verbose:
+            print(f"  Datasource catalogue: {added} added, {len(total)} registered")
+        return 0
+
+    return asyncio.run(run())
+
+
 def main() -> int:
     # --- master data, stable across all days -------------------------------
     master_rng = random.Random("ABM-2026")
@@ -688,6 +758,11 @@ def main() -> int:
     print(f"  Planted cross-system bank matches: {len(shared_ibans)} "
           f"(hr_employees.bank_iban == bc_vendors.vendor_bank_iban)")
     print(f"  Output: {SOURCEDATA_DIR}")
+    print()
+
+    # The CSVs on disk are not the catalogue. An admin registers what we consume
+    # from the Data Sources screen, so the two are deliberately separate steps.
+    seed_catalog()
     return 0
 
 

@@ -23,8 +23,10 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Query
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
+from starlette.concurrency import run_in_threadpool
 
 from app.api.deps import AdminUser, CurrentUser, SessionDep
+from app.engine.catalog import database_catalog
 from app.engine.loader import read_source, write_source
 from app.engine.rule_generator import (
     generate_rule_source,
@@ -190,9 +192,13 @@ async def generate_status(_user: CurrentUser) -> dict:
 
 @router.get("/generate/context")
 async def generate_context(
-    _user: CurrentUser, entity: str = "LAD", data_date: date | None = None
+    session: SessionDep,
+    _user: CurrentUser,
+    entity: str = "LAD",
+    data_date: date | None = None,
 ) -> dict:
-    return preview_context(entity.upper(), data_date or _latest_data_date(entity))
+    catalog = await database_catalog(session)
+    return preview_context(catalog, entity.upper(), data_date or _latest_data_date(entity))
 
 
 @router.post("/generate", response_model=RuleGenerateResponse)
@@ -202,7 +208,10 @@ async def generate(
     """Prompt -> a new DRAFT rule. Never auto-approved."""
     entity = payload.entity.upper()
     target = payload.data_date or _latest_data_date(entity)
-    generated = generate_rule_source(payload.prompt, entity, target)
+    catalog = await database_catalog(session)
+    generated = await run_in_threadpool(
+        generate_rule_source, catalog, payload.prompt, entity, target
+    )
 
     seq = (
         await session.execute(select(func.count()).select_from(Rule))

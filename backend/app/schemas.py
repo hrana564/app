@@ -73,6 +73,12 @@ class TokenResponse(BaseModel):
 # Datasource
 # ---------------------------------------------------------------------------
 class DatasourceOut(BaseModel):
+    """A registered table.
+
+    `used_by`, `landing`, `row_count` and `last_seen` are derived at read time
+    and default to empty - they describe the moment of the request, not the row.
+    """
+
     id: int
     name: str
     entity: str
@@ -83,7 +89,59 @@ class DatasourceOut(BaseModel):
     columns: dict[str, Any]
     is_active: bool
 
+    used_by: list[str] = []
+    landing: str = "absent"          # landed | absent
+    row_count: int | None = None
+    last_seen: str | None = None
+
     model_config = {"from_attributes": True}
+
+
+class DatasourceRegister(BaseModel):
+    """Register a table the ETL delivered.
+
+    `columns` is optional: omitted means "read them from the file", which is
+    what an admin wants nine times out of ten.
+    """
+
+    name: str
+    entity: str
+    system: str = ""
+    description: str = ""
+    grain: str = ""
+    columns: dict[str, str] | None = None
+    data_date: str | None = None
+
+
+class DatasourceRetire(BaseModel):
+    # Retiring a table live rules still read is allowed, but only on purpose.
+    confirm_dependents: bool = False
+
+
+class DatasourceDiscovered(BaseModel):
+    """One CSV that landed, described entirely by reading the file."""
+
+    name: str
+    entity: str
+    data_date: str
+    columns: dict[str, str]
+    column_count: int
+    row_count: int
+    size_bytes: int
+    modified_at: datetime
+    state: str                        # new | registered | retired
+
+
+class DatasourceOverview(BaseModel):
+    """Everything the screen needs, in one response."""
+
+    entity: str
+    entity_name: str
+    systems: list[str]
+    data_date: str
+    dates: list[str]
+    registered: list[DatasourceOut]
+    discovered: list[DatasourceDiscovered]
 
 
 # ---------------------------------------------------------------------------

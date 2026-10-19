@@ -202,6 +202,48 @@ export interface EntityOut {
   systems: string[];
 }
 
+/** One registered table, plus what we know about it right now. */
+export interface DatasourceRow {
+  id: number;
+  name: string;
+  entity: string;
+  system: string;
+  description: string;
+  path_template: string;
+  grain: string;
+  columns: Record<string, string>;
+  is_active: boolean;
+  /** Active rules that read this table. The answer to "what breaks if I retire it". */
+  used_by: string[];
+  /** "landed" when the ETL delivered the file for the requested day, else "absent". */
+  landing: "landed" | "absent";
+  row_count: number | null;
+  last_seen: string | null;
+}
+
+/** One CSV on disk, described entirely by reading the file. */
+export interface DiscoveredFile {
+  name: string;
+  entity: string;
+  data_date: string;
+  columns: Record<string, string>;
+  column_count: number;
+  row_count: number;
+  size_bytes: number;
+  modified_at: string;
+  state: "new" | "registered" | "retired";
+}
+
+export interface DatasourceOverview {
+  entity: string;
+  entity_name: string;
+  systems: string[];
+  data_date: string;
+  dates: string[];
+  registered: DatasourceRow[];
+  discovered: DiscoveredFile[];
+}
+
 // --- custom endpoints used by the UI ---------------------------------------
 export const api = {
   login: (username: string, password: string) =>
@@ -335,8 +377,52 @@ export const api = {
 
   listDatasources: () => request<any[]>("/api/datasources"),
 
+  /**
+   * Everything the datasources screen shows, in ONE call: what is registered,
+   * what the ETL delivered today, and which rules read each table.
+   *
+   * One request rather than one per table - the same N+1 that used to make the
+   * rules screen issue a schedule fetch per row.
+   */
+  datasourceOverview: (entity: string, dataDate?: string) =>
+    request<DatasourceOverview>(
+      `/api/datasources/overview?entity=${entity}` +
+        (dataDate ? `&data_date=${dataDate}` : ""),
+    ),
+
+  registerDatasource: (payload: {
+    name: string;
+    entity: string;
+    system?: string;
+    description?: string;
+    grain?: string;
+    columns?: Record<string, string>;
+  }) =>
+    request<any>("/api/datasources", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+
+  /**
+   * Retire rather than delete. Refuses with 409 while active rules still read
+   * the table, which is why the caller has to handle the dependency warning
+   * rather than firing and forgetting.
+   */
+  retireDatasource: (id: number, confirmDependents = false) =>
+    request<any>(`/api/datasources/${id}/retire`, {
+      method: "POST",
+      body: JSON.stringify({ confirm_dependents: confirmDependents }),
+    }),
+
+  restoreDatasource: (id: number) =>
+    request<any>(`/api/datasources/${id}/restore`, { method: "POST" }),
+
+  /** Hard delete. Refused with 409 while an active rule still reads the table. */
+  deleteDatasource: (id: number) =>
+    request<void>(`/api/datasources/${id}`, { method: "DELETE" }),
+
   availableDates: (entity: string) =>
-    request<{ dates: string[]; root: string }>(
+    request<{ dates: string[]; root: string; latest: string | null }>(
       `/api/datasources/available-dates?entity=${entity}`,
     ),
 

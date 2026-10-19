@@ -426,8 +426,33 @@ not exist"* is a warning **before** a scheduled run silently defaults it.
 
 ## 5. Datasources & cross-system joins
 
-Each entity has its own registry (`backend/app/engine/datasources.py`). A rule only ever sees its
-own entity's tables, so a Laduree rule cannot accidentally read ABM data.
+The catalogue lives in the **`datasources` table**, and an admin owns it from the **Data Sources**
+screen. It is not code.
+
+The shared contract with the ETL team is deliberately tiny — a folder and a
+filename. They push CSVs to `mount/SourceData/<ENTITY>/<date>/<name>.csv` and know nothing about this
+app. The app reads that folder on demand, reports what it finds, and an admin decides what to register:
+
+```
+ETL → CSVs land → Data Sources screen → admin registers or retires → rules may read them
+```
+
+Discovery reads the CSV header, so **columns and types are read from the file the ETL actually
+delivered** rather than typed by hand. Registering a table is the moment a file stops being somebody
+else's problem and becomes something rules may reference as `ctx.table("name")`.
+
+| Action | Effect |
+|---|---|
+| **Register** | the table becomes referenceable by new rules |
+| **Retire** | no new rule may reference it; existing rules keep running, reversibly |
+| **Remove** | deletes the registration. Refused while any active rule reads the table |
+
+Retiring is reversible and refuses to proceed silently when live rules depend on it — the screen names
+them and explains that they will fail once the ETL stops sending the file, rather than quietly
+reporting clean days. Hard removal is refused outright in that case, because a rule's recorded history
+outlives the row.
+
+A rule only ever sees its own entity's tables, so a Laduree rule cannot accidentally read ABM data.
 
 | Entity | System | Tables |
 |---|---|---|
@@ -599,9 +624,11 @@ app/
 │   │   ├── api/
 │   │   │   ├── deps.py             auth + role gating
 │   │   │   ├── auth.py  rules.py  schedules.py  runs.py  tickets.py
-│   │   │   └── datasources.py
+│   │   │   └── datasources.py      register / retire / remove + the one-call overview
 │   │   └── engine/
-│   │       ├── datasources.py      per-entity registry
+│   │       ├── catalog.py          THE CONTRACT: what an entity may read
+│   │       ├── discovery.py        what the ETL landed. Filesystem only.
+│   │       ├── datasources.py      client entities only (LAD/ABM and their systems)
 │   │       ├── ctx.py              RuleContext: a table -> a polars DataFrame
 │   │       ├── snapshot.py         stage one run's inputs. No ORM, no DB.
 │   │       ├── loader.py           rule file load/save
@@ -726,9 +753,15 @@ All endpoints except `/health`, `/api/auth/login` and `/api/dashboard` require
 | GET | `/api/tickets/{id}` | any | One ticket |
 | POST | `/api/tickets/{id}/acknowledge` | **any** | `{status, note}` |
 | POST | `/api/tickets/{id}/reopen` | any | Back to open |
-| GET | `/api/datasources` | any | Registry (+ `?entity=`) |
+| GET | `/api/datasources` | any | Registered tables (+ `?entity=`) |
 | GET | `/api/datasources/entities` | any | The two entities and their systems |
-| GET | `/api/datasources/available-dates?entity=LAD` | any | Day folders present |
+| GET | `/api/datasources/overview?entity=&data_date=` | any | **One call** — registered tables, what the ETL delivered, and which rules read each |
+| GET | `/api/datasources/discovered?entity=&data_date=` | any | Just what is on disk, read from the CSV headers |
+| GET | `/api/datasources/available-dates?entity=LAD` | any | Day folders present, plus the latest |
+| POST | `/api/datasources` | admin | Register a table. Columns default to the file's header |
+| POST | `/api/datasources/{id}/retire` | admin | Reversible. 409 lists dependent rules unless `confirm_dependents` |
+| POST | `/api/datasources/{id}/restore` | admin | Undo a retirement |
+| DELETE | `/api/datasources/{id}` | admin | Permanent. 409 while any active rule reads the table |
 | GET | `/api/dashboard` | — | Aggregated counters (unauthenticated, for the login screen) |
 
 ---
@@ -955,9 +988,11 @@ cd backend
 .\.venv\Scripts\python.exe scripts\smoke_test.py
 ```
 
-**128 assertions** covering: health, both logins, rejection of bad credentials and missing tokens,
+**165 assertions** covering: health, both logins, rejection of bad credentials and missing tokens,
 RBAC for every admin-only endpoint, both entities and their systems, datasource listing,
-parameters, rule registration, **validate → activate gate**, source and version round-trip,
+**the admin's catalogue workflow** (discover what the ETL delivered, columns read from the CSV header,
+register, retire, restore, and the refusals for removing a table live rules read), rule registration,
+**validate → activate gate**, source and version round-trip,
 per-entity isolation, clean-day pass / breach-day fail for all four rules, both cross-system joins,
 ticket numbering, JSON serialisation of timestamps, acknowledge → double-ack rejection → reopen,
 **friendly cadence** (preview derivation, timezone correctness, and rejection of day 31,
@@ -969,10 +1004,10 @@ run that did not execute has none, and `?status=` and `?outcome=` filter separat
 ledger and the version each run was produced by, dashboard and generation status.
 
 ```
-RESULT: 128 passed, 0 failed
+RESULT: 165 passed, 0 failed
 ```
 
-The suite is **idempotent** — run it twice and it still reports 128/128. The deduplication
+The suite is **idempotent** — run it twice and it still reports 165/165. The deduplication
 assertions work on ticket *identity* rather than absolute counts, so a previous run's tickets don't
 make the next run fail.
 
@@ -1015,5 +1050,6 @@ The source requirements workbook has an `ABM` sheet and an `FSCS` sheet. The FSC
 *bar items, recipe management, lab production, events and stock counts* — that is a food-service
 audit universe, which matches **Laduree**. This build treats the two client entities as
 `LAD` (Laduree) and `ABM` (Al Boom Marine). If FSCS is in fact a third client, it needs its own
-entry in `REGISTRY_BY_ENTITY` and its own `SourceData/FSCS/` tree — the registry is keyed by
-entity precisely so this is additive.
+entry in `ENTITIES` and `SYSTEMS_BY_ENTITY` in `app/engine/datasources.py`, plus its own
+`SourceData/FSCS/` tree. Once that exists, registering its tables needs no code at all — the
+admin does it from the Data Sources screen, exactly as for LAD and ABM.

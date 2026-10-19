@@ -50,9 +50,9 @@ export const App = () => (
     />
     <Resource
       name="datasources"
-      list={() => <DatasourceList />}
+      list={DatasourceList}
       icon={StorageIcon}
-      options={{ label: "Data Sources" }}
+      options={{ label: "Data Sources", recordRepresentation: false }}
     />
   </Admin>
 );

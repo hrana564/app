@@ -117,6 +117,71 @@ that is not one."*
 | `snapshot.py` does no ORM and no DB work | `backend/app/engine/` | A run's inputs are frozen before the rule sees them. That is what makes `replay` work with no database and no network. |
 | The runner and replay share the mapping | see §2 | Otherwise replay reports differences that aren't real. |
 | Rules may only `import` from the allow-list | `app/engine/validation.py` | Enforced by AST scan, not convention. |
+| The catalogue lives in the `datasources` table, not in `app/` | see §3a | A module under `app/` that also answered "what tables exist" would be a second source of truth, and the two would drift the first time an admin registered something. |
+| Consumers take a `Catalog`, never a storage mechanism | `app/engine/catalog.py` | Keeps the ETL, the catalogue, the rules and the runner decoupled. See §3a. |
+
+### 3a. The pipeline, and why each stage is decoupled
+
+```
+ETL team ──writes CSVs──> mount/SourceData/<ENTITY>/<date>/*.csv
+                                    │
+                            engine/discovery.py      filesystem only
+                                    │  admin registers what we consume
+                                    ▼
+                          the datasources table       ← one catalogue
+                                    │
+                                    ▼
+                            engine/catalog.py         the only contract
+                                    │
+     ┌──────────────┬───────────────┼──────────────┬─────────────────┐
+   rules          runs           replay      rule_generator        UI
+(validate)    (ctx.table)   (own snapshot)    (LLM prompt)     (admin)
+```
+
+Each stage knows only the stage before it, and the only thing crossing the
+boundary is a **table name**.
+
+**The ETL knows nothing about us.** The entire shared contract is a folder
+convention: `<ENTITY>/<date>/<name>.csv`. Discovery reads that folder and reports
+it; there is no callback, no handshake, and no shared schema. Another team can
+rewrite their ETL in another language and this app does not notice.
+
+**The catalogue is data, so an admin owns it.** It used to be eighteen
+hardcoded `Source(...)` definitions in `app/engine/datasources.py`, and that was
+a trap: the module was the enforcement point for `ctx.table()`, while the
+database held a mirror no enforcement read. An admin could retire a table in the
+UI and every rule would carry on reading it. The registry now lives in the
+`datasources` table, and `app/engine/datasources.py` holds only client identity
+(`ENTITIES`, `SYSTEMS_BY_ENTITY`). `scripts/seed_datasources.py` seeds a fresh
+database and is never imported by the running app.
+
+**Consumers take a `Catalog`, never a storage mechanism.** `engine/catalog.py`
+exposes exactly two methods — `names_for(entity)` and `entries_for(entity)`.
+Two implementations satisfy it:
+
+| Implementation | Answers | Used by |
+|---|---|---|
+| `DatabaseCatalog` | what an admin has registered and not retired | validation, runner, generator |
+| `SnapshotCatalog` | what one frozen run was given | replay |
+
+Replay uses `SnapshotCatalog` **on purpose**. Consulting the live catalogue would
+mean a run from last week could not be reproduced after a table was retired, and
+it would break the "replay works with no database" property. The manifest is the
+record of what that run read, so it is the only honest answer.
+
+### Retiring is not deleting
+
+`is_active=False` stops a table being offered to new rules. It does not touch a
+rule already reading it, because silently breaking a live control is worse than
+leaving it visible — and the ETL switching a feed off will surface it as a
+failed run, which is the correct outcome.
+
+Both destructive paths refuse while an active rule declares the table:
+
+| Action | Refuses at | Because |
+|---|---|---|
+| retire | 409, unless `confirm_dependents` | you may still want to stop offering it |
+| delete | 409, always | a rule's recorded history would outlive the row |
 
 ### Normalise — join, don't duplicate
 

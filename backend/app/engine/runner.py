@@ -36,7 +36,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.engine.ctx import RuleContext
-from app.engine.datasources import registry_for
+from app.engine.catalog import database_catalog
 from app.engine.loader import load_rule
 from app.engine.snapshot import capture
 from app.engine.ticketing import raise_ticket, run_outcome_for, run_status_for
@@ -143,12 +143,16 @@ async def execute_rule(
         module = load_rule(rule.source_file, settings.rules_dir)
         fn = module.run
 
+        # What this entity may read, read once per run and closed over. The
+        # rule thread below never touches the database - it only gets names.
+        allowed = sorted((await database_catalog(session)).names_for(rule.entity))
+
         def work() -> tuple[dict[str, Any], list[str]]:
             ctx = RuleContext(
                 data_date=data_date,
                 lookback_days=rule.lookback_days,
                 rule_name=rule.name,
-                registered=list(registry_for(rule.entity).keys()),
+                registered=allowed,
                 snapshot=snap,
             )
             return fn(ctx), ctx.logs

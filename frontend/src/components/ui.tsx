@@ -257,11 +257,14 @@ export const RowsTable = ({
   rows,
   emptyLabel = "No exception rows.",
   maxColumns = 14,
+  types,
   caption,
 }: {
   rows: Record<string, unknown>[];
   emptyLabel?: string;
   maxColumns?: number;
+  /** Column name -> type, shown under the header rather than beside it. */
+  types?: Record<string, string>;
   caption?: React.ReactNode;
 }) => {
   if (!rows || rows.length === 0) {
@@ -296,6 +299,20 @@ export const RowsTable = ({
                 }}
               >
                 {c.replace(/_/g, " ")}
+                {/* The type belongs under the name it describes. On the same
+                    line it reads as "EMPLOYEE ID VARCHAR", and a column list
+                    drawn elsewhere on the screen then says it a second time. */}
+                {types?.[c] && (
+                  <Box
+                    sx={{
+                      display: "block", fontFamily: "monospace", fontWeight: 400,
+                      textTransform: "none", letterSpacing: 0,
+                      color: "#8d99ae", mt: 0.25,
+                    }}
+                  >
+                    {types[c]}
+                  </Box>
+                )}
               </Box>
             ))}
           </Box>

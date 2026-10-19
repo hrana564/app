@@ -227,6 +227,8 @@ export interface DatasourcePreview {
   data_date: string;
   /** Rows in the whole file, so the screen can say "10 of 4,318". */
   total_rows: number | null;
+  /** Column name -> type, read from the file. Shown under each header. */
+  columns: Record<string, string>;
   rows: Record<string, string | null>[];
   limit: number;
 }

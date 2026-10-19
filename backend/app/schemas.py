@@ -101,12 +101,17 @@ class DatasourcePreview(BaseModel):
 
     `total_rows` is the whole file while `limit` is how much of it is shown, so
     the screen can say "10 of 4,318" rather than implying it is all of it.
+
+    `columns` rides along with `rows` because the type belongs beside the name it
+    describes. Returning them separately just meant the screen drew two lists of
+    the same columns.
     """
 
     entity: str
     name: str
     data_date: str
     total_rows: int | None = None
+    columns: dict[str, str] = {}
     rows: list[dict[str, str | None]] = []
     limit: int = 10
 

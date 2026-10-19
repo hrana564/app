@@ -347,7 +347,6 @@ const RegisteredTable = ({
                           </Typography>
                         )}
                         <DataPreview entity={row.entity} name={row.name} day={row.last_seen} />
-                        <ColumnGrid columns={row.columns} />
                         <Typography
                           variant="caption"
                           sx={{ display: "block", mt: 1.5, fontFamily: "monospace" }}
@@ -433,10 +432,13 @@ const DataPreview = ({ entity, name, day }: {
           {`first ${data.rows.length} of ${data.total_rows ?? "?"} rows · ${data.data_date}`}
         </Typography>
       </Stack>
+      {/* Types ride under the column headers rather than in a second list.
+          A column grid below this said name-and-type again, one screen lower. */}
       <RowsTable
         rows={data.rows}
         emptyLabel="No rows."
         maxColumns={40}
+        types={data.columns}
         caption={null}
       />
     </Box>
@@ -586,7 +588,13 @@ const StateChip = ({ state }: { state: DiscoveredFile["state"] }) => {
 };
 
 /**
- * Columns as a compact grid rather than one chip each. Chip-per-column turned a
+ * Name and type side by side.
+ *
+ * Lives here, in the Register dialog, and nowhere else. A registered table
+ * shows its types under the sample-data headers instead - drawing both meant
+ * every expanded row listed its columns twice, one screen lower.
+ *
+ * A compact grid rather than one chip each: chip-per-column turned a
  * nine-column table into a paragraph and made a seventy-chip card unreadable.
  */
 const ColumnGrid = ({ columns }: { columns: Record<string, string> }) => {

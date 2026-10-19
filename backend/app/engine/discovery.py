@@ -106,25 +106,39 @@ def describe_csv(path: Path, entity: str, data_date: str) -> DiscoveredFile | No
     )
 
 
-def preview_rows(path: Path, limit: int = 10) -> list[dict[str, str | None]]:
-    """The first `limit` rows, as JSON-safe strings.
+@dataclass(frozen=True)
+class Preview:
+    """A sample of one file: what its columns are, and a few rows of it."""
+
+    columns: dict[str, str]
+    rows: list[dict[str, str | None]]
+
+
+def read_preview(path: Path, limit: int = 10) -> Preview:
+    """The first `limit` rows and the file's column types, in one read.
 
     A preview exists so an admin can see what the ETL actually sent before
-    trusting a table with a rule. Strings, because this crosses JSON: a Polars
-    timestamp or a NaN is not serialisable, and a column that renders as `NaN`
-    down its length is itself worth seeing.
+    trusting a table with a rule. The types come back with the rows because the
+    screen shows them in the same header - one list of columns, not two.
+
+    Values are strings because this crosses JSON: a Polars timestamp or a NaN is
+    not serialisable, and a column that renders as `NaN` down its length is
+    itself worth seeing.
 
     Reading is bounded by `limit`, so the cost does not grow with the file.
     """
     try:
         frame = pl.read_csv(path, n_rows=limit)
     except Exception:  # noqa: BLE001 - a malformed file is a finding, not a crash
-        return []
+        return Preview(columns={}, rows=[])
 
-    return [
-        {key: None if value is None else _as_text(value) for key, value in record.items()}
-        for record in frame.to_dicts()
-    ]
+    return Preview(
+        columns={name: str(dtype) for name, dtype in frame.schema.items()},
+        rows=[
+            {key: None if value is None else _as_text(value) for key, value in record.items()}
+            for record in frame.to_dicts()
+        ],
+    )
 
 
 def _as_text(value: object) -> str:

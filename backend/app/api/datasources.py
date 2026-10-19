@@ -48,7 +48,7 @@ from app.engine.discovery import (
     discover,
     entity_root,
     latest_date,
-    preview_rows,
+    read_preview,
 )
 from app.models import Datasource, Rule
 from app.schemas import (
@@ -123,12 +123,15 @@ async def preview(
             404, f"{name}.csv did not land for {code} on {day or '(no day)'}"
         )
 
+    sample = read_preview(path, limit)
+
     return DatasourcePreview(
         entity=code,
         name=name,
         data_date=day,
         total_rows=_row_count(path),
-        rows=preview_rows(path, limit),
+        columns=sample.columns,
+        rows=sample.rows,
         limit=limit,
     )
 

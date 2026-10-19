@@ -2,28 +2,31 @@
 Datasources - the boundary between "the ETL landed files" and "rules may read
 these tables".
 
-    GET  /entities            the two client entities
-    GET  /                    registered tables, flat
-    GET  /overview            registered + what landed today, in ONE call
-    GET  /available-dates     days that have a folder
-    POST /                    register a table the ETL delivered
-    POST /{id}/retire         stop offering it to new rules
-    POST /{id}/restore        undo a retirement
+    GET    /entities          the two client entities
+    GET    /                  registered tables, flat
+    GET    /overview          registered + what landed today, in ONE call
+    GET    /discovered        just what is on disk, read from the CSV headers
+    GET    /available-dates   days that have a folder
+    POST   /                  register a table the ETL delivered
+    DELETE /{id}              remove a registration
 
 The overview endpoint exists so the screen never fans out into one request per
 table. Everything it returns is read in the same pass.
 
-RETIRE, NOT DELETE
-------------------
-A retired table keeps its row, its columns and its history; it simply stops
-being offered. Three reasons, in order of weight:
+REMOVE, AND NOTHING ELSE
+------------------------
+A table is either registered or it is not. There is no third state.
 
-  - a rule already reading it must keep running until someone deals with it,
-    and a hard delete would leave that rule referencing a name that resolves to
-    nothing
-  - "we used to consume this" is the answer the ETL team needs when deciding
-    what to switch off
-  - a retirement is a mistake someone will make, and it must be undoable
+An earlier version had `retire` - reversible, and refused while live rules read
+the table. It was removed because it did not mean what its dialog claimed. The
+dialog said the rules "keep running" and would fail only once the ETL stopped
+sending the file. They do not: `ctx.table()` consults the catalogue, so a
+retired table is refused on the very next run, while the file is still sitting
+on disk. Retire and delete broke the same rules in the same way, so retire only
+added a second state and a reassuring message that was not true.
+
+Removal is refused outright while an active rule declares the table. That guard
+is the whole of the safety, and it is honest: nothing is silently half-removed.
 """
 
 from __future__ import annotations
@@ -44,7 +47,6 @@ from app.schemas import (
     DatasourceOut,
     DatasourceOverview,
     DatasourceRegister,
-    DatasourceRetire,
 )
 from app.settings import settings
 
@@ -155,7 +157,6 @@ async def overview(
                 path_template=row.path_template,
                 grain=row.grain,
                 columns=dict(row.columns or {}),
-                is_active=row.is_active,
                 used_by=usage.get(row.name, []),
                 landing="landed" if found else "absent",
                 row_count=found.row_count if found else None,
@@ -166,12 +167,7 @@ async def overview(
     discovered_out = []
     for name, found in landed.items():
         match = next((r for r in registered if r.name == name), None)
-        if match is None:
-            state = "new"
-        elif match.is_active:
-            state = "registered"
-        else:
-            state = "retired"
+        state = "registered" if match is not None else "new"
         discovered_out.append(
             DatasourceDiscovered(
                 name=name,
@@ -236,14 +232,7 @@ async def register_datasource(
         )
     ).scalar_one_or_none()
     if existing is not None:
-        # Re-registering a retired table is a restore, not a duplicate.
-        if existing.is_active:
-            raise HTTPException(409, f"'{name}' is already registered for {code}")
-        existing.is_active = True
-        existing.columns = dict(payload.columns or existing.columns or {})
-        await session.commit()
-        await session.refresh(existing)
-        return DatasourceOut.model_validate(existing)
+        raise HTTPException(409, f"'{name}' is already registered for {code}")
 
     columns = dict(payload.columns or {})
     if not columns:
@@ -260,58 +249,8 @@ async def register_datasource(
         path_template=f"mount/SourceData/{code}/{{date}}/{name}.csv",
         grain=payload.grain or "",
         columns=columns,
-        is_active=True,
     )
     session.add(row)
-    await session.commit()
-    await session.refresh(row)
-    return DatasourceOut.model_validate(row)
-
-
-@router.post("/{datasource_id}/retire", response_model=DatasourceOut)
-async def retire_datasource(
-    datasource_id: int, payload: DatasourceRetire, session: SessionDep, admin: AdminUser
-) -> DatasourceOut:
-    """Stop offering a table. Reversible, and refuses to hide a live dependency.
-
-    A table an active rule still reads is refused unless the admin confirms,
-    because retiring it will not stop that rule - the rule keeps running and
-    will start failing when the ETL stops sending the file. The 409 exists so
-    that consequence is a decision, not a surprise.
-    """
-    row = await session.get(Datasource, datasource_id)
-    if row is None:
-        raise HTTPException(404, "Datasource not found")
-    if not row.is_active:
-        return DatasourceOut.model_validate(row)
-
-    usage = await _rules_using(session, row.entity)
-    dependents = usage.get(row.name, [])
-    if dependents and not payload.confirm_dependents:
-        raise HTTPException(
-            409,
-            detail={
-                "message": f"{len(dependents)} active rule(s) still read '{row.name}'",
-                "dependents": dependents,
-                "hint": "Retiring does not stop those rules. They will fail once the ETL stops sending this file.",
-            },
-        )
-
-    row.is_active = False
-    await session.commit()
-    await session.refresh(row)
-    return DatasourceOut.model_validate(row)
-
-
-@router.post("/{datasource_id}/restore", response_model=DatasourceOut)
-async def restore_datasource(
-    datasource_id: int, session: SessionDep, admin: AdminUser
-) -> DatasourceOut:
-    """Undo a retirement. Nothing about the table changed, so nothing to rebuild."""
-    row = await session.get(Datasource, datasource_id)
-    if row is None:
-        raise HTTPException(404, "Datasource not found")
-    row.is_active = True
     await session.commit()
     await session.refresh(row)
     return DatasourceOut.model_validate(row)
@@ -321,17 +260,13 @@ async def restore_datasource(
 async def delete_datasource(
     datasource_id: int, session: SessionDep, admin: AdminUser
 ) -> None:
-    """Remove a registration for good. Only ever for a table no rule reads.
+    """Remove a registration. Only ever for a table no rule reads.
 
-    Retirement is the reversible answer and the right one for anything in use.
-    This is for the other case: a table that was registered by mistake, or one the
-    ETL has stopped sending, which would otherwise sit in the list forever as a
-    permanent red "absent".
-
-    A hard delete is refused while any active rule declares the table, because
-    the rule's own history records it as something it reads - and that record
-    would outlive the row. Retirement preserves the story; deletion must not
-    break it.
+    Refused outright while an active rule declares the table, and the 409 names
+    the rules. That refusal is the whole safety story: a rule's own history
+    records it as something it reads, and `ctx.table()` reads the catalogue, so
+    removing the row would break that rule on its very next run - immediately,
+    not eventually, and with the file still sitting on disk.
     """
     row = await session.get(Datasource, datasource_id)
     if row is None:
@@ -344,7 +279,7 @@ async def delete_datasource(
             detail={
                 "message": f"{row.name} is read by {len(dependents)} active rule(s)",
                 "dependents": dependents,
-                "hint": "Retire it instead - that stops new rules using it and keeps the history.",
+                "hint": "Change or remove those rules first — a rule that reads a table which is no longer registered fails on its next run.",
             },
         )
 

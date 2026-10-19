@@ -3,7 +3,6 @@ import {
   Alert, Autocomplete, Box, Chip, CircularProgress, Stack, TextField,
   Tooltip, Typography,
 } from "@mui/material";
-import BlockOutlinedIcon from "@mui/icons-material/BlockOutlined";
 import { api, type DatasourceRow } from "../dataProvider";
 import {
   inspectBinding, renderDeclaration, writeDeclaredDatasources,
@@ -26,10 +25,6 @@ import {
  * a rule can declare one table and read another, and that is precisely what the
  * static validator refuses to activate. Surfacing both means the admin sees the
  * gap before a run, not after.
- *
- * Retired tables are shown rather than hidden. A rule that already reads one
- * must be able to see that it does - hiding it would make the picker lie about
- * what the rule depends on.
  */
 export const DatasourcePicker = ({
   entity,
@@ -61,15 +56,7 @@ export const DatasourcePicker = ({
   // its real dependencies rather than appearing unbound.
   const selected = binding.unreadable ? binding.referenced : binding.declared;
 
-  const options = useMemo(
-    () => (rows ?? []).filter((r) => r.is_active),
-    [rows],
-  );
-
-  const retiredButSelected = useMemo(
-    () => (rows ?? []).filter((r) => !r.is_active && selected.includes(r.name)),
-    [rows, selected],
-  );
+  const options = useMemo(() => rows ?? [], [rows]);
 
   const unknown = selected.filter(
     (name) => rows !== null && !rows.some((r) => r.name === name),
@@ -163,16 +150,9 @@ export const DatasourcePicker = ({
           <Alert severity="error">
             <strong>{unknown.join(", ")}</strong>{" "}
             {unknown.length === 1 ? "is" : "are"} declared but not registered for{" "}
-            {entity}. Validation will refuse this rule — register the table on
-            the Data Sources screen, or remove it here.
-          </Alert>
-        )}
-
-        {retiredButSelected.length > 0 && (
-          <Alert severity="warning" icon={<BlockOutlinedIcon fontSize="small" />}>
-            <strong>{retiredButSelected.join(", ")}</strong>{" "}
-            {retiredButSelected.length === 1 ? "has" : "have"} been retired. This
-            rule keeps running, and will fail once the ETL stops sending the file.
+            {entity}. Validation will refuse this rule, and the rule would fail on
+            its next run — register the table on the Data Sources screen, or
+            remove it here.
           </Alert>
         )}
 
@@ -193,7 +173,6 @@ export const DatasourcePicker = ({
         )}
 
         {!unknown.length &&
-          !retiredButSelected.length &&
           !binding.undeclared.length &&
           !binding.unused.length &&
           !binding.unreadable && (

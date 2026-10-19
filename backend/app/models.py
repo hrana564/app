@@ -74,7 +74,8 @@ class Datasource(Base, TimestampMixin):
     path_template: Mapped[str] = mapped_column(String(255), nullable=False)
     grain: Mapped[str] = mapped_column(String(255), default="")
     columns: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, nullable=False)
-    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    # No is_active column. A table is either registered or it is not; there is no
+    # third state, so there is nothing for a flag to record.
 
 
 # ---------------------------------------------------------------------------

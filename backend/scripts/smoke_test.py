@@ -173,55 +173,23 @@ def main() -> int:
                        params={"entity": "LAD"}).json()
         probe_row = next((d for d in listed if d["name"] == probe), None)
         check("registered table is listed", probe_row is not None)
-        check("registered table is active", bool(probe_row) and probe_row["is_active"] is True)
         check("registered table keeps its declared columns",
               bool(probe_row) and probe_row["columns"] == {"id": "VARCHAR"},
               str(probe_row["columns"]) if probe_row else "missing")
+        check("a registered table carries no active flag - it is simply present",
+              bool(probe_row) and "is_active" not in probe_row)
         probe_id = probe_row["id"] if probe_row else None
 
         if probe_id is not None:
             check("auditor CANNOT register a datasource",
                   c.post("/api/datasources", headers=ud, json={
                       "name": "x", "entity": "LAD"}).status_code == 403)
-            check("auditor CANNOT retire a datasource",
-                  c.post(f"/api/datasources/{probe_id}/retire", headers=ud,
-                         json={}).status_code == 403)
+            check("auditor CANNOT remove a datasource",
+                  c.delete(f"/api/datasources/{probe_id}", headers=ud).status_code == 403)
 
-            ret = c.post(f"/api/datasources/{probe_id}/retire", headers=ah, json={})
-            check("admin can retire a table", ret.status_code == 200,
-                  f"{ret.status_code} {ret.text[:120]}")
-            check("retired row is inactive", ret.json()["is_active"] is False)
-            check("retiring is idempotent",
-                  c.post(f"/api/datasources/{probe_id}/retire", headers=ah,
-                         json={}).status_code == 200)
-
-            ov2 = c.get("/api/datasources/overview", headers=ud,
-                        params={"entity": "LAD"}).json()
-            check("a retired table stays visible, marked inactive",
-                  any(d["name"] == probe and d["is_active"] is False
-                      for d in ov2["registered"]))
-            if probe in landed:
-                check("a retired file shows as 'retired' in discovery",
-                      any(d["name"] == probe and d["state"] == "retired"
-                          for d in ov2["discovered"]))
-
-            res = c.post(f"/api/datasources/{probe_id}/restore", headers=ah, json={})
-            check("admin can restore a retired table", res.status_code == 200)
-            check("restored row is active again", res.json()["is_active"] is True)
-
-        # --- the guard that matters: retiring a table live rules read --------
-        sales = registered.get("ipos_sales")
-        if sales:
-            blocked = c.post(f"/api/datasources/{sales['id']}/retire", headers=ah, json={})
-            check("retiring a table live rules read is refused", blocked.status_code == 409,
-                  f"got {blocked.status_code}")
-            body = blocked.json().get("detail", {})
-            check("the refusal names the dependent rules",
-                  "LAD-CA-03" in (body.get("dependents") or []), str(body)[:160])
-            check("the refusal warns that the rules keep running",
-                  "keep running" in (body.get("hint") or "").lower()
-                  or "will fail" in (body.get("hint") or "").lower(),
-                  str(body.get("hint"))[:120])
+        # The refusal for a table live rules read is exercised in the rule-registration
+        # section, once rules actually exist. Asserting it here would DELETE a
+        # real seeded table on a fresh database, where nothing reads it yet.
 
         # --- hard delete, and the refusal that protects rule history --------
         if probe_id is not None:
@@ -241,13 +209,12 @@ def main() -> int:
             # puts a permanent phantom row in the admin's datasource list, and
             # the next run creates its own.
 
-        if sales:
-            refused = c.delete(f"/api/datasources/{sales['id']}", headers=ah)
-            check("removing a table live rules read is refused",
-                  refused.status_code == 409, f"got {refused.status_code}")
-            check("the refusal points at retiring instead",
-                  "etire" in str(refused.json().get("detail", {}).get("hint") or ""),
-                  str(refused.json().get("detail", {}).get("hint"))[:120])
+        check("removal is the only destructive verb - retire is gone",
+              c.post(f"/api/datasources/{probe_id}/retire", headers=ah,
+                     json={}).status_code == 404 if probe_id is not None else True)
+        check("and so is restore",
+              c.post(f"/api/datasources/{probe_id}/restore", headers=ah,
+                     json={}).status_code == 404 if probe_id is not None else True)
 
         check("unknown entity is rejected",
               c.get("/api/datasources/overview", headers=ud,
@@ -317,6 +284,30 @@ def main() -> int:
             check(f"{code} activated",
                   a.status_code == 200 and a.json()["status"] == "active",
                   f"{a.status_code} {a.text[:120]}")
+
+        # Now that rules exist and read ipos_sales, the removal guard can be
+        # exercised for real. Checked HERE rather than in the datasource section,
+        # where on a fresh database nothing reads the table yet and the DELETE
+        # would succeed and destroy seeded data.
+        sales_row = next(
+            (d for d in c.get("/api/datasources", headers=ud,
+                              params={"entity": "LAD"}).json()
+             if d["name"] == "ipos_sales"), None)
+        check("ipos_sales is registered for LAD", sales_row is not None)
+        if sales_row:
+            blocked = c.delete(f"/api/datasources/{sales_row['id']}", headers=ah)
+            check("removing a table live rules read is refused", blocked.status_code == 409,
+                  f"got {blocked.status_code}")
+            body = blocked.json().get("detail", {})
+            check("the refusal names the dependent rules",
+                  "LAD-CA-03" in (body.get("dependents") or []), str(body)[:160])
+            check("the refusal says the rule fails on its next run",
+                  "next run" in (body.get("hint") or "").lower(),
+                  str(body.get("hint"))[:140])
+            check("the refused table is still registered",
+                  any(d["name"] == "ipos_sales" for d in c.get(
+                      "/api/datasources", headers=ud,
+                      params={"entity": "LAD"}).json()))
 
         # ------------------------------------------------------------------ #
         # Versioning runs against a throwaway code, deleted at the end, so the

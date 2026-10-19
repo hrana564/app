@@ -34,10 +34,18 @@ already said what the schema should be.
 "C:\Program Files\PostgreSQL\18\bin\psql.exe" -U postgres \
   -c 'DROP DATABASE IF EXISTS "ABM_Audit_Portal"' -c 'CREATE DATABASE "ABM_Audit_Portal"'
 
-# 3. start the API  -> create_all runs on startup and builds the schema
-# 4. reseed
+# 3. empty the run folders - they are numbered from the same counter
+Get-ChildItem "mount\Rules_Executions" -Directory | Remove-Item -Recurse -Force
+
+# 4. start the API  -> create_all runs on startup and builds the schema
+# 5. reseed
 .\.venv\Scripts\python.exe scripts\make_sample_data.py
 ```
+
+Step 3 is not optional. `rule_runs` restarts its ids at 1 while
+`mount/Rules_Executions/` still holds folders `000001`..`000365`, and the
+snapshot guard refuses to overwrite one — so every run fails with
+`FileExistsError` and the smoke test blames the code. See §3a.
 
 ### Why, and when this stops being true
 
@@ -169,19 +177,44 @@ mean a run from last week could not be reproduced after a table was retired, and
 it would break the "replay works with no database" property. The manifest is the
 record of what that run read, so it is the only honest answer.
 
-### Retiring is not deleting
+### Remove, and nothing else
 
-`is_active=False` stops a table being offered to new rules. It does not touch a
-rule already reading it, because silently breaking a live control is worse than
-leaving it visible — and the ETL switching a feed off will surface it as a
-failed run, which is the correct outcome.
+A table is either registered or it is not. There is no third state, so
+`Datasource` has no `is_active` column.
 
-Both destructive paths refuse while an active rule declares the table:
+There was a `retire` action once — reversible, and refused while live rules read
+the table. It was removed because it did not mean what its dialog claimed. The
+dialog said the rules "keep running" and would fail only once the ETL stopped
+sending the file. They do not: `ctx.table()` consults the catalogue, so the very
+next run is refused while the file is still sitting on disk. Retire and remove
+broke the same rules in the same way, so retire only added a state and a
+reassurance that was untrue.
 
-| Action | Refuses at | Because |
-|---|---|---|
-| retire | 409, unless `confirm_dependents` | you may still want to stop offering it |
-| delete | 409, always | a rule's recorded history would outlive the row |
+`DELETE /api/datasources/{id}` is refused with a 409 naming the dependent rules.
+That refusal is the whole of the safety, and it is honest: nothing is left
+half-removed.
+
+### The reset clears the run folders too
+
+`mount/Rules_Executions/` is numbered from the same counter as `rule_runs`, and
+the snapshot guard refuses to overwrite an existing folder. Dropping the database
+without emptying that folder leaves new run ids colliding with old folders, and
+every run fails with:
+
+```
+snapshot failed: FileExistsError: run folder ... already exists
+```
+
+So the reset recipe in §1 needs one more line:
+
+```bash
+Get-ChildItem "mount\Rules_Executions" -Directory | Remove-Item -Recurse -Force
+```
+
+`-Directory`, not a `*` wildcard — the wildcard also takes `.gitkeep`.
+
+Without it the smoke test reports dozens of failures that look like a code bug
+and are not one.
 
 ### Normalise — join, don't duplicate
 

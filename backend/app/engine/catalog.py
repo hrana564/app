@@ -67,12 +67,11 @@ class Catalog(Protocol):
 
 
 class DatabaseCatalog:
-    """The live catalogue: registered tables that are not retired.
+    """The live catalogue: every table an admin has registered.
 
-    Retired tables are absent rather than flagged, because the question a rule
-    asks is "may I read this", and the answer for a retired table is no. Keeping
-    them here with a flag would push that check into every caller, which is how
-    one caller eventually forgets it.
+    No filtering. A table is either in the catalogue or it has been removed, and
+    removal is refused while a rule reads it - so there is no third state for
+    this class to interpret.
     """
 
     def __init__(self, entries: Iterable[CatalogEntry]):
@@ -139,7 +138,7 @@ async def database_catalog(session: Any) -> DatabaseCatalog:
                 Datasource.description,
                 Datasource.grain,
                 Datasource.columns,
-            ).where(Datasource.is_active.is_(True))
+            )
         )
     ).all()
 

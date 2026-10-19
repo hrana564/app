@@ -87,7 +87,6 @@ class DatasourceOut(BaseModel):
     path_template: str
     grain: str
     columns: dict[str, Any]
-    is_active: bool
 
     used_by: list[str] = []
     landing: str = "absent"          # landed | absent
@@ -111,11 +110,6 @@ class DatasourceRegister(BaseModel):
     grain: str = ""
     columns: dict[str, str] | None = None
     data_date: str | None = None
-
-
-class DatasourceRetire(BaseModel):
-    # Retiring a table live rules still read is allowed, but only on purpose.
-    confirm_dependents: bool = False
 
 
 class DatasourceDiscovered(BaseModel):

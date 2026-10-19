@@ -672,7 +672,6 @@ def seed_catalog(verbose: bool = True) -> int:
                         ),
                         grain=src["grain"],
                         columns=dict(src["columns"]),
-                        is_active=True,
                     )
                 )
                 added += 1

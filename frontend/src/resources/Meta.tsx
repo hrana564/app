@@ -9,8 +9,8 @@ import BlockOutlinedIcon from "@mui/icons-material/BlockOutlined";
 import CheckCircleOutlineIcon from "@mui/icons-material/CheckCircleOutline";
 import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
 import ErrorOutlineIcon from "@mui/icons-material/ErrorOutline";
+import LockOutlinedIcon from "@mui/icons-material/LockOutlined";
 import StorageIcon from "@mui/icons-material/Storage";
-import UndoIcon from "@mui/icons-material/Undo";
 import { useNotify } from "react-admin";
 import { EntityChip } from "../components/ui";
 import {
@@ -46,7 +46,6 @@ export const DatasourceList = () => {
   const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [registering, setRegistering] = useState<DiscoveredFile | null>(null);
-  const [retiring, setRetiring] = useState<DatasourceRow | null>(null);
   const [deleting, setDeleting] = useState<DatasourceRow | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -89,8 +88,7 @@ export const DatasourceList = () => {
     );
   }
 
-  const active = overview.registered.filter((r) => r.is_active);
-  const retired = overview.registered.filter((r) => !r.is_active);
+  const active = overview.registered;
   const unconsumed = overview.discovered.filter((d) => d.state === "new");
   const absent = active.filter((r) => r.landing === "absent");
 
@@ -151,9 +149,6 @@ export const DatasourceList = () => {
           tone={absent.length ? "error" : "default"}
           hint="Registered tables whose file did not land on this date"
         />
-        {retired.length > 0 && (
-          <Stat label="Retired" value={retired.length} tone="default" />
-        )}
       </Stack>
 
       {error && (
@@ -164,21 +159,10 @@ export const DatasourceList = () => {
 
       {view === "registered" ? (
         <RegisteredTable
-          rows={[...active, ...retired]}
+          rows={active}
           expanded={expanded}
           onToggle={onToggle}
-          onRetire={setRetiring}
           onDelete={setDeleting}
-          onRestore={async (row) => {
-            setBusy(true);
-            try {
-              await api.restoreDatasource(row.id);
-              await afterChange(`${row.name} restored`);
-            } catch (e) {
-              setBusy(false);
-              notify((e as Error).message, { type: "error" });
-            }
-          }}
           busy={busy}
         />
       ) : (
@@ -195,14 +179,6 @@ export const DatasourceList = () => {
         busy={busy}
         onClose={() => setRegistering(null)}
         onDone={async () => { setRegistering(null); await afterChange("Datasource registered"); }}
-      />
-
-      <RetireDialog
-        row={retiring}
-        busy={busy}
-        onClose={() => setRetiring(null)}
-        onDone={async (name) => { setRetiring(null); await afterChange(`${name} retired`); }}
-        onDelete={() => { setDeleting(retiring); setRetiring(null); }}
       />
 
       <DeleteDialog
@@ -254,13 +230,11 @@ const Stat = ({
  * the same information without the wall.
  */
 const RegisteredTable = ({
-  rows, expanded, onToggle, onRetire, onRestore, onDelete, busy,
+  rows, expanded, onToggle, onDelete, busy,
 }: {
   rows: DatasourceRow[];
   expanded: Record<string, boolean>;
   onToggle: (name: string) => void;
-  onRetire: (row: DatasourceRow) => void;
-  onRestore: (row: DatasourceRow) => void;
   onDelete: (row: DatasourceRow) => void;
   busy: boolean;
 }) => {
@@ -279,8 +253,8 @@ const RegisteredTable = ({
             <TableCell align="right" sx={{ width: 80 }}>Cols</TableCell>
             <TableCell align="right" sx={{ width: 90 }}>Rows</TableCell>
             <TableCell sx={{ width: 150 }}>Read by</TableCell>
-            <TableCell align="center" sx={{ width: 96 }}>Landing</TableCell>
-            <TableCell align="right" sx={{ width: 88 }} />
+            <TableCell align="center" sx={{ width: 120 }}>Landing</TableCell>
+            <TableCell align="right" sx={{ width: 72 }} />
           </TableRow>
         </TableHead>
         <TableBody>
@@ -290,23 +264,14 @@ const RegisteredTable = ({
               // Fragment carries the key, not the rows inside it - a bare
               // fragment cannot be keyed, which is what the warning was about.
               <Fragment key={row.name}>
-                <TableRow
-                  hover
-                  onClick={() => onToggle(row.name)}
-                  sx={{ cursor: "pointer", opacity: row.is_active ? 1 : 0.55 }}
-                >
+                <TableRow hover onClick={() => onToggle(row.name)} sx={{ cursor: "pointer" }}>
                   <TableCell>
-                    <Stack direction="row" spacing={0.75} alignItems="center" sx={{ minWidth: 0 }}>
-                      <Typography
-                        variant="body2" noWrap
-                        sx={{ fontFamily: "monospace", fontWeight: 600, color: "primary.main" }}
-                      >
-                        {row.name}
-                      </Typography>
-                      {!row.is_active && (
-                        <Chip size="small" label="retired" color="info" />
-                      )}
-                    </Stack>
+                    <Typography
+                      variant="body2" noWrap
+                      sx={{ fontFamily: "monospace", fontWeight: 600, color: "primary.main" }}
+                    >
+                      {row.name}
+                    </Typography>
                   </TableCell>
                   <TableCell>
                     <Typography variant="body2" noWrap>{row.system || "—"}</Typography>
@@ -333,61 +298,30 @@ const RegisteredTable = ({
                     <LandingChip landing={row.landing} lastSeen={row.last_seen} />
                   </TableCell>
                   <TableCell align="right" onClick={(e) => e.stopPropagation()}>
-                    <Stack direction="row" spacing={0.75} justifyContent="flex-end">
-                      {row.is_active ? (
-                        <>
-                          <Tooltip title={`Retire ${row.name} — stops new rules using it, reversible`}>
-                            <span>
-                              <IconButton
-                                size="small" aria-label={`retire-${row.name}`}
-                                onClick={() => onRetire(row)} disabled={busy}
-                              >
-                                <BlockOutlinedIcon fontSize="small" />
-                              </IconButton>
-                            </span>
-                          </Tooltip>
-                          {/* Removal is offered only where it is safe. A table a
-                              live rule reads cannot be deleted at all, so the
-                              button is absent rather than present and failing. */}
-                          {row.used_by.length === 0 && (
-                            <Tooltip title={`Remove ${row.name} permanently`}>
-                              <span>
-                                <IconButton
-                                  size="small" aria-label={`delete-${row.name}`}
-                                  onClick={() => onDelete(row)} disabled={busy}
-                                >
-                                  <DeleteOutlineIcon fontSize="small" />
-                                </IconButton>
-                              </span>
-                            </Tooltip>
-                          )}
-                        </>
+                      {/* Removal is offered only where it is safe. A table a live
+                          rule reads cannot be removed at all, so the button is
+                          absent rather than present and failing. */}
+                      {row.used_by.length === 0 ? (
+                        <Tooltip title={`Remove ${row.name}`}>
+                          <span>
+                            <IconButton
+                              size="small" aria-label={`delete-${row.name}`}
+                              onClick={() => onDelete(row)} disabled={busy}
+                            >
+                              <DeleteOutlineIcon fontSize="small" />
+                            </IconButton>
+                          </span>
+                        </Tooltip>
                       ) : (
-                        <>
-                          <Tooltip title={`Restore ${row.name}`}>
-                            <span>
-                              <IconButton
-                                size="small" aria-label={`restore-${row.name}`}
-                                onClick={() => onRestore(row)} disabled={busy}
-                              >
-                                <UndoIcon fontSize="small" />
-                              </IconButton>
-                            </span>
-                          </Tooltip>
-                          <Tooltip title={`Remove ${row.name} permanently`}>
-                            <span>
-                              <IconButton
-                                size="small" aria-label={`delete-${row.name}`}
-                                onClick={() => onDelete(row)} disabled={busy}
-                              >
-                                <DeleteOutlineIcon fontSize="small" />
-                              </IconButton>
-                            </span>
-                          </Tooltip>
-                        </>
+                        <Tooltip title={`Read by ${row.used_by.join(", ")} — remove those rules first`}>
+                          <span>
+                            <IconButton size="small" aria-label={`locked-${row.name}`} disabled>
+                              <LockOutlinedIcon fontSize="small" />
+                            </IconButton>
+                          </span>
+                        </Tooltip>
                       )}
-                    </Stack>
-                  </TableCell>
+                    </TableCell>
                 </TableRow>
                 <TableRow>
                   <TableCell colSpan={8} sx={{ py: 0, border: 0 }}>
@@ -552,7 +486,6 @@ const LandingChip = ({
 const StateChip = ({ state }: { state: DiscoveredFile["state"] }) => {
   const map = {
     registered: { label: "Registered", color: "success" as const, icon: <CheckCircleOutlineIcon /> },
-    retired: { label: "Retired", color: "info" as const, icon: <UndoIcon /> },
     new: { label: "Not registered", color: "warning" as const, icon: <StorageIcon /> },
   };
   const c = map[state];
@@ -685,105 +618,18 @@ const RegisterDialog = ({
 };
 
 /* ------------------------------------------------------------------ */
-/* Retire                                                              */
+/* Remove                                                              */
 /* ------------------------------------------------------------------ */
 /**
- * Retiring is reversible and never silently breaks a running control.
+ * Removal is permanent, so the dialog says plainly what is lost.
  *
- * A table that active rules still read is allowed through, but only after the
- * admin has seen which rules and been told what happens next - the rules keep
- * running and will fail once the ETL stops sending the file. That is a decision
- * to make deliberately, not a side effect of clicking a delete button.
- */
-const RetireDialog = ({
-  row, busy, onClose, onDone, onDelete,
-}: {
-  row: DatasourceRow | null;
-  busy: boolean;
-  onClose: () => void;
-  onDone: (name: string) => void;
-  onDelete: () => void;
-}) => {
-  const [confirmed, setConfirmed] = useState(false);
-  useEffect(() => setConfirmed(false), [row?.id]);
-
-  const submit = async (confirm: boolean) => {
-    if (!row) return;
-    try {
-      await api.retireDatasource(row.id, confirm);
-      onDone(row.name);
-    } catch {
-      /* notified upstream */
-    }
-  };
-
-  const dependents = row?.used_by ?? [];
-  const used = dependents.length > 0;
-
-  return (
-    <Dialog open={Boolean(row)} onClose={onClose} maxWidth="sm" fullWidth>
-      <DialogTitle sx={{ fontSize: FONT.bodyAlt, fontWeight: 700 }}>
-        Retire {row?.name}
-      </DialogTitle>
-      <DialogContent>
-        <Typography variant="body2" sx={{ mb: 2 }}>
-          No new rule will be able to reference this table, and it stops being
-          offered as something we consume. Existing rules are not changed, and
-          the table keeps its history so this can be undone.
-        </Typography>
-
-        {used && (
-          <Alert severity="warning" sx={{ mb: 2 }}>
-            <Typography variant="body2" sx={{ fontWeight: 600, mb: 0.5 }}>
-              {dependents.length} active rule{dependents.length > 1 ? "s" : ""} still read this table
-            </Typography>
-            <Typography variant="body2" sx={{ mb: 1 }}>
-              {dependents.join(", ")}
-            </Typography>
-            <Typography variant="body2">
-              They will keep running. If the ETL then stops sending this file,
-              they will fail rather than report a clean day.
-            </Typography>
-          </Alert>
-        )}
-
-        {used && !confirmed && (
-          <Button variant="contained" color="warning" onClick={() => setConfirmed(true)}>
-            I understand — retire anyway
-          </Button>
-        )}
-        {used && confirmed && (
-          <Typography variant="body2" sx={{ color: "warning.main", fontWeight: 600 }}>
-            Press Retire to proceed.
-          </Typography>
-        )}
-      </DialogContent>
-      <DialogActions>
-        {!used && (
-          <Button onClick={onDelete} color="error">
-            Remove permanently instead
-          </Button>
-        )}
-        <Box sx={{ flex: 1 }} />
-        <Button onClick={onClose}>Cancel</Button>
-        <Button
-          variant="contained" color="warning" disabled={busy || (used && !confirmed)}
-          onClick={() => submit(true)}
-        >
-          <BlockOutlinedIcon fontSize="small" sx={{ mr: 1 }} />
-          Retire
-        </Button>
-      </DialogActions>
-    </Dialog>
-  );
-};
-
-/* ------------------------------------------------------------------ */
-/* Delete                                                              */
-/* ------------------------------------------------------------------ */
-/**
- * Removal is permanent, so it is a separate dialog from retiring and states
- * plainly what is lost. Reachable only for a table no rule reads.
+ * Reachable only for a table no rule reads - the button is replaced with a lock
+ * on the row otherwise, so there is nothing to confirm away. The refusal is on
+ * the server as well, because a client-side check is a suggestion.
+ *
+ * The file on disk is not touched. Removing a registration says "we no longer
+ * consume this"; whether the ETL keeps producing it is a conversation with the
+ * other team.
  */
 const DeleteDialog = ({
   row, busy, onClose, onDone,

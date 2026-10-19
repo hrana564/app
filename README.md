@@ -131,7 +131,8 @@ Six tables in `ABM_Audit_Portal`. Created on startup by `create_all`.
 
 ```
 users          id, username, password_hash, role, is_active
-datasources    id, entity, name, system, path_template, grain, columns, is_active
+datasources    id, entity, name, system, description, path_template, grain, columns
+               -- no active flag: a table is registered or it is not
 
 rules_master   ONE ROW PER VERSION OF A RULE
                id, code, version, is_version_active, status, source_file,
@@ -434,8 +435,7 @@ Three things it tells you that a declaration alone would not:
 
 | Message | Means |
 |---|---|
-| **not registered for this entity** | the table is retired, removed, or belongs to another entity — validation will refuse the rule |
-| **retired** | a live rule still reads it. It keeps running, and will fail once the ETL stops sending the file |
+| **not registered for this entity** | the table was removed, or belongs to another entity — validation will refuse the rule, and the rule would fail on its next run |
 | **read but not declared** | `ctx.table("x")` names a table the constant omits — add it so validation covers it |
 
 A rule whose declaration cannot be parsed is reported rather than rewritten: the
@@ -456,7 +456,7 @@ filename. They push CSVs to `mount/SourceData/<ENTITY>/<date>/<name>.csv` and kn
 app. The app reads that folder on demand, reports what it finds, and an admin decides what to register:
 
 ```
-ETL → CSVs land → Data Sources screen → admin registers or retires → rules may read them
+ETL → CSVs land → Data Sources screen → admin registers or removes → rules may read them
 ```
 
 Discovery reads the CSV header, so **columns and types are read from the file the ETL actually
@@ -466,13 +466,15 @@ else's problem and becomes something rules may reference as `ctx.table("name")`.
 | Action | Effect |
 |---|---|
 | **Register** | the table becomes referenceable by new rules |
-| **Retire** | no new rule may reference it; existing rules keep running, reversibly |
 | **Remove** | deletes the registration. Refused while any active rule reads the table |
 
-Retiring is reversible and refuses to proceed silently when live rules depend on it — the screen names
-them and explains that they will fail once the ETL stops sending the file, rather than quietly
-reporting clean days. Hard removal is refused outright in that case, because a rule's recorded history
-outlives the row.
+Removal is refused outright while an active rule reads the table, and the refusal names those rules.
+There is no "retired" middle state: a table is either registered or it is not. That is deliberate —
+removing a table breaks every rule that reads it on its very next run, not eventually, and a reversible
+version that breaks rules the same way only added a state and a reassuring message that was untrue.
+
+The CSV on disk is never touched. Removing a registration says *"we no longer consume this"*; whether
+the ETL keeps producing it is a conversation with the other team.
 
 A rule only ever sees its own entity's tables, so a Laduree rule cannot accidentally read ABM data.
 
@@ -646,7 +648,7 @@ app/
 │   │   ├── api/
 │   │   │   ├── deps.py             auth + role gating
 │   │   │   ├── auth.py  rules.py  schedules.py  runs.py  tickets.py
-│   │   │   └── datasources.py      register / retire / remove + the one-call overview
+│   │   │   └── datasources.py      register / remove + the one-call overview
 │   │   └── engine/
 │   │       ├── catalog.py          THE CONTRACT: what an entity may read
 │   │       ├── discovery.py        what the ETL landed. Filesystem only.
@@ -781,9 +783,7 @@ All endpoints except `/health`, `/api/auth/login` and `/api/dashboard` require
 | GET | `/api/datasources/discovered?entity=&data_date=` | any | Just what is on disk, read from the CSV headers |
 | GET | `/api/datasources/available-dates?entity=LAD` | any | Day folders present, plus the latest |
 | POST | `/api/datasources` | admin | Register a table. Columns default to the file's header |
-| POST | `/api/datasources/{id}/retire` | admin | Reversible. 409 lists dependent rules unless `confirm_dependents` |
-| POST | `/api/datasources/{id}/restore` | admin | Undo a retirement |
-| DELETE | `/api/datasources/{id}` | admin | Permanent. 409 while any active rule reads the table |
+| DELETE | `/api/datasources/{id}` | admin | Remove a registration. 409 naming the rules, while any active rule reads it |
 | GET | `/api/dashboard` | — | Aggregated counters (unauthenticated, for the login screen) |
 
 ---
@@ -1010,10 +1010,10 @@ cd backend
 .\.venv\Scripts\python.exe scripts\smoke_test.py
 ```
 
-**165 assertions** covering: health, both logins, rejection of bad credentials and missing tokens,
+**161 assertions** covering: health, both logins, rejection of bad credentials and missing tokens,
 RBAC for every admin-only endpoint, both entities and their systems, datasource listing,
 **the admin's catalogue workflow** (discover what the ETL delivered, columns read from the CSV header,
-register, retire, restore, and the refusals for removing a table live rules read), rule registration,
+register, remove, and the refusal for removing a table live rules read), rule registration,
 **validate → activate gate**, source and version round-trip,
 per-entity isolation, clean-day pass / breach-day fail for all four rules, both cross-system joins,
 ticket numbering, JSON serialisation of timestamps, acknowledge → double-ack rejection → reopen,
@@ -1026,10 +1026,10 @@ run that did not execute has none, and `?status=` and `?outcome=` filter separat
 ledger and the version each run was produced by, dashboard and generation status.
 
 ```
-RESULT: 165 passed, 0 failed
+RESULT: 161 passed, 0 failed
 ```
 
-The suite is **idempotent** — run it twice and it still reports 165/165. The deduplication
+The suite is **idempotent** — run it twice and it still reports 161/161. The deduplication
 assertions work on ticket *identity* rather than absolute counts, so a previous run's tickets don't
 make the next run fail.
 

@@ -212,8 +212,7 @@ export interface DatasourceRow {
   path_template: string;
   grain: string;
   columns: Record<string, string>;
-  is_active: boolean;
-  /** Active rules that read this table. The answer to "what breaks if I retire it". */
+  /** Active rules that read this table. The answer to "what breaks if I remove it". */
   used_by: string[];
   /** "landed" when the ETL delivered the file for the requested day, else "absent". */
   landing: "landed" | "absent";
@@ -231,7 +230,7 @@ export interface DiscoveredFile {
   row_count: number;
   size_bytes: number;
   modified_at: string;
-  state: "new" | "registered" | "retired";
+  state: "new" | "registered";
 }
 
 export interface DatasourceOverview {
@@ -404,20 +403,10 @@ export const api = {
     }),
 
   /**
-   * Retire rather than delete. Refuses with 409 while active rules still read
-   * the table, which is why the caller has to handle the dependency warning
-   * rather than firing and forgetting.
+   * Remove a registration. Refused with 409 while an active rule still reads the
+   * table, naming the rules - the caller surfaces that, so the refusal is a
+   * decision rather than a surprise.
    */
-  retireDatasource: (id: number, confirmDependents = false) =>
-    request<any>(`/api/datasources/${id}/retire`, {
-      method: "POST",
-      body: JSON.stringify({ confirm_dependents: confirmDependents }),
-    }),
-
-  restoreDatasource: (id: number) =>
-    request<any>(`/api/datasources/${id}/restore`, { method: "POST" }),
-
-  /** Hard delete. Refused with 409 while an active rule still reads the table. */
   deleteDatasource: (id: number) =>
     request<void>(`/api/datasources/${id}`, { method: "DELETE" }),
 

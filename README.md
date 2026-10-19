@@ -644,7 +644,7 @@ app/
 │   ├── .env / .env.example
 │   ├── requirements.txt
 │   ├── app/
-│   │   ├── main.py                 app factory, health, dashboard, user bootstrap
+│   │   ├── main.py                 app factory, health, user bootstrap
 │   │   ├── settings.py             env config
 │   │   ├── db.py                   async engine + schema check
 │   │   ├── models.py               9 tables
@@ -653,6 +653,7 @@ app/
 │   │   ├── api/
 │   │   │   ├── deps.py             auth + role gating
 │   │   │   ├── auth.py  rules.py  schedules.py  runs.py  tickets.py
+│   │   │   ├── assurance.py         the landing page's read model
 │   │   │   ├── scope.py            THE ONLY place a query is filtered by client
 │   │   │   └── datasources.py      register / remove + overview + row preview
 │   │   └── engine/
@@ -739,8 +740,11 @@ CORS_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
 
 ## 10. API reference
 
-All endpoints except `/health`, `/api/auth/login` and `/api/dashboard` require
-`Authorization: Bearer <token>`.
+All endpoints except `/health` and `/api/auth/login` require
+`Authorization: Bearer <token>`. `/api/dashboard` used to be the third exception,
+on the grounds that the login screen wanted it. It does not, and an unauthenticated
+read of a client's rule counts and open findings is a leak — so it now requires a
+token like everything else.
 
 ### The client scope
 
@@ -807,7 +811,41 @@ rule that produced them, so those endpoints join to reach it — that join lives
 | GET | `/api/datasources/available-dates?entity=LAD` | any | Day folders present, plus the latest |
 | POST | `/api/datasources` | admin | Register a table. Columns default to the file's header |
 | DELETE | `/api/datasources/{id}` | admin | Remove a registration. 409 naming the rules, while any active rule reads it |
-| GET | `/api/dashboard` | — | `?entity` — aggregated counters for the landing screen (unauthenticated) |
+| GET | `/api/dashboard?entity=&window=14` | any | The **assurance read model** — see below |
+
+### The assurance read model
+
+`GET /api/dashboard` is not a set of counters. It answers the three questions a
+head of audit asks, from the ledger, in one round trip. Nothing is stored: the
+whole payload is derived on read, so it cannot drift from `rule_runs` and
+`tickets`.
+
+| Key | What it answers |
+|---|---|
+| `as_at`, `as_at_age_days` | The date the newest control opinion is about, and how stale it is |
+| `controls.assured` / `.total` / `.not_assured` | Live validated controls, all controls, and those never switched on |
+| `days[]` | One line per data date: `passed`, `breach`, `errored`, `unchecked`, `exceptions` |
+| `offenders[]` | Controls ranked by **days breached**, with exceptions, open findings and missed days |
+| `overdue[]` / `gaps[]` | Scheduled controls that missed a day / any control that did not cover every day |
+| `open` | Live exposure: exception rows, finding count, oldest age, severity split |
+| `longest_open[]` | Open problems grouped by what they say, oldest first, with a repeat count |
+| `movement` | Findings and exceptions raised in the window, and how many were acknowledged |
+
+`window` counts **data dates**, not calendar days, so a day the ETL never
+delivered cannot appear as a day the controls missed. Every figure inside it is
+filtered the same way: runs by `rule_runs.data_date`, and tickets by the
+`data_date` of the run that raised them.
+
+**The four states partition the controls.** On every data date,
+
+```
+passed + breached + errored + unchecked == assured controls
+```
+
+`unchecked` is the shortfall — a control that owed an opinion and did not give
+one. It is never folded into a pass, and never dropped from the total, because
+that is precisely how a dashboard reports incomplete assurance as complete. The
+smoke test asserts the identity on every row, for both clients.
 
 ---
 
@@ -1033,7 +1071,7 @@ cd backend
 .\.venv\Scripts\python.exe scripts\smoke_test.py
 ```
 
-**198 assertions** covering: health, both logins, rejection of bad credentials and missing tokens,
+**226 assertions** covering: health, both logins, rejection of bad credentials and missing tokens,
 RBAC for every admin-only endpoint, both entities and their systems, datasource listing,
 **the admin's catalogue workflow** (discover what the ETL delivered, columns read from the CSV header,
 register, remove, and the refusal for removing a table live rules read), rule registration,
@@ -1046,16 +1084,21 @@ including duplicate detection and pause/reactivate deregistration, **the validat
 (banned imports, activation refusal, cross-entity table reference inside an SQL string), **alert
 policy), **execution and outcome being independent** (a completed run always has an outcome, a
 run that did not execute has none, and `?status=` and `?outcome=` filter separately), the run
-ledger and the version each run was produced by, dashboard and generation status, and **the client
+ledger and the version each run was produced by, **the assurance grid** (the four
+states partition the assured controls on every data date for both clients, the grid
+ends on the date it reports to, exposure matches the inbox, the severity split adds
+back to the headline, grouped problems never exceed the open findings, and nothing
+without a cadence is ever called overdue), the dashboard being unreachable without a
+token, generation status, and **the client
 scope** (LAD + ABM must equal the whole on every list and summary, a scoped list carries only that
 client's rules, the scoped dashboard agrees with the scoped lists, and the bulk acknowledge reaches
 only the client it was given — then puts every ticket back).
 
 ```
-RESULT: 198 passed, 0 failed
+RESULT: 226 passed, 0 failed
 ```
 
-The suite is **idempotent** — run it twice and it still reports 198/198. The deduplication
+The suite is **idempotent** — run it twice and it still reports 226/226. The deduplication
 assertions work on ticket *identity* rather than absolute counts, so a previous run's tickets don't
 make the next run fail.
 

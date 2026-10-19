@@ -8,8 +8,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import auth, datasources, rules, runs, schedules, tickets
-from app.api.deps import SessionDep
+from app.api import assurance, auth, datasources, rules, runs, schedules, tickets
 from app.db import SessionLocal, init_models, table_names
 from app.engine import scheduler
 from app.settings import settings
@@ -116,6 +115,7 @@ app.include_router(schedules.router)
 app.include_router(runs.router)
 app.include_router(tickets.router)
 app.include_router(datasources.router)
+app.include_router(assurance.router)
 
 
 @app.get("/health", tags=["meta"])
@@ -144,72 +144,3 @@ async def health() -> dict:
     }
 
 
-@app.get("/api/dashboard", tags=["meta"])
-async def dashboard(session: SessionDep, entity: str | None = None) -> dict:
-    """One aggregated payload for the landing screen.
-
-    Scoped to one client, like every other screen. A landing page that counts
-    both clients while the lists behind it show one is worse than no numbers: the
-    first click out of it disagrees with it.
-    """
-    from sqlalchemy import and_, func, select
-
-    from app.api.scope import scoped
-    from app.models import Rule, RuleSchedule, Run, Ticket
-
-    async def count(model, *where) -> int:
-        stmt = select(func.count()).select_from(model)
-        for clause in where:
-            stmt = stmt.where(clause)
-        return (await session.execute(scoped(stmt, model, entity))).scalar_one()
-
-    head = Rule.is_version_active.is_(True)
-
-    # A schedule is a rule's cadence and is keyed by the rule's code, so scoping
-    # schedules to a client means scoping them to the codes that client's rules
-    # hold. `scoped_head` is that rule-scope, folded into one clause.
-    scoped_head = head if not entity else and_(head, Rule.entity == entity.upper())
-
-    async def schedule_count(codes_of) -> int:
-        stmt = select(func.count()).select_from(RuleSchedule).where(
-            RuleSchedule.rule_code.in_(codes_of)
-        )
-        return (await session.execute(stmt)).scalar_one()
-
-    return {
-        "entity": entity.upper() if entity else None,
-        "rules": {
-            # Only head versions count as rules; earlier versions are history.
-            "total": await count(Rule, head),
-            "active": await count(Rule, head, Rule.status == "active"),
-            "draft": await count(Rule, head, Rule.status == "draft"),
-            "paused": await count(Rule, head, Rule.status == "paused"),
-            "validated": await count(Rule, head, Rule.validation_status == "valid"),
-            "versions": await count(Rule),
-        },
-        "schedules": {
-            "total": await schedule_count(select(Rule.code).where(scoped_head)),
-            # A schedule runs iff its rule code has a live, active head.
-            "live": await schedule_count(
-                select(Rule.code).where(scoped_head, Rule.status == "active")
-            ),
-        },
-        "runs": {
-            "total": await count(Run),
-            # Execution, then control outcome - counted separately because
-            # "the rule ran" and "the rule found something" are not the same
-            # question and collapsing them makes working rules look broken.
-            "running": await count(Run, Run.status == "running"),
-            "completed": await count(Run, Run.status == "success"),
-            "failed": await count(Run, Run.status == "failed"),
-            "breaches": await count(Run, Run.outcome == "fail"),
-            "cleared": await count(Run, Run.outcome == "pass"),
-        },
-        "tickets": {
-            "total": await count(Ticket),
-            "open": await count(Ticket, Ticket.status == "open"),
-            "acknowledged": await count(Ticket, Ticket.status == "acknowledged"),
-            "dismissed": await count(Ticket, Ticket.status == "dismissed"),
-        },
-        "scheduler": {"running": scheduler.scheduler.running, "jobs": len(scheduler.status())},
-    }

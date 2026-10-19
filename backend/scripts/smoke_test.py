@@ -672,13 +672,15 @@ def main() -> int:
               rsum["total"] == rsum["completed"] + rsum["failed"] + rsum["running"],
               str(rsum))
 
-        dash = c.get("/api/dashboard").json()
-        check("dashboard totals", dash["rules"]["total"] >= 4, str(dash))
-        check("dashboard counts versions separately",
-              dash["rules"]["versions"] >= dash["rules"]["total"], str(dash["rules"]))
-        check("dashboard splits execution from findings",
-              dash["runs"]["completed"] == dash["runs"]["breaches"] + dash["runs"]["cleared"],
-              str(dash["runs"]))
+        dash = c.get("/api/dashboard", headers=ah).json()
+        check("dashboard names the date it reports to", dash["as_at"] is not None, str(dash)[:200])
+        check("dashboard counts the assured controls",
+              dash["controls"]["assured"] >= 4, str(dash["controls"]))
+        # The landing page carries no run totals. Every figure on it has to be
+        # about assurance or exposure; "282 runs" is a fact about the ledger
+        # that answers no question a head of audit asks. The ledger's own
+        # split is asserted above, against the summary endpoint that owns it.
+        check("dashboard carries no raw run counter", "runs" not in dash, str(list(dash)))
 
         # --- client entity scope -----------------------------------------
         # Every screen in the portal is scoped to one client, so the split has
@@ -719,17 +721,97 @@ def main() -> int:
               all(x["rule_code"].startswith("LAD") for x in lad_tix["data"]),
               str([x["rule_code"] for x in lad_tix["data"][:5]]))
 
-        lad_dash = c.get("/api/dashboard", params={"entity": "LAD"}).json()
-        check("dashboard reports the client it was scoped to", lad_dash["entity"], "LAD")
-        check("scoped dashboard rules == scoped rules list",
-              lad_dash["rules"]["total"],
-              c.get("/api/rules", headers=ah, params={"entity": "LAD"}).json()["total"])
-        check("scoped dashboard tickets == scoped ticket list",
-              lad_dash["tickets"]["total"],
-              c.get("/api/tickets", headers=ah, params={"entity": "LAD"}).json()["total"])
-        check("scoped dashboard schedules stay inside the client",
-              lad_dash["schedules"]["total"] <= lad_dash["rules"]["versions"],
-              str(lad_dash["schedules"]))
+        lad_dash = c.get("/api/dashboard", headers=ah, params={"entity": "LAD"}).json()
+        check("dashboard reports the client it was scoped to", lad_dash["entity"] == "LAD", lad_dash["entity"])
+        check("scoped dashboard controls == scoped rules list",
+              lad_dash["controls"]["total"]
+              == c.get("/api/rules", headers=ah, params={"entity": "LAD"}).json()["total"],
+              str(lad_dash["controls"]))
+        check("scoped dashboard findings == scoped ticket list",
+              lad_dash["open"]["findings"]
+              == c.get("/api/tickets", headers=ah, params={"entity": "LAD"}).json()["total"],
+              str(lad_dash["open"]))
+
+        # --- the assurance grid partitions the controls ----------------------
+        # The assertion the whole read model rests on. A control that did not
+        # run is UNCHECKED, so the four states must add back to the number of
+        # controls that were expected to report. Fold a state into another - a
+        # missed control quietly counted as a pass, or dropped from the total -
+        # and the sum stops closing, which is exactly how assurance gets
+        # reported as complete when it is not.
+        section("assurance grid")
+        for ent in both:
+            d = c.get("/api/dashboard", headers=ah, params={"entity": ent}).json()
+            assured = d["controls"]["assured"]
+            check(f"{ent}: every data date counts the same assured controls",
+                  {row["assured"] for row in d["days"]} <= {assured},
+                  f"assured={assured}")
+            broken = [
+                row["date"] for row in d["days"]
+                if row["passed"] + row["breach"] + row["errored"] + row["unchecked"]
+                != row["assured"]
+            ]
+            check(f"{ent}: the four states partition the controls", not broken, str(broken))
+            check(f"{ent}: reported is exactly the states that produced an opinion",
+                  all(r["reported"] == r["passed"] + r["breach"] + r["errored"]
+                      for r in d["days"]),
+                  str(d["days"][:2]))
+            check(f"{ent}: the grid ends on the date it reports to",
+                  bool(d["days"]) and d["as_at"] == d["days"][-1]["date"],
+                  f"as_at={d['as_at']}")
+            check(f"{ent}: the grid is exactly the window it claims",
+                  len(d["days"]) == d["window_days"],
+                  f"{len(d['days'])} vs {d['window_days']}")
+
+            # The headline must agree with the screen it sits above.
+            tix = c.get("/api/tickets", headers=ah,
+                        params={"entity": ent, "status": "open", "perPage": 1}).json()
+            check(f"{ent}: open findings match the inbox",
+                  d["open"]["findings"] == tix["total"],
+                  f"dash={d['open']['findings']} inbox={tix['total']}")
+            check(f"{ent}: exposure is never below the findings holding it",
+                  d["open"]["exceptions"] >= d["open"]["findings"], str(d["open"]))
+            check(f"{ent}: the severity breakdown adds back to the headline",
+                  sum(r["findings"] for r in d["open"]["by_severity"]) == d["open"]["findings"],
+                  str(d["open"]["by_severity"]))
+
+            # Grouping must neither invent nor lose a finding.
+            check(f"{ent}: grouped problems never exceed the open findings",
+                  sum(p["count"] for p in d["longest_open"]) <= d["open"]["findings"],
+                  str([(p["rule_code"], p["count"]) for p in d["longest_open"]]))
+
+            # A control nobody scheduled cannot be overdue, or an on-demand
+            # control is reported as a missed deadline every single day.
+            check(f"{ent}: nothing without a cadence is called overdue",
+                  all(o["scheduled"] for o in d["overdue"]),
+                  str([(o["code"], o["cadence"]) for o in d["overdue"]]))
+            check(f"{ent}: every overdue control really missed a day",
+                  all(o["missing_days"] > 0 for o in d["overdue"]),
+                  str([(o["code"], o["missing_days"]) for o in d["overdue"]]))
+            check(f"{ent}: the ranked list covers only this client's controls",
+                  all(o["code"].startswith(ent) for o in d["offenders"]),
+                  str([o["code"] for o in d["offenders"]]))
+
+        abm_dash = c.get("/api/dashboard", headers=ah, params={"entity": "ABM"}).json()
+        check("scoped dashboards share no control",
+              not ({o["code"] for o in lad_dash["offenders"]}
+                   & {o["code"] for o in abm_dash["offenders"]}), "")
+        check("the unscoped dashboard reaches both clients",
+              {o["code"][:3] for o in c.get("/api/dashboard", headers=ah).json()["offenders"]}
+              >= {"LAD", "ABM"},
+              str([o["code"] for o in c.get("/api/dashboard", headers=ah).json()["offenders"]]))
+
+        # The window is a real filter, not a label.
+        narrow = c.get("/api/dashboard", headers=ah,
+                       params={"entity": "LAD", "window": 2}).json()
+        check("the window narrows the grid", len(narrow["days"]) == 2, len(narrow["days"]))
+        check("a narrower window is the tail of the wider one",
+              [r["date"] for r in narrow["days"]]
+              == [r["date"] for r in lad_dash["days"]][-2:],
+              str([r["date"] for r in narrow["days"]]))
+        check("the window cannot be set to nothing",
+              c.get("/api/dashboard", headers=ah, params={"window": 1}).status_code == 422,
+              str(c.get("/api/dashboard", headers=ah, params={"window": 1}).status_code))
 
         # The dangerous one. "Acknowledge everything on screen" must mean the
         # client the auditor is looking at, not every client in the portal - so

@@ -33,10 +33,17 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * A query-parameter bag. Numbers are allowed because a page size or a window is
+ * genuinely numeric, and stringifying at the boundary beats casting at 12 call
+ * sites.
+ */
+type Query = Record<string, string | number | undefined>;
+
 /** Drop empty values so a filter object can be passed straight through. */
-const compact = (params: Record<string, string | undefined>) => {
+const compact = (params: Query) => {
   const q = new URLSearchParams();
-  for (const [k, v] of Object.entries(params)) if (v) q.set(k, v);
+  for (const [k, v] of Object.entries(params)) if (v) q.set(k, String(v));
   return q.toString();
 };
 
@@ -47,7 +54,7 @@ const compact = (params: Record<string, string | undefined>) => {
  * `` `/api/dashboard${compact(...)}` `` produced `/api/dashboardentity=LAD` and a
  * 404 that looked like a routing problem. Everything here goes through this.
  */
-const qs = (params: Record<string, string | undefined>) => {
+const qs = (params: Query) => {
   const s = compact(params);
   return s ? `?${s}` : "";
 };
@@ -278,16 +285,25 @@ export const api = {
 
   me: () => request<any>("/api/auth/me"),
 
-  dashboard: (entity?: string) => request<any>(`/api/dashboard${qs({ entity })}`),
+  /**
+   * The assurance read model behind the landing page.
+   *
+   * One payload, derived on read from the ledger - there is no summary table
+   * that can fall out of step with `rule_runs` and `tickets`.
+   */
+  dashboard: (entity?: string, windowDays?: number) =>
+    request<any>(`/api/dashboard${qs({ entity, window: windowDays })}`),
 
   health: () => request<any>("/health"),
 
-  ticketSummary: (entity?: string) =>
-    request<any>(`/api/tickets/summary${qs({ entity })}`),
-  runSummary: (entity?: string) =>
-    request<any>(`/api/rule-runs/summary${qs({ entity })}`),
-
-  /** Flat ticket list, for the ungrouped inbox view. */
+  /**
+   * Flat ticket list, for the ungrouped inbox view.
+   *
+   * `/api/tickets/summary` and `/api/rule-runs/summary` are still served and
+   * still documented - they are what the Power Apps connector consumes - but no
+   * screen calls them. The landing page reads the assurance payload instead,
+   * and a wrapper nothing calls is a wrapper that quietly rots.
+   */
   listTickets: (params: Record<string, string | undefined>) =>
     request<{ data: any[]; total: number }>(
       `/api/tickets${qs({ ...params, sort: "created_at", order: "DESC" })}`,

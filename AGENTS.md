@@ -163,6 +163,46 @@ and the client the app bar is scoped to is part of what is on screen. The smoke
 test proves it by filtering on a severity both clients use, so an unscoped call
 would visibly touch more rows.
 
+### The landing page derives "did the control report?" in exactly one place
+
+```
+app/api/assurance.py:
+
+state_of(passed, breached, errored)  -> one control's state on one data date
+summarise_day(assured, seen)          -> the four counts for that date
+rank_controls(rows)                   -> worst first
+```
+
+These are pure functions, no database, and both the endpoint and the smoke test
+lean on them. `summarise_day` is the important one: it is why
+
+```
+passed + breached + errored + unchecked == assured controls
+```
+
+holds on every row. `unchecked` is computed as the **shortfall** rather than
+counted separately, so it cannot drift out of step with the total.
+
+Derive this a second time somewhere and the two disagree invisibly. The grid
+still draws, every number still looks plausible, and the dashboard starts
+reporting incomplete assurance as complete — which is the one thing a head of
+audit cannot catch, because a clean-looking audit is exactly what they are
+checking for.
+
+Two distinctions the payload depends on, both of which cost real argument to
+settle:
+
+- **Assurance is active AND validated.** A control still in draft owes no
+  opinion, so counting it as a gap would blame the controls for a control nobody
+  switched on. It is reported separately, under `not_assured`.
+- **A missed day is overdue only if the control had a cadence.** An on-demand
+  control that did not run is a coverage note, not a missed deadline. Without
+  this, `ABM-CA-22` — which is manual-only — reads as a fault on every day it
+  has not run, forever.
+
+**Nothing here is stored.** The payload is derived on read precisely so there is
+no summary table to fall out of step with `rule_runs` and `tickets`.
+
 ### The client scope lives in exactly one place in the frontend too
 
 ```
@@ -191,6 +231,7 @@ work per client and re-picking it on every reload is noise.
 | The runner and replay share the mapping | see §2 | Otherwise replay reports differences that aren't real. |
 | One `declared_tables` for every caller | `app/engine/validation.py` | Validating a rule and writing one must answer "what does it read" identically, or the rule page and the catalogue disagree about it. See §2. |
 | One `scoped()` for every query that filters by client | `backend/app/api/scope.py` | Runs and tickets have no entity column; they inherit the rule's. Five endpoints joining for it themselves is how the dashboard counts a different client than the list beside it. See §2. |
+| One `summarise_day()` for the assurance grid | `backend/app/api/assurance.py` | `passed + breached + errored + unchecked == assured` has to close, or the landing page reports incomplete assurance as complete. See §2. |
 | One `useEntityScope()` for every screen | `frontend/src/entityScope.tsx` | The app bar owns the client. A screen with its own dropdown can disagree with the header above it, and a "Clear" button can drop the scope silently. See §2. |
 | Rules may only `import` from the allow-list | `app/engine/validation.py` | Enforced by AST scan, not convention. |
 | The catalogue lives in the `datasources` table, not in `app/` | see §3a | A module under `app/` that also answered "what tables exist" would be a second source of truth, and the two would drift the first time an admin registered something. |
@@ -428,6 +469,8 @@ Each of these cost real time. They will cost it again.
 | **`.RaDatagrid-row` also matches the header row** | react-admin puts `RaDatagrid-row` on `<thead>`'s `<tr>` too. Count `tbody tr`. Getting this wrong silently reports the header text as row one. |
 | **Vite can wedge and serve stale modules** | A Babel error leaves the dev server serving old code, so browser checks pass against code you already changed. If a result contradicts an edit, `Invoke-WebRequest http://127.0.0.1:5173/src/...` and confirm the dev server is serving your edit before believing anything. Restart when in doubt. |
 | **A bare `<tr>` under `<table>`** | React rejects it and logs a hydration error. Every extra row needs its own `<TableBody>`. |
+| **`check()` in `smoke_test.py` is truthiness, not equality** | `check(label, ok, detail)` prints `PASS` whenever `ok` is merely truthy. So `check("x", offending, [])` **fails when the list is empty** — the one case it was written to catch. Write the comparison yourself: `check("x", not offending, str(offending))`. And `check("x", got, want)` passes on any non-empty `got`, so a mismatch reads green. |
+| **`captureBeyondViewport` screenshots clip the right edge** | The image comes out wider than the layout and text at the boundary looks truncated. It isn't: measure `scrollWidth <= clientWidth` on `.RaLayout-content` and on the app bar before believing a screenshot. |
 
 ---
 

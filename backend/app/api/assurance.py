@@ -177,15 +177,14 @@ async def dashboard(
     # ago reads identically to a daily control that silently stopped, and only
     # one of those is a fault. A schedule has no entity of its own, so it is
     # scoped by the rule codes it belongs to - which is exactly the set above.
-    cadences = {
-        rule_code: (label, kind)
-        for rule_code, label, kind in (
-            await session.execute(
-                select(RuleSchedule.rule_code, RuleSchedule.label, RuleSchedule.kind)
-                .where(RuleSchedule.rule_code.in_(list(assured) or [""]))
-            )
-        ).all()
-    }
+    cadences: dict[str, list[str]] = {}
+    for rule_code, label, kind in (
+        await session.execute(
+            select(RuleSchedule.rule_code, RuleSchedule.label, RuleSchedule.kind)
+            .where(RuleSchedule.rule_code.in_(list(assured) or [""]))
+        )
+    ).all():
+        cadences.setdefault(rule_code, []).append(label or (kind or "").title())
 
     # --- the window ---------------------------------------------------------
     recent = (
@@ -403,13 +402,20 @@ async def dashboard(
         tallied = rollup.get(code, {})
         missing = [d.isoformat() for d in dates if code not in state_by_day.get(d, {})]
         last_breach = tallied.get("last_breach")
-        label, kind = cadences.get(code, ("", ""))
         rows.append(
             {
                 **meta,
-                # "On demand" rather than a cadence: a control nobody scheduled has
-                # no duty to report daily, so its silence is a design decision.
-                "cadence": label or (kind.title() if kind else "On demand"),
+                # "On demand" rather than a cadence: a control nobody scheduled
+                # has no duty to report daily, so its silence is a design
+                # decision. A control can hold several cadences at once, and
+                # naming just one of them would understate how often it is
+                # meant to run - so a control on three schedules reads as three.
+                "cadence": (
+                    "On demand" if not cadences.get(code)
+                    else f"{len(cadences[code])} cadences"
+                    if len(cadences[code]) > 1
+                    else cadences[code][0]
+                ),
                 "scheduled": code in cadences,
                 "breached_days": tallied.get("breached_days", 0),
                 "errored_days": tallied.get("errored_days", 0),

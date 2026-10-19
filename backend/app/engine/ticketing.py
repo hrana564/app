@@ -70,8 +70,9 @@ async def raise_ticket(
     session.add(ticket)
     await session.flush()
     # The rule code prefixes the number rather than a fixed brand, so the number
-    # names the control that raised it. An auditor reading a ticket reference
-    # out of an email can tell where it came from without opening the record.
+    # names the control that raised it AND the client it was raised for. An
+    # auditor reading a ticket reference out of an email can tell where it came
+    # from without opening the record.
     ticket.ticket_no = f"{run.rule_code}-TKT-{ticket.id:05d}"
 
     log.info(

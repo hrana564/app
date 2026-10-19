@@ -1,5 +1,5 @@
 """
-CA-03  -  Last hour of trading volume spike
+LAD-CA-03  -  Last hour of trading volume spike
 
 System : POS  ->  ipos_sales
 
@@ -18,7 +18,7 @@ timestamp, and extracting the hour from it is part of what this control does.
 
 import polars as pl
 
-NAME = "CA-03 Last-hour of trading value spike"
+NAME = "Last-hour of trading value spike"
 DESCRIPTION = (
     "Value settled in the last hour of store operations exceeds a multiple of "
     "the average hourly value for the day (retail and bar items)."

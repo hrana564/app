@@ -1,5 +1,5 @@
 """
-CA-06  -  Ex-staff member still transacting in the POS
+LAD-CA-06  -  Ex-staff member still transacting in the POS
 
 Systems: POS (ipos_sales)  JOIN  HRMS (hr_employees)
 
@@ -20,7 +20,7 @@ The grace period lives in this file.
 
 import polars as pl
 
-NAME = "CA-06 Ex-staff member still transacting in the POS"
+NAME = "Ex-staff member still transacting in the POS"
 DESCRIPTION = (
     "POS transactions settled by employees who have already exited in HRMS - "
     "access has not been revoked."

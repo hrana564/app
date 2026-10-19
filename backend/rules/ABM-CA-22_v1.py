@@ -1,5 +1,5 @@
 """
-CA-22  -  Vendor bank details match employee bank details
+ABM-CA-22  -  Vendor bank details match employee bank details
 
 Systems: ERP (bc_vendors)  JOIN  HRMS (hr_employees)
 
@@ -24,7 +24,7 @@ from difflib import SequenceMatcher
 
 import polars as pl
 
-NAME = "CA-22 Vendor bank details match employee bank details"
+NAME = "Vendor bank details match employee bank details"
 DESCRIPTION = (
     "Vendor bank account details in ERP match employee bank "
     "details in HRMS - a payments-fraud indicator."

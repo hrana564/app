@@ -173,9 +173,9 @@ identifies the logical rule and repeats across versions; exactly one row per cod
 is flagged `is_version_active` - the **head**.
 
 ```
-CA-03  v1   head=f   CA-03_v1.py  initial version
-CA-03  v2   head=f   CA-03_v2.py  smoke: bump
-CA-03  v3   head=t   CA-03_v3.py  rollback to v1
+LAD-CA-03  v1   head=f   LAD-CA-03_v1.py  initial version
+LAD-CA-03  v2   head=f   LAD-CA-03_v2.py  smoke: bump
+LAD-CA-03  v3   head=t   LAD-CA-03_v3.py  rollback to v1
 ```
 
 Two database constraints make this safe rather than conventional:
@@ -188,7 +188,18 @@ Two database constraints make this safe rather than conventional:
 Both are verified directly against Postgres in the smoke test.
 
 **Rules are addressed by `code`, never by row id** - a row id identifies one
-*version*, the code identifies the *rule*. URLs read `/api/rules/CA-03/...`.
+*version*, the code identifies the *rule*. URLs read `/api/rules/LAD-CA-03/...`.
+
+### The code names the client
+
+A rule's code is its client's code, then the control's own: `LAD-CA-03`. The
+prefix follows the rule's **row**, so it is applied when the rule is created
+and never written into the file - which is what keeps one file registrable for
+whichever client a deployment wants it for.
+
+A ticket's number is derived from the rule's code, so it carries the same
+prefix: `LAD-CA-03-TKT-00042`. A reference an auditor reads out of an email
+then says whose control it was, without opening the record.
 
 ### Behaviour
 
@@ -420,7 +431,7 @@ The **anchor** comes from the schedule (`data_lag_days`, default 1 = yesterday).
 The rule says how far back from that anchor to read. Each number has one job.
 
 ```python
-NAME        = "CA-03 Last-hour of trading value spike"
+NAME        = "Last-hour of trading value spike"
 DESCRIPTION = "Value settled in the last hour of trading exceeds a multiple of the hourly average."
 DATASOURCES = ["ipos_sales"]
 ```
@@ -430,6 +441,10 @@ the rule's row, chosen when the rule is registered — so one file can be
 registered for whichever client the deployment wants it for, and the source
 carries no client's name. The catalogue is where a table is bound to a client;
 the rule is bound the same way.
+
+The **code** does carry the client's code, because a code is an identifier and
+an identifier that says whose control it is is worth having. It is applied
+when the rule is created, from the row's client — never written into the file.
 
 ### Binding a rule to its datasources
 
@@ -512,9 +527,9 @@ Shared keys, **not** remapped ones — that is what lets one rule join three sys
 
 Two of the four seeded rules prove this works:
 
-- **`CA-22`** joins HRMS employees to ERP vendors on the IBAN — a payments-fraud
+- **`ABM-CA-22`** joins HRMS employees to ERP vendors on the IBAN — a payments-fraud
   indicator (requirements #22/#23).
-- **`CA-06`** joins POS activity to HRMS employment status to find exited staff still
+- **`LAD-CA-06`** joins POS activity to HRMS employment status to find exited staff still
   transacting (requirement #9).
 
 ---
@@ -593,9 +608,9 @@ Generates `mount/SourceData/` for both entities across 6 days, with **deliberate
 | Date | Client A | Client B |
 |---|---|---|
 | 2026-10-15 | clean | vendor/employee bank match |
-| 2026-10-16 | **last-hour spike** (CA-03) | vendor/employee bank match |
-| 2026-10-17 | **single-staff cash dominance** (CA-04) | vendor/employee bank match |
-| 2026-10-18 | **both** + ex-staff POS activity (CA-06) | vendor/employee bank match |
+| 2026-10-16 | **last-hour spike** (LAD-CA-03) | vendor/employee bank match |
+| 2026-10-17 | **single-staff cash dominance** (LAD-CA-04) | vendor/employee bank match |
+| 2026-10-18 | **both** + ex-staff POS activity (LAD-CA-06) | vendor/employee bank match |
 | 2026-10-19 | clean | vendor/employee bank match |
 | 2026-10-20 | clean | vendor/employee bank match |
 
@@ -605,7 +620,7 @@ Person and company names come from Faker (`en_GB`), seeded per key so the same
 record gets the same name on every regeneration. That matters more than it looks:
 an earlier version wrote `Second Employee 0007` and `First Staff 0042`, which
 differ from one another by a single digit and therefore score **93%** under
-character similarity. `CA-22` flagged **87 unrelated pairs** against a real
+character similarity. `ABM-CA-22` flagged **87 unrelated pairs** against a real
 answer of 3, so the fixture could not tell a working control from a broken one.
 Real names put the highest-scoring unrelated pair at **75%**, and the control now
 returns exactly the 3 planted collisions.

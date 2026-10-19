@@ -1,5 +1,5 @@
 """
-CA-04  -  Single staff member dominates a day's cash settlement
+LAD-CA-04  -  Single staff member dominates a day's cash settlement
 
 System : POS  ->  ipos_sales
 
@@ -14,7 +14,11 @@ Applied to cash-tendered invoices per the stricter of the two clauses.
 `is_cash` is derived here from tender_type rather than pre-computed: deciding
 what counts as a cash tender is this control's business, not the loader's.
 
-Threshold provenance:
+    Tender types NOT covered: card, wallet, transfer and voucher sales are
+    excluded. A staff member who dominates those is out of scope here - a
+    separate control would be needed.
+
+    Threshold provenance:
     The demo estate's continuous auditing plan states 50% as an illustrative figure
     ("say 50%"), not a measured one. It is kept as a named constant so the
     business can move it without anyone editing the logic.
@@ -22,7 +26,7 @@ Threshold provenance:
 
 import polars as pl
 
-NAME = "CA-04 Single staff member dominates daily cash settlement"
+NAME = "Single staff member dominates daily cash settlement"
 DESCRIPTION = (
     "One staff member settles more than the permitted share of the day's "
     "cash-tendered invoices."
@@ -112,6 +116,8 @@ def run(ctx) -> dict:
         ),
         "metrics": {
             "cash_invoices": cash_invoices,
+            "cash_value_total": round(cash["invoice_value"].sum(), 2),
+            "top_staff_value": round(top["value"], 2),
             "share_limit": share_limit,
             "top_staff_id": top["staff_id"],
             "top_staff_invoices": top["invoices"],

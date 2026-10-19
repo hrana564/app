@@ -576,10 +576,17 @@ and `scripts\write_third_party_notice.py` writes the `THIRD_PARTY_NOTICES.txt`
 you owe on redistribution. A clean checker does not produce that file.
 
 Client identity is **configuration, not code** — `CLIENT_ENTITIES` in the
-deployment's `.env`, read once in `app/settings.py`. Nothing under `app/`,
-`rules/` or `frontend/src/` may name a client, and the frontend gets the list
-from `GET /api/datasources/entities` rather than keeping its own copy. A client
+deployment's `.env`, read once in `app/settings.py`. Nothing under `app/` or
+`frontend/src/` may name a client, and the frontend gets the list from
+`GET /api/datasources/entities` rather than keeping its own copy. A client
 name in source is a sale blocker, not a style question.
+
+The demo estate's **rule files** are the one place a client code appears, and
+only because a rule's file is named for its code (`LAD-CA-03_v1.py`) and the
+code names the client — see below. The file's *contents* name nobody: the
+control's logic, its thresholds and the tables it reads. A deployment that
+names its clients differently re-files the demo rules under the new code, and
+the file follows.
 
 **Which client a rule belongs to is on the rule's ROW, not in its file.** The
 file holds the logic and the data binding; the row holds the client, chosen
@@ -588,6 +595,20 @@ identity into the source, and would be wrong the moment the same file was
 registered for a different client — which is the whole reason the file is
 portable. The `ENTITY` constant is still *read*, and a file that declares one
 that disagrees with its row is warned about, but nothing asks for one.
+
+**The rule's CODE names the client, and it is derived from the row.**
+`LAD-CA-03` says whose control it is, and the ticket number derived from it
+(`LAD-CA-03-TKT-00042`) says the same — a reference an auditor reads out of
+an email should say where it came from without opening the record. The prefix
+is applied in `scoped_code()` when the rule is created, from the row's
+client, so it can never be another client's; a code that already carries a
+client's prefix has it **replaced** rather than stacked. It is never written
+into the file, for the reason above.
+
+Two consequences worth holding onto: the rule's file is named for its code
+(`LAD-CA-03_v1.py`), so a suite that reads a demo rule finds it by its base
+code rather than by a name that changes with the deployment; and the demo
+suite derives the codes it asserts on, so it names no client either.
 
 The same applies to the demo estate's own layout. `ipos_*`, `syn_*`, `bc_*` and
 `hr_*` are PRODUCT names — iPOS, Synapse, Business Central — and they are the

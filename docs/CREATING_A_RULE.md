@@ -134,7 +134,7 @@ and a rule nobody trusts is a rule nobody reads.
 
 ### A worked example
 
-The cross-system control that CA-06 does, written out in full:
+The cross-system control that LAD-CA-06 does, written out in full:
 
 ```
 Flag POS transactions settled by employees who have already left the company,
@@ -226,10 +226,12 @@ Then:
 
 - **Rule name** - a title for the control, pre-filled from the rule. Change
   it to something an auditor will recognise.
-- **Rule code** - the permanent identifier. Generated rules are numbered
-  `GEN-01`, `GEN-02`. Your own audit programme's codes (`CA-03`) are yours to
-  allocate; a generated rule should not be given one, because it has not been
-  through your programme's numbering.
+- **Rule code** - the permanent identifier. It is prefixed with the client's
+  code, so a rule for Laduree is filed under `LAD-...` and a ticket raised by
+  it reads `LAD-...-TKT-00042`. Generated rules are numbered `LAD-GEN-01`,
+  `LAD-GEN-02`, separately for each client. Your own audit programme's codes
+  (`LAD-CA-03`) are yours to allocate; a generated rule should not be given
+  one, because it has not been through your programme's numbering.
 - **Severity** - how loudly it should speak when it fires.
 
 Read the code. It is your control, and the first thing a reviewer asks is

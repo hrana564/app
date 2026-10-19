@@ -166,7 +166,7 @@ export const GenerateRuleDialog = () => {
     if (!result?.source_code) return;
     setBusy(true);
     try {
-      await api.createRule({
+      const created = await api.createRule({
         code,
         name: name || code,
         entity,
@@ -177,24 +177,28 @@ export const GenerateRuleDialog = () => {
         status: "draft",
         origin: "llm",
       });
+      // The server prefixes the code with the client's code, so the code that
+      // was typed is not always the code that was filed. Everything after
+      // this point uses the one the server recorded.
+      const filed = created.code;
       // The agent proved the rule runs; the validator proves it is allowed to.
       // Both are cheap, and a rule that has not been validated cannot be
       // activated - so it is validated now rather than leaving that to
       // somebody to remember.
-      const report = await api.validateRule(code);
+      const report = await api.validateRule(filed);
       if (report?.ok === false) {
         notify(
-          `${code} was created, but validation found problems: ${report.errors?.join("; ") ?? "see the rule page"}`,
+          `${filed} was created, but validation found problems: ${report.errors?.join("; ") ?? "see the rule page"}`,
           { type: "warning" },
         );
       } else {
-        notify(`${code} created and validated as a draft - activate it when you are ready`, {
+        notify(`${filed} created and validated as a draft - activate it when you are ready`, {
           type: "success",
         });
       }
       refresh();
       setOpen(false);
-      navigate(`/rules/${encodeURIComponent(code)}/show`);
+      navigate(`/rules/${encodeURIComponent(filed)}/show`);
     } catch (e: any) {
       notify(e.message ?? String(e), { type: "error" });
     } finally {

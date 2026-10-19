@@ -30,7 +30,7 @@ from app.engine.catalog import database_catalog
 from app.engine.datasources import default_entity
 from app.engine.loader import read_source, write_source
 from app.engine.rule_generator import is_configured, preview_context
-from app.engine.rules import CodeError, validate_code, versioned_filename
+from app.engine.rules import CodeError, scoped_code, validate_code, versioned_filename
 from app.engine.runner import execute_rule
 from app.engine.validation import RuleValidator, declared_tables, now
 from app.models import Rule, RuleSchedule, Run, Ticket
@@ -272,7 +272,7 @@ async def generate(
             )
             for a in result.attempts
         ],
-        suggested_code=await _next_generated_code(session),
+        suggested_code=await _next_generated_code(session, entity),
         error=result.error,
     )
 
@@ -299,22 +299,27 @@ def _run_agent(catalog, prompt, entity, data_date, tables, lookback_days):
     )
 
 
-async def _next_generated_code(session) -> str:
-    """The next free `GEN-nn`.
+async def _next_generated_code(session, entity: str) -> str:
+    """The next free `<CLIENT>-GEN-nn`.
 
     Generated rules are numbered separately from the audit programme's own
-    codes (`CA-03`), because a generated rule has not been through the
-    programme's numbering and must not look as though it has.
+    codes (`LAD-CA-03`), because a generated rule has not been through the
+    programme's numbering and must not look as though it has. The number
+    counts per client, so each client's generated rules run 01, 02, 03.
     """
     rows = (
-        await session.execute(select(Rule.code).where(Rule.code.like("GEN-%")))
+        await session.execute(
+            select(Rule.code).where(
+                Rule.entity == entity, Rule.code.like("%-GEN-%")
+            )
+        )
     ).scalars().all()
     numbers = []
     for code in rows:
-        tail = str(code).split("-", 1)[-1]
+        tail = str(code).split("-")[-1]
         if tail.isdigit():
             numbers.append(int(tail))
-    return f"GEN-{(max(numbers) + 1) if numbers else 1:02d}"
+    return scoped_code(f"GEN-{(max(numbers) + 1) if numbers else 1:02d}", entity)
 
 
 @router.get("/{code}")
@@ -387,6 +392,11 @@ async def create_rule(
     except CodeError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    entity = (payload.entity or default_entity()).upper()
+    # The code names the client, and the client is the row's business - so the
+    # prefix follows the row and is never written into the file.
+    code = scoped_code(code, entity)
+
     if await head(session, code) is not None:
         raise HTTPException(status_code=409, detail=f"Rule {code} already exists")
 
@@ -403,7 +413,7 @@ async def create_rule(
         status=payload.status,
         source_file=filename,
         name=payload.name,
-        entity=(payload.entity or default_entity()).upper(),
+        entity=entity,
         description=payload.description,
         severity=payload.severity,
         lookback_days=payload.lookback_days,

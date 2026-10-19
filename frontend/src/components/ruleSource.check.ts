@@ -11,7 +11,7 @@
  * runner, and adding one to cover a single file is not a trade worth making.
  * Exits non-zero on failure, so it can be wired into a pre-commit hook.
  */
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -25,6 +25,20 @@ import {
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const RULES = resolve(HERE, "../../../backend/rules");
+
+/**
+ * A rule's file is named for its code, and the code carries the client's code
+ * - so the file is named after the client too, and its name is not the same
+ * in every deployment. Found by the base code, so this script does not name a
+ * client either.
+ */
+const ruleFile = (base: string, version: number) => {
+  const stem = `${base}_v${version}.py`;
+  const names = readdirSync(RULES);
+  const found = names.find((n) => n.endsWith(`-${stem}`)) ?? names.find((n) => n === stem);
+  if (!found) throw new Error(`no rule file for ${base} v${version} in ${RULES}`);
+  return found;
+};
 
 let failures = 0;
 
@@ -45,7 +59,7 @@ const isTrue = (label: string, value: boolean) => eq(label, value, true);
 
 // --- the real files ---------------------------------------------------------
 const template = readFileSync(resolve(RULES, "_template.py"), "utf8");
-const rule04 = readFileSync(resolve(RULES, "CA-04_v4.py"), "utf8");
+const rule04 = readFileSync(resolve(RULES, ruleFile("CA-04", 4)), "utf8");
 
 console.log("=== reading the shipped rules ===");
 eq("template declares ipos_sales", readDeclaredDatasources(template), ["ipos_sales"]);

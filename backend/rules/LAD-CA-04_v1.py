@@ -1,5 +1,5 @@
 """
-CA-04  -  Single staff member dominates a day's cash settlement
+LAD-CA-04  -  Single staff member dominates a day's cash settlement
 
 System : POS  ->  ipos_sales
 
@@ -13,16 +13,11 @@ Applied to cash-tendered invoices per the stricter of the two clauses.
 
 `is_cash` is derived here from tender_type rather than pre-computed: deciding
 what counts as a cash tender is this control's business, not the loader's.
-
-Threshold provenance:
-    The demo estate's continuous auditing plan states 50% as an illustrative figure
-    ("say 50%"), not a measured one. It is kept as a named constant so the
-    business can move it without anyone editing the logic.
 """
 
 import polars as pl
 
-NAME = "CA-04 Single staff member dominates daily cash settlement"
+NAME = "Single staff member dominates daily cash settlement"
 DESCRIPTION = (
     "One staff member settles more than the permitted share of the day's "
     "cash-tendered invoices."
@@ -30,24 +25,16 @@ DESCRIPTION = (
 DATASOURCES = ["ipos_sales"]
 
 # One staff member may settle at most this share of the day's cash invoices.
-# Illustrative figure from the audit plan - see the module docstring.
 SINGLE_STAFF_CASH_SHARE_LIMIT = 50.0
 
 CASH_TENDER = "cash"
 
-def settled_in_cash(ctx):
-    """The day's live cash-tendered invoices.
-
-    Voided invoices are excluded: a voided sale was not settled by anyone.
-    """
-    return ctx.table("ipos_sales").filter(
-        (~pl.col("is_void")) & (pl.col("tender_type") == CASH_TENDER)
-    )
-
 def run(ctx) -> dict:
     share_limit = SINGLE_STAFF_CASH_SHARE_LIMIT
 
-    cash = settled_in_cash(ctx)
+    cash = ctx.table("ipos_sales").filter(
+        (~pl.col("is_void")) & (pl.col("tender_type") == CASH_TENDER)
+    )
     cash_invoices = cash.height
 
     if cash_invoices == 0:
@@ -112,8 +99,6 @@ def run(ctx) -> dict:
         ),
         "metrics": {
             "cash_invoices": cash_invoices,
-            "cash_value_total": round(cash["invoice_value"].sum(), 2),
-            "top_staff_value": round(top["value"], 2),
             "share_limit": share_limit,
             "top_staff_id": top["staff_id"],
             "top_staff_invoices": top["invoices"],

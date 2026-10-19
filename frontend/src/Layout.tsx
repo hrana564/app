@@ -6,7 +6,7 @@ import {
   LoadingIndicator,
   type AppBarProps,
 } from "react-admin";
-import { ENTITIES, useEntityScope } from "./entityScope";
+import { useEntityScope } from "./entityScope";
 
 /**
  * The shell: what the app is called, and which client it is looking at.
@@ -14,11 +14,11 @@ import { ENTITIES, useEntityScope } from "./entityScope";
  * The entity switch sits immediately before the refresh indicator because that
  * is where a person already looks for the state of the page. It is the only
  * place the client is chosen - no screen carries its own copy, so the ticket
- * inbox can never be showing ABM while the rule list above it shows LAD.
+ * inbox can never be showing one client while the rule list above it shows another.
  */
 const EntitySwitch = () => {
-  const { entity, setEntity } = useEntityScope();
-  const current = ENTITIES.find((e) => e.code === entity);
+  const { entity, setEntity, entities } = useEntityScope();
+  const current = entities.find((e) => e.code === entity);
 
   return (
     <Box sx={{ display: "flex", alignItems: "center", pr: 1.5, mr: 1, borderRight: "1px solid rgba(255,255,255,0.25)" }}>
@@ -43,7 +43,7 @@ const EntitySwitch = () => {
           "&:hover": { bgcolor: "rgba(255,255,255,0.08)" },
         }}
       >
-        {ENTITIES.map((e) => (
+        {entities.map((e) => (
           <MenuItem key={e.code} value={e.code}>
             {e.code} — {e.name}
           </MenuItem>

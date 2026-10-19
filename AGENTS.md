@@ -150,8 +150,8 @@ scoped(stmt, model, entity)   -> the same statement, narrowed to one client
 Only `rules_master` knows which client a thing belongs to. A run and a ticket
 carry no entity of their own — they point at a rule and inherit it — so three of
 the five queries that have to filter by client have to **join** to get there.
-Writing that join per endpoint is how the dashboard ends up counting LAD while
-the inbox beside it shows ABM: the two disagree silently and every number still
+Writing that join per endpoint is how the dashboard ends up counting one client
+while the inbox beside it shows another: the two disagree silently and every number still
 looks plausible.
 
 Callers pass the result to **both** the page query and its count query. Narrowing
@@ -197,7 +197,7 @@ settle:
   switched on. It is reported separately, under `not_assured`.
 - **A missed day is overdue only if the control had a cadence.** An on-demand
   control that did not run is a coverage note, not a missed deadline. Without
-  this, `ABM-CA-22` — which is manual-only — reads as a fault on every day it
+  this, `CA-22` — which is manual-only — reads as a fault on every day it
   has not run, forever.
 
 **Nothing here is stored.** The payload is derived on read precisely so there is
@@ -478,7 +478,16 @@ Each of these cost real time. They will cost it again.
 ## 8. Dependencies
 
 **Apache-2.0 / MIT family only**, and the rule is **enforced, not asserted** —
-`scripts\check_licenses.py` exits 1 on a blocked license.
+`scripts\check_licenses.py` exits 1 on a blocked license. Both obligations are
+separate and both are real: the checker proves nothing in the tree is copyleft,
+and `scripts\write_third_party_notice.py` writes the `THIRD_PARTY_NOTICES.txt`
+you owe on redistribution. A clean checker does not produce that file.
+
+Client identity is **configuration, not code** — `CLIENT_ENTITIES` in the
+deployment's `.env`, read once in `app/settings.py`. Nothing under `app/`,
+`rules/` or `frontend/src/` may name a client, and the frontend gets the list
+from `GET /api/datasources/entities` rather than keeping its own copy. A client
+name in source is a sale blocker, not a style question.
 
 - **Allowed:** Apache-2.0, MIT, BSD-2/3, ISC, PSF, Zlib
 - **Blocked:** GPL, AGPL, LGPL, SSPL, BUSL, Elastic, proprietary

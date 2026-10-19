@@ -44,8 +44,8 @@ A WORKED EXAMPLE
 ----------------
     import polars as pl
 
-    NAME = "LAD-CA-XX What this control proves"
-    ENTITY = "LAD"
+    NAME = "CA-XX What this control proves"
+    ENTITY = "CLIENT-A"
     DATASOURCES = ["ipos_sales"]
 
     # Thresholds belong to the rule. Changing one is a code change, which is
@@ -116,7 +116,7 @@ import polars as pl
 
 NAME = "Template rule"
 DESCRIPTION = "Copy me. Replace the table, the threshold and the frame work."
-ENTITY = "LAD"
+ENTITY = "CLIENT-A"
 DATASOURCES = ["ipos_sales"]
 
 VALUE_LIMIT = 500.0

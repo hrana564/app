@@ -1,5 +1,5 @@
 """
-License gate for the ABM Audit Portal backend.
+License gate for the Audit Portal backend.
 
 Policy (see README -> Licensing):
     ALLOWED  : Apache-2.0, MIT, BSD-2/3-Clause, ISC, PSF
@@ -119,7 +119,7 @@ def main() -> int:
         verdicts[verdict].append((name, str(raw).strip()[:70], reason))
 
     print("=" * 72)
-    print("LICENSE AUDIT - ABM Audit Portal backend")
+    print("LICENSE AUDIT - Audit Portal backend")
     print("=" * 72)
     print(f"  PERMITTED : {len(verdicts['PERMITTED']):>3}")
     print(f"  REVIEW    : {len(verdicts['REVIEW']):>3}")

@@ -19,6 +19,24 @@ from __future__ import annotations
 
 from typing import TypedDict
 
+from app.engine.datasources import ENTITIES
+
+# The seed describes the DEMO estate - two clients with deliberately different
+# upstream systems - but it must not hardcode who they are, or a deployment that
+# configured its own clients would seed datasources belonging to nobody and the
+# Data Sources screen would list tables no rule can ever reach.
+#
+# So the two demo estates are mapped positionally onto whatever CLIENT_ENTITIES
+# names. The demo data generator writes the same two layouts, so the CSVs on disk
+# and the registered tables always agree.
+_CODES = sorted(ENTITIES)
+if len(_CODES) < 2:
+    raise SystemExit(
+        "seed_datasources seeds a two-client demo estate. Set CLIENT_ENTITIES "
+        f"to at least two clients; only {len(_CODES)} is configured."
+    )
+_FIRST, _SECOND = _CODES[0], _CODES[1]
+
 
 class SeedSource(TypedDict):
     name: str
@@ -30,14 +48,14 @@ class SeedSource(TypedDict):
 
 
 # ---------------------------------------------------------------------------
-# Laduree - iPOS (SaaS)
+# First configured client - POS
 # ---------------------------------------------------------------------------
-_LAD_IPOS = [
+_CLIENT_A = [
     SeedSource(
         name="ipos_sales",
-        entity="LAD",
-        system="iPOS (SaaS)",
-        description="Point-of-sale invoice header for Laduree stores.",
+        entity=_FIRST,
+        system="POS",
+        description="Point-of-sale invoice header.",
         grain="one row per invoice",
         columns={
             "invoice_id": "VARCHAR",
@@ -53,9 +71,9 @@ _LAD_IPOS = [
     ),
     SeedSource(
         name="ipos_items",
-        entity="LAD",
-        system="iPOS (SaaS)",
-        description="Laduree selling-item master.",
+        entity=_FIRST,
+        system="POS",
+        description="Selling-item master.",
         grain="one row per SKU",
         columns={
             "sku": "VARCHAR",
@@ -68,8 +86,8 @@ _LAD_IPOS = [
     ),
     SeedSource(
         name="ipos_voids",
-        entity="LAD",
-        system="iPOS (SaaS)",
+        entity=_FIRST,
+        system="POS",
         description="Void and cancellation events, with reason and staff.",
         grain="one row per void",
         columns={
@@ -86,13 +104,13 @@ _LAD_IPOS = [
 ]
 
 # ---------------------------------------------------------------------------
-# Laduree - Azure Synapse (analytics / operations warehouse)
+# First configured client - Warehouse (analytics / operations)
 # ---------------------------------------------------------------------------
-_LAD_SYNAPSE = [
+_CLIENT_A_WHAPSE = [
     SeedSource(
         name="syn_inventory",
-        entity="LAD",
-        system="Azure Synapse",
+        entity=_FIRST,
+        system="Warehouse",
         description="Store-level stock position and ageing.",
         grain="one row per store per SKU per snapshot",
         columns={
@@ -106,8 +124,8 @@ _LAD_SYNAPSE = [
     ),
     SeedSource(
         name="syn_recipes",
-        entity="LAD",
-        system="Azure Synapse",
+        entity=_FIRST,
+        system="Warehouse",
         description="Recipe master. POS items with no active recipe are an audit exception.",
         grain="one row per recipe",
         columns={
@@ -119,8 +137,8 @@ _LAD_SYNAPSE = [
     ),
     SeedSource(
         name="syn_wastage",
-        entity="LAD",
-        system="Azure Synapse",
+        entity=_FIRST,
+        system="Warehouse",
         description="Wastage postings by store, item, reason and employee.",
         grain="one row per wastage entry",
         columns={
@@ -136,8 +154,8 @@ _LAD_SYNAPSE = [
     ),
     SeedSource(
         name="syn_stock_transfers",
-        entity="LAD",
-        system="Azure Synapse",
+        entity=_FIRST,
+        system="Warehouse",
         description="Inter-store and warehouse stock transfers.",
         grain="one row per transfer line",
         columns={
@@ -153,14 +171,14 @@ _LAD_SYNAPSE = [
 ]
 
 # ---------------------------------------------------------------------------
-# Laduree - HRMS
+# First configured client - HRMS
 # ---------------------------------------------------------------------------
-_LAD_HRMS = [
+_CLIENT_A_HR = [
     SeedSource(
         name="hr_employees",
-        entity="LAD",
+        entity=_FIRST,
         system="HRMS",
-        description="Laduree employee master. Drives access reviews and payroll.",
+        description="Employee master. Drives access reviews and payroll.",
         grain="one row per employee",
         columns={
             "employee_id": "VARCHAR",
@@ -177,7 +195,7 @@ _LAD_HRMS = [
     ),
     SeedSource(
         name="hr_attendance",
-        entity="LAD",
+        entity=_FIRST,
         system="HRMS",
         description="Daily attendance and store open/close punches.",
         grain="one row per employee per day",
@@ -195,14 +213,14 @@ _LAD_HRMS = [
 ]
 
 # ---------------------------------------------------------------------------
-# Al Boom Marine - iPOS
+# Second configured client - POS
 # ---------------------------------------------------------------------------
-_ABM_IPOS = [
+_CLIENT_B_POS = [
     SeedSource(
         name="ipos_sales",
-        entity="ABM",
-        system="iPOS",
-        description="Al Boom Marine POS invoice header (retail stores).",
+        entity=_SECOND,
+        system="POS",
+        description="POS invoice header (retail stores).",
         grain="one row per invoice",
         columns={
             "invoice_id": "VARCHAR",
@@ -217,8 +235,8 @@ _ABM_IPOS = [
     ),
     SeedSource(
         name="ipos_price_overrides",
-        entity="ABM",
-        system="iPOS",
+        entity=_SECOND,
+        system="POS",
         description="Manual price override events applied at the till.",
         grain="one row per override",
         columns={
@@ -235,8 +253,8 @@ _ABM_IPOS = [
     ),
     SeedSource(
         name="ipos_discounts",
-        entity="ABM",
-        system="iPOS",
+        entity=_SECOND,
+        system="POS",
         description="Discount and promotion lines applied at the till.",
         grain="one row per discount line",
         columns={
@@ -253,14 +271,14 @@ _ABM_IPOS = [
 ]
 
 # ---------------------------------------------------------------------------
-# Al Boom Marine - HRMS
+# Second configured client - HRMS
 # ---------------------------------------------------------------------------
-_ABM_HRMS = [
+_CLIENT_B_HR = [
     SeedSource(
         name="hr_employees",
-        entity="ABM",
+        entity=_SECOND,
         system="HRMS",
-        description="ABM employee master.",
+        description="Employee master.",
         grain="one row per employee",
         columns={
             "employee_id": "VARCHAR",
@@ -278,7 +296,7 @@ _ABM_HRMS = [
     ),
     SeedSource(
         name="hr_attendance",
-        entity="ABM",
+        entity=_SECOND,
         system="HRMS",
         description="Biometric attendance and EOD closing participation.",
         grain="one row per employee per day",
@@ -296,13 +314,13 @@ _ABM_HRMS = [
 ]
 
 # ---------------------------------------------------------------------------
-# Al Boom Marine - Business Central (ERP)
+# Second configured client - ERP
 # ---------------------------------------------------------------------------
-_ABM_BC = [
+_CLIENT_B_ERP = [
     SeedSource(
         name="bc_purchase_orders",
-        entity="ABM",
-        system="Business Central",
+        entity=_SECOND,
+        system="ERP",
         description="Purchase order header.",
         grain="one row per purchase order",
         columns={
@@ -317,8 +335,8 @@ _ABM_BC = [
     ),
     SeedSource(
         name="bc_goods_receipts",
-        entity="ABM",
-        system="Business Central",
+        entity=_SECOND,
+        system="ERP",
         description="Goods received notes. Un-invoiced GRNs are an audit exception.",
         grain="one row per goods receipt",
         columns={
@@ -334,8 +352,8 @@ _ABM_BC = [
     ),
     SeedSource(
         name="bc_vendors",
-        entity="ABM",
-        system="Business Central",
+        entity=_SECOND,
+        system="ERP",
         description="Vendor master with bank details - the ERP side of the "
                     "vendor/employee bank match control.",
         grain="one row per vendor",
@@ -351,8 +369,8 @@ _ABM_BC = [
     ),
     SeedSource(
         name="bc_customer_credit",
-        entity="ABM",
-        system="Business Central",
+        entity=_SECOND,
+        system="ERP",
         description="Distribution customer credit limits and AR ageing.",
         grain="one row per customer",
         columns={
@@ -367,6 +385,6 @@ _ABM_BC = [
 ]
 
 SEED_SOURCES: list[SeedSource] = [
-    *_LAD_IPOS, *_LAD_SYNAPSE, *_LAD_HRMS,
-    *_ABM_IPOS, *_ABM_HRMS, *_ABM_BC,
+    *_CLIENT_A, *_CLIENT_A_WHAPSE, *_CLIENT_A_HR,
+    *_CLIENT_B_POS, *_CLIENT_B_HR, *_CLIENT_B_ERP,
 ]

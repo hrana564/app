@@ -21,7 +21,7 @@ import {
   type DiscoveredFile,
 } from "../dataProvider";
 import { FONT } from "../theme";
-import { ENTITIES, useEntityScope } from "../entityScope";
+import { useEntityScope } from "../entityScope";
 
 /* ================= Datasources ================= */
 
@@ -44,7 +44,7 @@ export const DatasourceList = () => {
   // The client comes from the app bar, not from a control on this screen. Two
   // pickers for the same question is how the list below ends up describing one
   // client while the header says another.
-  const { entity } = useEntityScope();
+  const { entity, entities } = useEntityScope();
   const [view, setView] = useState<View>("registered");
   const [dataDate, setDataDate] = useState<string>("");
   const [overview, setOverview] = useState<DatasourceOverview | null>(null);
@@ -99,7 +99,7 @@ export const DatasourceList = () => {
   const active = overview.registered;
   const unconsumed = overview.discovered.filter((d) => d.state === "new");
   const absent = active.filter((r) => r.landing === "absent");
-  const current = ENTITIES.find((e) => e.code === entity);
+  const current = entities.find((e) => e.code === entity);
 
   return (
     <Box>

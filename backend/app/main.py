@@ -1,4 +1,4 @@
-"""ABM Audit Portal - FastAPI application."""
+"""Audit Portal - FastAPI application."""
 
 from __future__ import annotations
 
@@ -17,12 +17,12 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)-7s %(name)s  %(message)s",
 )
-log = logging.getLogger("abm")
+log = logging.getLogger("audit")
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    log.info("starting ABM Audit Portal API")
+    log.info("starting Audit Portal API")
     await init_models()
     await _bootstrap()
     scheduler.start()
@@ -90,9 +90,9 @@ async def _bootstrap() -> None:
 
 
 app = FastAPI(
-    title="ABM Audit Portal API",
+    title="Audit Portal API",
     description=(
-        "Continuous auditing platform for Al Boom Marine / FSCS.\n\n"
+        "Continuous auditing platform.\n\n"
         "Rules are plain Python files; each returns "
         "`no_rows_returned` or `rows_returned`. A failing run raises a ticket "
         "that an auditor acknowledges."

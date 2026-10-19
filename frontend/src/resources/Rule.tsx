@@ -33,7 +33,7 @@ import {
   RuleStateCell, SeverityField, StatusField, RowCountField,
 } from "../components/ui";
 import { severityColor, statusColor, FONT } from "../theme";
-import { useEntityScope, ENTITIES } from "../entityScope";
+import { useEntityScope } from "../entityScope";
 
 /* ================================================================== */
 /* Filter vocabulary - mirrors the Literals in backend/app/schemas.py */
@@ -73,8 +73,8 @@ export const GenerateRuleDialog = () => {
   // A generated rule belongs to the client the portal is scoped to. The model
   // is only shown that client's registered datasources, so a second selector here
   // would be asking the same question in two places with two answers.
-  const { entity } = useEntityScope();
-  const current = ENTITIES.find((e) => e.code === entity);
+  const { entity, entities } = useEntityScope();
+  const current = entities.find((e) => e.code === entity);
 
   const openDialog = async () => {
     setOpen(true);
@@ -831,7 +831,7 @@ const RuleDetails = () => {
 
   // react-admin does not export a title hook, so set the document title directly.
   useEffect(() => {
-    if (record?.code) document.title = `${record.code} Â· ABM Audit Portal`;
+    if (record?.code) document.title = `${record.code} · Audit Portal`;
   }, [record?.code]);
 
   const load = () => {
@@ -1028,7 +1028,7 @@ const RuleDetails = () => {
  * this page without a migration.
  *
  * The system matters more than it looks. A cross-system control like
- * ABM-CA-22 joins Business Central to HRMS, and that fact was previously only
+ * CA-22 joins the ERP to HRMS, and that fact was previously only
  * stated in the rule's Python docstring, where nobody looks.
  */
 const RuleDatasources = ({ entity, names }: { entity: string; names: string[] }) => {

@@ -192,7 +192,7 @@ class RuleOut(BaseModel):
 class RuleCreate(BaseModel):
     code: str = Field(min_length=2, max_length=64)
     name: str = Field(min_length=2, max_length=255)
-    entity: str = "LAD"
+    entity: str | None = None
     description: str = ""
     severity: Severity = "medium"
     lookback_days: int = Field(default=1, ge=1, le=365)
@@ -246,7 +246,7 @@ class RuleStatusUpdate(BaseModel):
 
 class RuleGenerateRequest(BaseModel):
     prompt: str = Field(min_length=5)
-    entity: str = "LAD"
+    entity: str | None = None
     data_date: date | None = None
 
 

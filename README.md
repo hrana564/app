@@ -1,6 +1,6 @@
 # Scope Investments — Audit Portal
 
-**Intelligent Continuous Auditing — Laduree & Al Boom Marine**
+**Intelligent Continuous Auditing — multiple portfolio companies**
 
 A lightweight continuous-auditing platform. Power Automate extracts from client systems into a
 CSV landing zone; this app runs audit rules against it on a schedule, and raises **tickets** that
@@ -9,7 +9,7 @@ auditors review and acknowledge.
 Rules are **plain Python files**. There is no rule DSL, no new language to learn, and no engine
 between you and the data.
 
-The portal audits two unrelated clients — **LAD** (Laduree) and **ABM** (Al Boom Marine). Every
+The portal audits two unrelated clients — **Client A** and **Client B**. Every
 screen is scoped to one of them; the switch is in the app bar, and the scope is applied by the
 server rather than by the browser filtering what it already downloaded. See
 [the client scope](#the-client-scope).
@@ -95,8 +95,8 @@ The second one is the audit step, stated as the audit step.
 ## 2. Architecture
 
 ```
-LAD  Laduree          iPOS (SaaS)   |  Azure Synapse  |  HRMS
-ABM  Al Boom Marine   iPOS          |  HRMS           |  Business Central
+CLIENT-A   Client A   POS   |  Warehouse  |  HRMS
+CLIENT-B   Client B   POS   |  HRMS       |  ERP
 
 Power Automate ──▶ mount/SourceData/<ENTITY>/<YYYY-MM-DD>/<table>.csv
                         │
@@ -173,9 +173,9 @@ identifies the logical rule and repeats across versions; exactly one row per cod
 is flagged `is_version_active` - the **head**.
 
 ```
-LAD-CA-03  v1   head=f   LAD-CA-03_v1.py  initial version
-LAD-CA-03  v2   head=f   LAD-CA-03_v2.py  smoke: bump
-LAD-CA-03  v3   head=t   LAD-CA-03_v3.py  rollback to v1
+CA-03  v1   head=f   CA-03_v1.py  initial version
+CA-03  v2   head=f   CA-03_v2.py  smoke: bump
+CA-03  v3   head=t   CA-03_v3.py  rollback to v1
 ```
 
 Two database constraints make this safe rather than conventional:
@@ -188,7 +188,7 @@ Two database constraints make this safe rather than conventional:
 Both are verified directly against Postgres in the smoke test.
 
 **Rules are addressed by `code`, never by row id** - a row id identifies one
-*version*, the code identifies the *rule*. URLs read `/api/rules/LAD-CA-03/...`.
+*version*, the code identifies the *rule*. URLs read `/api/rules/CA-03/...`.
 
 ### Behaviour
 
@@ -316,7 +316,7 @@ immediately with the list of what was actually available.
 ## 4a. Schedules — friendly cadence, never cron
 
 A rule can have **many** schedules. A regulatory area may need "06:30 daily" *and* "month-end at
-07:00" — requirement ABM #30 says regulation detail is updated "in the beginning of the year",
+07:00" — requirement #30 says regulation detail is updated "in the beginning of the year",
 which is a monthly cadence on the same rule that also runs daily.
 
 Users never see a cron expression. `app/engine/frequency.py` is the only module that knows cron.
@@ -377,7 +377,7 @@ Validation is static and cheap, so it runs on every save:
 
 That union is what the run folder stages. It matters because the declared list
 is a claim and the call sites are the truth: a rule that calls
-`ctx.table("bc_vendors")` from a LAD rule has to fail validation, and it does.
+`ctx.table("bc_vendors")` from a CLIENT-A rule has to fail validation, and it does.
 
 ---
 
@@ -420,8 +420,8 @@ The **anchor** comes from the schedule (`data_lag_days`, default 1 = yesterday).
 The rule says how far back from that anchor to read. Each number has one job.
 
 ```python
-NAME        = "LAD-CA-03 Last-hour of trading value spike"
-ENTITY      = "LAD"
+NAME        = "CA-03 Last-hour of trading value spike"
+ENTITY      = "CLIENT-A"
 DATASOURCES = ["ipos_sales"]
 ```
 
@@ -481,16 +481,16 @@ version that breaks rules the same way only added a state and a reassuring messa
 The CSV on disk is never touched. Removing a registration says *"we no longer consume this"*; whether
 the ETL keeps producing it is a conversation with the other team.
 
-A rule only ever sees its own entity's tables, so a Laduree rule cannot accidentally read ABM data.
+A rule only ever sees its own entity's tables, so one client's rule cannot accidentally read another's data.
 
 | Entity | System | Tables |
 |---|---|---|
-| **LAD** | iPOS (SaaS) | `ipos_sales`, `ipos_items`, `ipos_voids` |
-| **LAD** | Azure Synapse | `syn_inventory`, `syn_recipes`, `syn_wastage`, `syn_stock_transfers` |
-| **LAD** | HRMS | `hr_employees`, `hr_attendance` |
-| **ABM** | iPOS | `ipos_sales`, `ipos_price_overrides`, `ipos_discounts` |
-| **ABM** | HRMS | `hr_employees`, `hr_attendance` |
-| **ABM** | Business Central | `bc_purchase_orders`, `bc_goods_receipts`, `bc_vendors`, `bc_customer_credit` |
+| **CLIENT-A** | POS | `ipos_sales`, `ipos_items`, `ipos_voids` |
+| **CLIENT-A** | Warehouse | `syn_inventory`, `syn_recipes`, `syn_wastage`, `syn_stock_transfers` |
+| **CLIENT-A** | HRMS | `hr_employees`, `hr_attendance` |
+| **CLIENT-B** | POS | `ipos_sales`, `ipos_price_overrides`, `ipos_discounts` |
+| **CLIENT-B** | HRMS | `hr_employees`, `hr_attendance` |
+| **CLIENT-B** | ERP | `bc_purchase_orders`, `bc_goods_receipts`, `bc_vendors`, `bc_customer_credit` |
 
 ### The sample data is deliberately relatable
 
@@ -498,18 +498,18 @@ Shared keys, **not** remapped ones — that is what lets one rule join three sys
 
 | Key | Connects |
 |---|---|
-| `employee_id` | HRMS `hr_employees` ↔ iPOS `ipos_sales.staff_id` ↔ BC `approved_by` |
+| `employee_id` | HRMS `hr_employees` ↔ POS `ipos_sales.staff_id` ↔ BC `approved_by` |
 | `store_id` | consistent across every system |
-| `sku` | iPOS ↔ Synapse inventory / recipes / wastage |
+| `sku` | POS ↔ Warehouse inventory / recipes / wastage |
 | `po_number` | BC `bc_purchase_orders` ↔ BC `bc_goods_receipts` |
 | IBAN | HRMS `hr_employees.bank_iban` ↔ BC `bc_vendors.vendor_bank_iban` |
 
 Two of the four seeded rules prove this works:
 
-- **`ABM-CA-22`** joins HRMS employees to Business Central vendors on the IBAN — a payments-fraud
-  indicator (requirements ABM #22/#23).
-- **`LAD-CA-06`** joins iPOS activity to HRMS employment status to find exited staff still
-  transacting (requirement Laduree #9).
+- **`CA-22`** joins HRMS employees to ERP vendors on the IBAN — a payments-fraud
+  indicator (requirements #22/#23).
+- **`CA-06`** joins POS activity to HRMS employment status to find exited staff still
+  transacting (requirement #9).
 
 ---
 
@@ -527,7 +527,7 @@ Two roles, seeded once from `.env` and then bcrypt-hashed into PostgreSQL.
 | Create / edit a schedule | ✅ | ❌ |
 
 Clean split: **auditors consume and acknowledge; admins author and govern.** This also satisfies
-requirement ABM #30 — *"regulation detail to be updated in the beginning of the year with
+requirement #30 — *"regulation detail to be updated in the beginning of the year with
 restricted access to modify."*
 
 Enforced in the backend (`require_admin` → HTTP 403) and mirrored in the navigation.
@@ -584,12 +584,12 @@ Missing tables are created on startup, and the two users plus baseline parameter
 
 Generates `mount/SourceData/` for both entities across 6 days, with **deliberately planted breaches**:
 
-| Date | Laduree | Al Boom Marine |
+| Date | Client A | Client B |
 |---|---|---|
 | 2026-10-15 | clean | vendor/employee bank match |
-| 2026-10-16 | **last-hour spike** (LAD-CA-03) | vendor/employee bank match |
-| 2026-10-17 | **single-staff cash dominance** (LAD-CA-04) | vendor/employee bank match |
-| 2026-10-18 | **both** + ex-staff POS activity (LAD-CA-06) | vendor/employee bank match |
+| 2026-10-16 | **last-hour spike** (CA-03) | vendor/employee bank match |
+| 2026-10-17 | **single-staff cash dominance** (CA-04) | vendor/employee bank match |
+| 2026-10-18 | **both** + ex-staff POS activity (CA-06) | vendor/employee bank match |
 | 2026-10-19 | clean | vendor/employee bank match |
 | 2026-10-20 | clean | vendor/employee bank match |
 
@@ -597,9 +597,9 @@ Without planted breaches you cannot tell a working rule from a broken one.
 
 Person and company names come from Faker (`en_GB`), seeded per key so the same
 record gets the same name on every regeneration. That matters more than it looks:
-an earlier version wrote `ABM Employee 0007` and `Laduree Staff 0042`, which
+an earlier version wrote `Second Employee 0007` and `First Staff 0042`, which
 differ from one another by a single digit and therefore score **93%** under
-character similarity. `ABM-CA-22` flagged **87 unrelated pairs** against a real
+character similarity. `CA-22` flagged **87 unrelated pairs** against a real
 answer of 3, so the fixture could not tell a working control from a broken one.
 Real names put the highest-scoring unrelated pair at **75%**, and the control now
 returns exactly the 3 planted collisions.
@@ -636,8 +636,8 @@ app/
 ├── AGENTS.md                          how to change it without breaking it
 ├── mount/                           external data: read by the app, never owned
 │   ├── SourceData/                  <ENTITY>/<date>/<table>.csv (generated; gitignored)
-│   │   ├── LAD/2026-10-15/ipos_sales.csv ...
-│   │   └── ABM/2026-10-15/bc_vendors.csv ...
+│   │   ├── CLIENT-A/2026-10-15/ipos_sales.csv ...
+│   │   └── CLIENT-B/2026-10-15/bc_vendors.csv ...
 │   └── Rules_Executions/            one folder per run (gitignored)
 │       └── 000123/                  rule.py + metadata.json + the CSVs it read
 ├── backend/
@@ -659,7 +659,7 @@ app/
 │   │   └── engine/
 │   │       ├── catalog.py          THE CONTRACT: what an entity may read
 │   │       ├── discovery.py        what the ETL landed, and its first rows. Filesystem only.
-│   │       ├── datasources.py      client entities only (LAD/ABM and their systems)
+│   │       ├── datasources.py      client entities only (CLIENT-A/CLIENT-B and their systems)
 │   │       ├── ctx.py              RuleContext: a table -> a polars DataFrame
 │   │       ├── snapshot.py         stage one run's inputs. No ORM, no DB.
 │   │       ├── loader.py           rule file load/save
@@ -672,10 +672,10 @@ app/
 │   │       └── rule_generator.py   prompt -> draft rule
 │   ├── rules/
 │   │   ├── _template.py
-│   │   ├── rule_1.py   LAD-CA-03   last-hour trading spike
-│   │   ├── rule_2.py   LAD-CA-04   single-staff cash dominance
-│   │   ├── rule_3.py   ABM-CA-22   vendor/employee bank match
-│   │   └── rule_4.py   LAD-CA-06   ex-staff still transacting
+│   │   ├── rule_1.py   CA-03   last-hour trading spike
+│   │   ├── rule_2.py   CA-04   single-staff cash dominance
+│   │   ├── rule_3.py   CA-22   vendor/employee bank match
+│   │   └── rule_4.py   CA-06   ex-staff still transacting
 │   └── scripts/
 │       ├── make_sample_data.py     generate SourceData with planted breaches
 │       ├── smoke_test.py           end-to-end test suite
@@ -748,11 +748,11 @@ token like everything else.
 
 ### The client scope
 
-The portal audits two clients, **LAD** (Laduree) and **ABM** (Al Boom Marine).
+The portal audits two clients, **Client A** and **Client B**.
 Every screen is scoped to one of them, chosen once in the app bar and applied by
 the server — never by the browser filtering what it already downloaded.
 
-`?entity=LAD|ABM` is accepted on rules, runs, tickets (including `/grouped`,
+`?entity=CLIENT-A|CLIENT-B` is accepted on rules, runs, tickets (including `/grouped`,
 `/summary` and `acknowledge-all`), both summaries, `/api/dashboard` and the
 datasource overview. Omit it and the endpoint answers for every client.
 
@@ -781,7 +781,7 @@ rule that produced them, so those endpoints join to reach it — that join lives
 | POST | `/api/rules/{id}/validate` | any | Run the static gate, store the verdict |
 | GET | `/api/rules/{id}/validate-report` | any | Last stored verdict without re-running |
 | GET | `/api/rules/generate/status` | any | Is the LLM configured? |
-| GET | `/api/rules/generate/context?entity=LAD` | any | What the LLM would be shown |
+| GET | `/api/rules/generate/context?entity=CLIENT-A` | any | What the LLM would be shown |
 | POST | `/api/rules/generate` | admin | Prompt → **draft** rule |
 
 ### Schedules / Runs / Tickets / Params / Datasources
@@ -808,7 +808,7 @@ rule that produced them, so those endpoints join to reach it — that join lives
 | GET | `/api/datasources/overview?entity=&data_date=` | any | **One call** — registered tables, what the ETL delivered, and which rules read each |
 | GET | `/api/datasources/discovered?entity=&data_date=` | any | Just what is on disk, read from the CSV headers |
 | GET | `/api/datasources/preview?entity=&name=&data_date=&limit=10` | any | First rows of one landed file, plus the file's true row count |
-| GET | `/api/datasources/available-dates?entity=LAD` | any | Day folders present, plus the latest |
+| GET | `/api/datasources/available-dates?entity=CLIENT-A` | any | Day folders present, plus the latest |
 | POST | `/api/datasources` | admin | Register a table. Columns default to the file's header |
 | DELETE | `/api/datasources/{id}` | admin | Remove a registration. 409 naming the rules, while any active rule reads it |
 | GET | `/api/dashboard?entity=&window=14` | any | The **assurance read model** — see below |
@@ -1090,7 +1090,7 @@ ends on the date it reports to, exposure matches the inbox, the severity split a
 back to the headline, grouped problems never exceed the open findings, and nothing
 without a cadence is ever called overdue), the dashboard being unreachable without a
 token, generation status, and **the client
-scope** (LAD + ABM must equal the whole on every list and summary, a scoped list carries only that
+scope** (CLIENT-A + CLIENT-B must equal the whole on every list and summary, a scoped list carries only that
 client's rules, the scoped dashboard agrees with the scoped lists, and the bulk acknowledge reaches
 only the client it was given — then puts every ticket back).
 
@@ -1135,12 +1135,21 @@ Honest list of what is **not** done yet:
 | **No alert notification** | Tickets only appear in the UI | Email/Teams via Power Automate when needed |
 | **Auth gaps** | See §16 note | No rate limiting, no MFA, token in `localStorage`, `403` incorrectly logs the user out |
 
-### A note on the original "FSCS" label
+### Adding a client
 
-The source requirements workbook has an `ABM` sheet and an `FSCS` sheet. The FSCS sheet covers
-*bar items, recipe management, lab production, events and stock counts* — that is a food-service
-audit universe, which matches **Laduree**. This build treats the two client entities as
-`LAD` (Laduree) and `ABM` (Al Boom Marine). If FSCS is in fact a third client, it needs its own
-entry in `ENTITIES` and `SYSTEMS_BY_ENTITY` in `app/engine/datasources.py`, plus its own
-`SourceData/FSCS/` tree. Once that exists, registering its tables needs no code at all — the
-admin does it from the Data Sources screen, exactly as for LAD and ABM.
+Client identity is configuration. To audit a third client, add it to
+`CLIENT_ENTITIES` in the deployment's `.env`:
+
+```
+CLIENT_ENTITIES=[{"code":"CLIENT-C","name":"Client C","systems":["ERP","HRMS"]}]
+```
+
+Then create its `SourceData/CLIENT-C/` tree and register its tables from the
+Data Sources screen. No code change, and the app bar picks it up on the next
+load — it reads the list from `GET /api/datasources/entities` rather than
+carrying its own copy.
+
+Note the demo estate's two clients have deliberately different upstream systems,
+which is what lets one rule join a POS to an ERP and another join a POS to a
+warehouse. A new client's systems are descriptive only — what actually matters is
+that its tables share keys with the ones a rule already reads.

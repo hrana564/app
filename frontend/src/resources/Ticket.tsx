@@ -805,7 +805,7 @@ const TicketDetails = () => {
   const navigate = useNavigate();
 
   useEffect(() => {
-    if (record?.ticket_no) document.title = `${record.ticket_no} Â· ABM Audit Portal`;
+    if (record?.ticket_no) document.title = `${record.ticket_no} · Audit Portal`;
   }, [record?.ticket_no]);
 
   if (!record) return null;

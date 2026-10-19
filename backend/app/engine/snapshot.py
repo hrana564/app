@@ -11,8 +11,8 @@ Every run therefore gets a folder that freezes all three:
     mount/Rules_Executions/000123/
         metadata.json    what was staged, with a SHA-256 per file
         rule.py          byte-identical copy of the source that ran
-        data/LAD/2026-10-16/hr_employees.csv
-        data/LAD/2026-10-16/ipos_sales.csv
+        data/CLIENT-A/2026-10-16/hr_employees.csv
+        data/CLIENT-A/2026-10-16/ipos_sales.csv
         result.json      written after the rule returns
         error.txt        written only when it raises
 

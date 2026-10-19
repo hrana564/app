@@ -171,7 +171,15 @@ export const runOutcomeColor: Record<string, "error" | "warning" | "info" | "suc
   pass: "success",
 };
 
-export const entityColor: Record<string, "primary" | "secondary"> = {
-  LAD: "secondary",
-  ABM: "primary",
-};
+/**
+ * Colours for the client chips, picked by POSITION not by code.
+ *
+ * This used to be a map from client code to colour, which meant it only ever
+ * coloured the two clients it was written for. Any deployment naming its clients
+ * differently fell through to `primary` for both, so two clients looked
+ * identical in a list - which is the one thing a chip is for.
+ */
+export const ENTITY_COLOURS = ["secondary", "primary"] as const;
+
+export const entityColour = (index: number) =>
+  ENTITY_COLOURS[index % ENTITY_COLOURS.length];

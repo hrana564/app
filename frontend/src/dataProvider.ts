@@ -8,8 +8,8 @@
  */
 import type { DataProvider, GetListParams, GetListResult } from "react-admin";
 
-const TOKEN_KEY = "abm.token";
-const USER_KEY = "abm.user";
+const TOKEN_KEY = "audit.token";
+const USER_KEY = "audit.user";
 
 export const getToken = () => localStorage.getItem(TOKEN_KEY);
 export const getStoredUser = () => {
@@ -51,7 +51,7 @@ const compact = (params: Query) => {
  * The same, ready to append to a path.
  *
  * `compact` returns a bare query string with no leading `?`, so writing
- * `` `/api/dashboard${compact(...)}` `` produced `/api/dashboardentity=LAD` and a
+ * `` `/api/dashboard${compact(...)}` `` produced `/api/dashboardentity=SCOPE` and a
  * 404 that looked like a routing problem. Everything here goes through this.
  */
 const qs = (params: Query) => {

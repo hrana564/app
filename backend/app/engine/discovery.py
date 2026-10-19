@@ -5,7 +5,7 @@ Reads the CSV landing zone and reports it. That is the whole job. This module
 touches no database and imports no model, so it can be pointed at a folder and
 exercised without the app running.
 
-    mount/SourceData/LAD/2026-10-19/
+    mount/SourceData/CLIENT-A/2026-10-19/
         hr_employees.csv
         ipos_sales.csv
         ...

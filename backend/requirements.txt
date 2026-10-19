@@ -1,5 +1,5 @@
 # ---------------------------------------------------------------------------
-# ABM Audit Portal - backend dependencies
+# Audit Portal - backend dependencies
 #
 # LICENSE POLICY
 #   Allowed : Apache-2.0, MIT, BSD-2/3-Clause, ISC  (permissive, attribution only)

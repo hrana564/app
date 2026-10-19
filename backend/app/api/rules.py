@@ -27,6 +27,7 @@ from starlette.concurrency import run_in_threadpool
 
 from app.api.deps import AdminUser, CurrentUser, SessionDep
 from app.engine.catalog import database_catalog
+from app.engine.datasources import default_entity
 from app.engine.loader import read_source, write_source
 from app.engine.rule_generator import (
     generate_rule_source,
@@ -198,11 +199,12 @@ async def generate_status(_user: CurrentUser) -> dict:
 async def generate_context(
     session: SessionDep,
     _user: CurrentUser,
-    entity: str = "LAD",
+    entity: str | None = None,
     data_date: date | None = None,
 ) -> dict:
+    code = (entity or default_entity()).upper()
     catalog = await database_catalog(session)
-    return preview_context(catalog, entity.upper(), data_date or _latest_data_date(entity))
+    return preview_context(catalog, code, data_date or _latest_data_date(code))
 
 
 @router.post("/generate", response_model=RuleGenerateResponse)
@@ -210,7 +212,7 @@ async def generate(
     payload: RuleGenerateRequest, session: SessionDep, admin: AdminUser
 ) -> RuleGenerateResponse:
     """Prompt -> a new DRAFT rule. Never auto-approved."""
-    entity = payload.entity.upper()
+    entity = (payload.entity or default_entity()).upper()
     target = payload.data_date or _latest_data_date(entity)
     catalog = await database_catalog(session)
     generated = await run_in_threadpool(
@@ -346,7 +348,7 @@ async def create_rule(
         status=payload.status,
         source_file=filename,
         name=payload.name,
-        entity=payload.entity.upper(),
+        entity=(payload.entity or default_entity()).upper(),
         description=payload.description,
         severity=payload.severity,
         lookback_days=payload.lookback_days,
@@ -631,8 +633,8 @@ async def test_rule(
     )
 
 
-def _latest_data_date(entity: str = "LAD") -> date:
-    base = settings.sourcedata_dir / entity.upper()
+def _latest_data_date(entity: str | None = None) -> date:
+    base = settings.sourcedata_dir / (entity or default_entity()).upper()
     if base.exists():
         for name in reversed(sorted(p.name for p in base.iterdir() if p.is_dir())):
             try:

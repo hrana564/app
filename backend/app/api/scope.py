@@ -5,8 +5,8 @@ actually knows which client a thing belongs to. A run and a ticket each point at
 a rule and inherit its entity from there.
 
 Writing that join in the runs endpoint, the tickets endpoint and the dashboard
-separately is how a dashboard ends up counting LAD while the ticket inbox beside
-it shows ABM - the two disagree silently and every number still looks plausible.
+separately is how a dashboard ends up counting one client while the ticket inbox
+beside it shows another - the two disagree silently and every number still looks plausible.
 So the join lives here, once.
 
     stmt = scoped(stmt, Run, entity)

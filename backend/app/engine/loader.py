@@ -73,7 +73,7 @@ def read_source(source_file: str, rules_dir: Path | None = None) -> str:
 
 
 def write_source(source_file: str, code: str, rules_dir: Path | None = None) -> Path:
-    """Persist a rule to disk. Filenames look like LAD-CA-03_v2.py."""
+    """Persist a rule to disk. Filenames look like CA-03_v2.py."""
     base = (rules_dir or RULES_DIR).resolve()
     base.mkdir(parents=True, exist_ok=True)
     name = Path(str(source_file)).name

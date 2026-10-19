@@ -3,7 +3,8 @@ import {
 } from "@mui/material";
 import { Link } from "react-router";
 import { useRecordContext } from "react-admin";
-import { severityColor, statusColor, entityColor, FONT } from "../theme";
+import { useEntityScope } from "../entityScope";
+import { severityColor, statusColor, entityColour, FONT } from "../theme";
 
 export const SeverityChip = ({ value }: { value?: string }) =>
   value ? (
@@ -19,10 +20,22 @@ export const StatusChip = ({ value }: { value?: string }) =>
     <Chip size="small" label="-" color="info" />
   );
 
-export const EntityChip = ({ value }: { value?: string }) =>
-  value ? (
-    <Chip size="small" label={value} color={entityColor[value] ?? "primary"} variant="outlined" />
-  ) : null;
+export const EntityChip = ({ value }: { value?: string }) => {
+  const { entities } = useEntityScope();
+  if (!value) return null;
+  const at = entities.findIndex((e) => e.code === value);
+  // An unknown code is styled neutrally rather than as the first client: a
+  // chip that borrowed another client's colour would be asserting a link that
+  // may not exist.
+  return (
+    <Chip
+      size="small"
+      label={value}
+      color={at < 0 ? "default" : entityColour(at)}
+      variant="outlined"
+    />
+  );
+};
 
 /* ------------------------------------------------------------------ */
 /* Dot + text                                                          */

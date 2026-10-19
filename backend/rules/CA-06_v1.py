@@ -1,14 +1,14 @@
 """
-LAD-CA-06  -  Ex-staff member still transacting in the POS
+CA-06  -  Ex-staff member still transacting in the POS
 
-Entity : Laduree
-Systems: iPOS (SaaS) (ipos_sales)  JOIN  HRMS (hr_employees)
+Entity : CLIENT-A (demo estate)
+Systems: POS (ipos_sales)  JOIN  HRMS (hr_employees)
 
-Source requirement (Laduree continuous auditing area #9):
+Source requirement (demo estate continuous auditing area #9):
     "Inactive employees in HR but the POS access is still enabled or used."
 
-A second cross-system proof, and a different join shape from ABM-CA-22: here
-HRMS is the reference master and iPOS supplies the activity. The join key is
+A second cross-system proof, and a different join shape from CA-22: here
+HRMS is the reference master and POS supplies the activity. The join key is
 ipos_sales.staff_id == hr_employees.employee_id, which is only meaningful
 because the generator used the same key on both sides.
 
@@ -21,12 +21,12 @@ The grace period lives in this file.
 
 import polars as pl
 
-NAME = "LAD-CA-06 Ex-staff member still transacting in the POS"
+NAME = "CA-06 Ex-staff member still transacting in the POS"
 DESCRIPTION = (
     "POS transactions settled by employees who have already exited in HRMS - "
     "access has not been revoked."
 )
-ENTITY = "LAD"
+ENTITY = "CLIENT-A"
 DATASOURCES = ["ipos_sales", "hr_employees"]
 
 # Days after exit before POS activity counts as a breach.

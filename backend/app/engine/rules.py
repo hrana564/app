@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import re
 
-# Uppercase segments joined by hyphens: LAD-CA-03, ABM-CA-22.
+# Uppercase segments joined by hyphens: CA-03, CA-22.
 CODE_PATTERN = re.compile(r"^[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)*$")
 
 MAX_CODE_LENGTH = 64
@@ -34,7 +34,7 @@ def validate_code(code: str) -> str:
     if not CODE_PATTERN.match(normalised):
         raise CodeError(
             f"code {code!r} is not valid. Use uppercase letters and digits "
-            f"separated by single hyphens, e.g. LAD-CA-03. "
+            f"separated by single hyphens, e.g. CA-03. "
             f"(letters, digits and hyphens only - no spaces, slashes or "
             f"underscores.)"
         )
@@ -42,7 +42,7 @@ def validate_code(code: str) -> str:
 
 
 def versioned_filename(code: str, version: int) -> str:
-    """`LAD-CA-03` + 2 -> `LAD-CA-03_v2.py`"""
+    """`CA-03` + 2 -> `CA-03_v2.py`"""
     if version < 1:
         raise CodeError(f"version must be 1 or greater, got {version}")
     return f"{code}_v{version}.py"

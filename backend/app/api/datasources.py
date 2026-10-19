@@ -42,7 +42,7 @@ from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import JSONB
 
 from app.api.deps import AdminUser, CurrentUser, SessionDep
-from app.engine.datasources import ENTITIES, SYSTEMS_BY_ENTITY
+from app.engine.datasources import ENTITIES, SYSTEMS_BY_ENTITY, default_entity
 from app.engine.discovery import (
     available_dates,
     discover,
@@ -85,17 +85,19 @@ async def list_entities(_user: CurrentUser) -> dict:
 async def list_datasources(
     session: SessionDep, _user: CurrentUser, entity: str | None = None
 ) -> list[DatasourceOut]:
-    stmt = select(Datasource)
-    if entity:
-        stmt = stmt.where(Datasource.entity == entity.upper())
-    rows = (await session.execute(stmt.order_by(Datasource.entity, Datasource.name))).scalars().all()
+    # A request that names no client gets the default one. Letting None mean
+    # "every client" would be a quieter failure: the screen would look right,
+    # and the admin would be looking at another client's tables.
+    code = (entity or default_entity()).upper()
+    stmt = select(Datasource).where(Datasource.entity == code)
+    rows = (await session.execute(stmt.order_by(Datasource.name))).scalars().all()
     return [DatasourceOut.model_validate(d) for d in rows]
 
 
 @router.get("/preview", response_model=DatasourcePreview)
 async def preview(
     _user: CurrentUser,
-    entity: str = "LAD",
+    entity: str | None = None,
     name: str = "",
     data_date: str | None = None,
     limit: int = Query(10, ge=1, le=200),
@@ -110,9 +112,9 @@ async def preview(
     is held to the same rule as registration - a table name is an identifier,
     never a path fragment.
     """
-    code = entity.upper()
+    code = (entity or default_entity()).upper()
     if code not in ENTITIES:
-        raise HTTPException(404, f"Unknown entity '{entity}'")
+        raise HTTPException(404, f"Unknown entity '{entity or default_entity()}'")
     if not name or "/" in name or "\\" in name or name.startswith("."):
         raise HTTPException(400, f"'{name}' is not a usable table name")
 
@@ -145,12 +147,13 @@ def _row_count(path: Path) -> int | None:
 
 
 @router.get("/available-dates")
-async def available_dates_endpoint(entity: str = "LAD") -> dict:
-    base = settings.sourcedata_dir / entity.upper()
+async def available_dates_endpoint(entity: str | None = None) -> dict:
+    code = (entity or default_entity()).upper()
+    base = settings.sourcedata_dir / code
     return {
-        "dates": available_dates(entity),
+        "dates": available_dates(code),
         "root": str(base),
-        "latest": latest_date(entity),
+        "latest": latest_date(code),
     }
 
 
@@ -184,7 +187,7 @@ async def _rules_using(session: SessionDep, entity: str) -> dict[str, list[str]]
 async def overview(
     session: SessionDep,
     _user: CurrentUser,
-    entity: str = "LAD",
+    entity: str | None = None,
     data_date: str | None = None,
 ) -> DatasourceOverview:
     """Registered tables and what the ETL delivered, for one entity and day.
@@ -192,7 +195,7 @@ async def overview(
     `data_date` defaults to the newest day that has a folder, so the common case
     - "what landed today" - needs no arguments.
     """
-    code = entity.upper()
+    code = (entity or default_entity()).upper()
     if code not in ENTITIES:
         raise HTTPException(404, f"Unknown entity '{entity}'")
 
@@ -256,9 +259,9 @@ async def overview(
 
 
 @router.get("/discovered")
-async def discovered(entity: str = "LAD", data_date: str | None = None) -> list[Any]:
+async def discovered(entity: str | None = None, data_date: str | None = None) -> list[Any]:
     """Only what is on disk, for the register picker."""
-    code = entity.upper()
+    code = (entity or default_entity()).upper()
     day = data_date or latest_date(code)
     if not day:
         return []
@@ -341,7 +344,7 @@ async def delete_datasource(
             detail={
                 "message": f"{row.name} is read by {len(dependents)} active rule(s)",
                 "dependents": dependents,
-                "hint": "Change or remove those rules first — a rule that reads a table which is no longer registered fails on its next run.",
+                "hint": "Change or remove those rules first â€” a rule that reads a table which is no longer registered fails on its next run.",
             },
         )
 

@@ -45,22 +45,22 @@ const isTrue = (label: string, value: boolean) => eq(label, value, true);
 
 // --- the real files ---------------------------------------------------------
 const template = readFileSync(resolve(RULES, "_template.py"), "utf8");
-const lad04 = readFileSync(resolve(RULES, "LAD-CA-04_v4.py"), "utf8");
+const rule04 = readFileSync(resolve(RULES, "CA-04_v4.py"), "utf8");
 
 console.log("=== reading the shipped rules ===");
 eq("template declares ipos_sales", readDeclaredDatasources(template), ["ipos_sales"]);
-eq("LAD-CA-04 declares ipos_sales", readDeclaredDatasources(lad04), ["ipos_sales"]);
+eq("CA-04 declares ipos_sales", readDeclaredDatasources(rule04), ["ipos_sales"]);
 
 // The bug this file exists for: the template's docstring shows
 // `ctx.count_rows("name")` as an example. Reading raw text offered to bind a
 // table called `name`.
 eq("template's docstring example is not a table", tablesReferencedIn(template), ["ipos_sales"]);
-eq("LAD-CA-04 reads what it declares", tablesReferencedIn(lad04), ["ipos_sales"]);
+eq("CA-04 reads what it declares", tablesReferencedIn(rule04), ["ipos_sales"]);
 
 console.log("\n=== a rewrite leaves the rest of the file alone ===");
-const rewritten = writeDeclaredDatasources(lad04, ["ipos_sales", "hr_employees"]);
+const rewritten = writeDeclaredDatasources(rule04, ["ipos_sales", "hr_employees"]);
 eq("reads back", readDeclaredDatasources(rewritten.source), ["hr_employees", "ipos_sales"]);
-isTrue("module docstring survives", rewritten.source.includes("LAD-CA-04  -  Single staff member"));
+isTrue("module docstring survives", rewritten.source.includes("CA-04  -  Single staff member"));
 isTrue("import survives", rewritten.source.includes("import polars as pl"));
 isTrue("run(ctx) survives", rewritten.source.includes("def run(ctx) -> dict:"));
 eq("exactly one declaration", (rewritten.source.match(/^DATASOURCES/gm) ?? []).length, 1);
@@ -70,7 +70,7 @@ isTrue(
 );
 eq(
   "writing the same set is a no-op",
-  writeDeclaredDatasources(lad04, ["ipos_sales"]).changed,
+  writeDeclaredDatasources(rule04, ["ipos_sales"]).changed,
   false,
 );
 

@@ -1,10 +1,10 @@
 """
-ABM-CA-22  -  Vendor bank details match employee bank details
+CA-22  -  Vendor bank details match employee bank details
 
-Entity : Al Boom Marine
-Systems: Business Central (bc_vendors)  JOIN  HRMS (hr_employees)
+Entity : CLIENT-B (demo estate)
+Systems: ERP (bc_vendors)  JOIN  HRMS (hr_employees)
 
-Source requirement (ABM continuous auditing areas #22 and #23):
+Source requirement (demo estate continuous auditing areas #22 and #23):
     "Exception report identifying vendor bank account details in the ERP that
      match employee bank account details in the HR system."
     "Exception report listing any similarity in the vendor account details in
@@ -25,12 +25,12 @@ from difflib import SequenceMatcher
 
 import polars as pl
 
-NAME = "ABM-CA-22 Vendor bank details match employee bank details"
+NAME = "CA-22 Vendor bank details match employee bank details"
 DESCRIPTION = (
-    "Vendor bank account details in Business Central match employee bank "
+    "Vendor bank account details in ERP match employee bank "
     "details in HRMS - a payments-fraud indicator."
 )
-ENTITY = "ABM"
+ENTITY = "CLIENT-B"
 DATASOURCES = ["hr_employees", "bc_vendors"]
 
 # A vendor bank record must clear this similarity (%) against an employee
@@ -46,7 +46,7 @@ def _normalise(column):
     """Lowercase and drop everything that is not a letter or a digit.
 
     Strips the spaces, punctuation and trading suffixes that stop
-    "ABM Employee 0001" and "abm-employee-0001 llc" from ever comparing equal.
+    "Employee 0001" and "employee-0001 llc" from ever comparing equal.
     """
     return column.str.to_lowercase().str.replace_all(NON_ALPHANUMERIC, "")
 
@@ -111,7 +111,7 @@ def run(ctx) -> dict:
             "error_message": None,
             "summary": (
                 f"No overlap between {employees.height} active HRMS employees "
-                f"and {vendors.height} Business Central vendor bank accounts"
+                f"and {vendors.height} ERP vendor bank accounts"
             ),
             "metrics": {
                 "employees_scanned": employees.height,
@@ -133,7 +133,7 @@ def run(ctx) -> dict:
         "status": "success",
         "error_message": None,
         "summary": (
-            f"{len(exact)} exact IBAN collision(s) between Business Central "
+            f"{len(exact)} exact IBAN collision(s) between ERP "
             f"vendors and HRMS employees, covering {vendors_hit} vendor(s) and "
             f"{employees_hit} employee(s). Payments to these vendors require review."
         ),

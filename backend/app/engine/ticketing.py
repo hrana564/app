@@ -58,7 +58,7 @@ async def raise_ticket(
         return None
 
     ticket = Ticket(
-        ticket_no="ABM-TKT-PENDING",
+        ticket_no=f"{run.rule_code}-TKT-PENDING",
         run_id=run.id,
         rule_id=run.rule_id,
         rule_code=run.rule_code,
@@ -69,7 +69,10 @@ async def raise_ticket(
     )
     session.add(ticket)
     await session.flush()
-    ticket.ticket_no = f"ABM-TKT-{ticket.id:05d}"
+    # The rule code prefixes the number rather than a fixed brand, so the number
+    # names the control that raised it. An auditor reading a ticket reference
+    # out of an email can tell where it came from without opening the record.
+    ticket.ticket_no = f"{run.rule_code}-TKT-{ticket.id:05d}"
 
     log.info(
         "ticket %s opened for %s run %s (%s row(s))",

@@ -274,7 +274,7 @@ const RunDetails = () => {
   const record = useRecordContext<any>();
 
   useEffect(() => {
-    if (record?.id) document.title = `Run #${record.id} · ABM Audit Portal`;
+    if (record?.id) document.title = `Run #${record.id} · Audit Portal`;
   }, [record?.id]);
 
   if (!record) return null;

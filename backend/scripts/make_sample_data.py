@@ -3,8 +3,8 @@ Generate the SourceData CSV landing zone for both client entities.
 
 Layout:  SourceData/<ENTITY>/<YYYY-MM-DD>/<table>.csv
 
-  LAD  Laduree         iPOS (SaaS) | Azure Synapse | HRMS
-  ABM  Al Boom Marine  iPOS         | HRMS         | Business Central
+  first configured client    POS | Warehouse | HRMS
+  second configured client   POS | HRMS      | ERP
 
 Deterministic (seeded per day) so rule behaviour is reproducible. Specific days
 carry deliberately planted breaches, otherwise you cannot tell a working rule
@@ -13,9 +13,9 @@ from a broken one.
 The data is deliberately RELATABLE across systems - shared keys, not remapped
 ones:
 
-  employee_id   HRMS.employee_id  ==  iPOS.staff_id  ==  HRMS.approved_by
-  store_id      consistent across iPOS / Synapse / HRMS / Business Central
-  sku           iPOS.sku == Synapse.sku
+  employee_id   HRMS.employee_id  ==  POS.staff_id  ==  HRMS.approved_by
+  store_id      consistent across POS / Warehouse / HRMS / ERP
+  sku           POS.sku == Warehouse.sku
   po_number     bc_purchase_orders.po_number == bc_goods_receipts.po_number
   iban          hr_employees.bank_iban can collide with bc_vendors.vendor_bank_iban
 
@@ -37,13 +37,31 @@ BACKEND_DIR = Path(__file__).resolve().parent.parent
 APP_ROOT = BACKEND_DIR.parent
 SOURCEDATA_DIR = APP_ROOT / "mount" / "SourceData"
 
-# The catalogue seeder imports app.db and the ORM models. This script generates
-# CSVs and is otherwise pure filesystem work, so the backend only goes on the
-# path inside seed_catalog() rather than at import time.
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 if str(Path(__file__).resolve().parent) not in sys.path:
     sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+# Client identity is configuration, so this reads it rather than assuming it.
+# `app.settings` is the only backend module pulled in here - it reads the .env
+# and builds no engine. The catalogue seeder below still imports app.db and the
+# ORM models, and that stays inside seed_catalog() because those DO open the
+# database at import time.
+from app.engine.datasources import ENTITIES  # noqa: E402
+
+# Two demo estates, mapped onto whatever CLIENT_ENTITIES the deployment
+# configured - the same positional mapping the catalogue seeder uses, so the
+# CSVs written here always land in a folder the registered datasources expect.
+# Writing a folder named after a client the deployment never configured would
+# produce data that discovery finds and no rule can reach.
+_CODES = sorted(ENTITIES)
+if len(_CODES) < 2:
+    raise SystemExit(
+        "make_sample_data generates a two-client demo estate. Set "
+        f"CLIENT_ENTITIES to at least two clients; only {len(_CODES)} is "
+        f"configured."
+    )
+_FIRST, _SECOND = _CODES[0], _CODES[1]
 
 DAYS = [
     date(2026, 10, 15),
@@ -54,11 +72,11 @@ DAYS = [
     date(2026, 10, 20),
 ]
 
-LAD_STORES = ["LD-101", "LD-102", "LD-103", "LD-104", "LD-105", "LD-106"]
-ABM_STORES = ["ST-101", "ST-102", "ST-103", "ST-104", "ST-105"]
+A_STORES = ["LD-101", "LD-102", "LD-103", "LD-104", "LD-105", "LD-106"]
+B_STORES = ["ST-101", "ST-102", "ST-103", "ST-104", "ST-105"]
 
-LAD_ITEM_GROUPS = ["RETAIL", "BAKERY", "BAR"]
-ABM_ITEM_GROUPS = ["RETAIL", "GROCERY", "ELECTRONICS"]
+A_ITEM_GROUPS = ["RETAIL", "BAKERY", "BAR"]
+B_ITEM_GROUPS = ["RETAIL", "GROCERY", "ELECTRONICS"]
 
 TRADING_START_HOUR = 10
 TRADING_END_HOUR = 23  # stores trade 10:00-23:59, so "last hour" = hour 23
@@ -68,18 +86,18 @@ WASTAGE_REASONS = ["SPOILAGE", "PREPARATION", "QUALITY", "OVERPRODUCTION", "DAMA
 
 # day -> scenario label, per entity
 SCENARIO = {
-    ("LAD", date(2026, 10, 15)): "clean",
-    ("LAD", date(2026, 10, 16)): "lad_last_hour_spike",
-    ("LAD", date(2026, 10, 17)): "lad_single_staff_cash",
-    ("LAD", date(2026, 10, 18)): "both_breaches",
-    ("LAD", date(2026, 10, 19)): "clean",
-    ("LAD", date(2026, 10, 20)): "clean",
-    ("ABM", date(2026, 10, 15)): "abm_bank_match",
-    ("ABM", date(2026, 10, 16)): "abm_bank_match",
-    ("ABM", date(2026, 10, 17)): "abm_bank_match",
-    ("ABM", date(2026, 10, 18)): "abm_bank_match",
-    ("ABM", date(2026, 10, 19)): "abm_bank_match",
-    ("ABM", date(2026, 10, 20)): "abm_bank_match",
+    (_FIRST, date(2026, 10, 15)): "clean",
+    (_FIRST, date(2026, 10, 16)): "last_hour_spike",
+    (_FIRST, date(2026, 10, 17)): "single_staff_cash",
+    (_FIRST, date(2026, 10, 18)): "both_breaches",
+    (_FIRST, date(2026, 10, 19)): "clean",
+    (_FIRST, date(2026, 10, 20)): "clean",
+    (_SECOND, date(2026, 10, 15)): "bank_match",
+    (_SECOND, date(2026, 10, 16)): "bank_match",
+    (_SECOND, date(2026, 10, 17)): "bank_match",
+    (_SECOND, date(2026, 10, 18)): "bank_match",
+    (_SECOND, date(2026, 10, 19)): "bank_match",
+    (_SECOND, date(2026, 10, 20)): "bank_match",
 }
 
 TRADING_DAYS = 14  # consecutive days per entity, most recent is the "live" one
@@ -96,9 +114,9 @@ def rng_for(entity: str, day: date) -> random.Random:
 # ---------------------------------------------------------------------------
 # Realistic names
 #
-# An earlier version wrote "Laduree Staff 0042" and "ABM Employee 0007" as
+# An earlier version wrote "First Staff 0042" and "Second Employee 0007" as
 # names. Every one of those differs from every other by a single digit, which
-# scores 93% under character-similarity - so the ABM-CA-22 name check flagged
+# scores 93% under character-similarity - so the CA-22 name check flagged
 # 87 unrelated pairs and the fixture could not distinguish a working control
 # from a broken one. Real names put the highest-scoring unrelated pair at 81%.
 #
@@ -136,9 +154,9 @@ def _stable_seed(key: str) -> int:
 
 
 # ---------------------------------------------------------------------------
-# Laduree
+# First configured client
 # ---------------------------------------------------------------------------
-def lad_employees(rng: random.Random) -> list[dict]:
+def a_employees(rng: random.Random) -> list[dict]:
     """Employee master. Written to every day folder - it is master data."""
     rows = []
     for i in range(1, 61):
@@ -147,13 +165,13 @@ def lad_employees(rng: random.Random) -> list[dict]:
         rows.append(
             {
                 "employee_id": emp_id,
-                "full_name": _person_name(rng, f"LAD-{emp_id}"),
+                "full_name": _person_name(rng, f"{_FIRST}-{emp_id}"),
                 "nationality": rng.choice(NATIONALITIES),
                 "department": rng.choice(["Retail Ops", "Kitchen", "Bar", "Supply Chain"]),
                 "designation": rng.choice(
                     ["Barista", "Chef", "Shift Supervisor", "Store Manager", "Packer"]
                 ),
-                "home_store": rng.choice(LAD_STORES),
+                "home_store": rng.choice(A_STORES),
                 "employment_status": "exited" if exited else "active",
                 "exit_date": (date(2026, 9, 30).isoformat() if exited else ""),
                 "monthly_salary": f"{rng.randrange(4500, 24000)}",
@@ -163,7 +181,7 @@ def lad_employees(rng: random.Random) -> list[dict]:
     return rows
 
 
-def lad_items(rng: random.Random) -> list[dict]:
+def a_items(rng: random.Random) -> list[dict]:
     rows = []
     groups = ["RETAIL", "BAKERY", "BAR"]
     for i in range(1, 41):
@@ -174,7 +192,7 @@ def lad_items(rng: random.Random) -> list[dict]:
         rows.append(
             {
                 "sku": sku,
-                "item_name": f"Laduree Item {i:03d}",
+                "item_name": f"Item {i:03d}",
                 "item_group": group,
                 "recipe_id": (f"RCP-{i:04d}" if has_recipe else ""),
                 "unit_price": f"{round(rng.lognormvariate(3.5, 0.5), 2)}",
@@ -184,13 +202,13 @@ def lad_items(rng: random.Random) -> list[dict]:
     return rows
 
 
-def lad_sales(day: date, rng: random.Random, employees: list[dict]) -> list[dict]:
-    scenario = scenario_for("LAD", day)
+def a_sales(day: date, rng: random.Random, employees: list[dict]) -> list[dict]:
+    scenario = scenario_for(_FIRST, day)
     hours = list(range(TRADING_START_HOUR, TRADING_END_HOUR + 1))
     base_counts = {h: rng.randint(24, 32) for h in hours}
 
-    # --- plant the last-hour spike (LAD-CA-03) -----------------------------
-    if scenario in ("lad_last_hour_spike", "both_breaches"):
+    # --- plant the last-hour spike (CA-03) -----------------------------
+    if scenario in ("last_hour_spike", "both_breaches"):
         base_counts[TRADING_END_HOUR] = rng.randint(160, 180)
 
     live = [e for e in employees if e["employment_status"] == "active"]
@@ -202,13 +220,13 @@ def lad_sales(day: date, rng: random.Random, employees: list[dict]) -> list[dict
     for hour in hours:
         for _ in range(base_counts[hour]):
             seq += 1
-            group = rng.choices(LAD_ITEM_GROUPS, weights=[46, 32, 22], k=1)[0]
+            group = rng.choices(A_ITEM_GROUPS, weights=[46, 32, 22], k=1)[0]
             tender = rng.choices(["card", "cash", "credit"], weights=[64, 26, 10], k=1)[0]
             value = round(rng.lognormvariate(4.6, 0.7), 2)
 
-            # --- plant the single-staff cash dominance (LAD-CA-04) ---------
+            # --- plant the single-staff cash dominance (CA-04) ---------
             if (
-                scenario in ("lad_single_staff_cash", "both_breaches")
+                scenario in ("single_staff_cash", "both_breaches")
                 and tender == "cash"
                 and rng.random() < dominant_share
             ):
@@ -220,9 +238,9 @@ def lad_sales(day: date, rng: random.Random, employees: list[dict]) -> list[dict
             ts = datetime.combine(day, time(hour, rng.randrange(60), rng.randrange(60)))
             rows.append(
                 {
-                    "invoice_id": f"LAD-{day:%Y%m%d}-{seq:06d}",
+                    "invoice_id": f"{_FIRST}-{day:%Y%m%d}-{seq:06d}",
                     "invoice_ts": ts.isoformat(sep=" "),
-                    "store_id": rng.choice(LAD_STORES),
+                    "store_id": rng.choice(A_STORES),
                     "staff_id": staff_id,
                     "tender_type": tender,
                     "item_group": group,
@@ -235,7 +253,7 @@ def lad_sales(day: date, rng: random.Random, employees: list[dict]) -> list[dict
     for row in rng.sample(rows, k=max(2, len(rows) // 100)):
         row["is_void"] = "true"
 
-    # A few invoices from an employee who has already exited - LAD-CA-06.
+    # A few invoices from an employee who has already exited - CA-06.
     # Only planted on two days so the control has clean days to stay quiet on.
     exited = [e for e in employees if e["employment_status"] == "exited"]
     plant_ex_staff = day in (date(2026, 10, 15), date(2026, 10, 18))
@@ -246,9 +264,9 @@ def lad_sales(day: date, rng: random.Random, employees: list[dict]) -> list[dict
         ts = datetime.combine(day, time(rng.randrange(10, 24), rng.randrange(60)))
         rows.append(
             {
-                "invoice_id": f"LAD-{day:%Y%m%d}-{seq:06d}",
+                "invoice_id": f"{_FIRST}-{day:%Y%m%d}-{seq:06d}",
                 "invoice_ts": ts.isoformat(sep=" "),
-                "store_id": rng.choice(LAD_STORES),
+                "store_id": rng.choice(A_STORES),
                 "staff_id": rng.choice(exited)["employee_id"],
                 "tender_type": "card",
                 "item_group": "RETAIL",
@@ -261,7 +279,7 @@ def lad_sales(day: date, rng: random.Random, employees: list[dict]) -> list[dict
     return rows
 
 
-def lad_voids(day: date, rng: random.Random, sales: list[dict], employees: list[dict]) -> list[dict]:
+def a_voids(day: date, rng: random.Random, sales: list[dict], employees: list[dict]) -> list[dict]:
     live = [e["employee_id"] for e in employees if e["employment_status"] == "active"]
     rows = []
     for i in range(rng.randint(12, 22)):
@@ -283,7 +301,7 @@ def lad_voids(day: date, rng: random.Random, sales: list[dict], employees: list[
     return rows
 
 
-def lad_recipes(rng: random.Random, items: list[dict]) -> list[dict]:
+def a_recipes(rng: random.Random, items: list[dict]) -> list[dict]:
     rows = []
     for item in items:
         if not item["recipe_id"]:
@@ -299,9 +317,9 @@ def lad_recipes(rng: random.Random, items: list[dict]) -> list[dict]:
     return rows
 
 
-def lad_inventory(day: date, rng: random.Random, items: list[dict]) -> list[dict]:
+def a_inventory(day: date, rng: random.Random, items: list[dict]) -> list[dict]:
     rows = []
-    for store in LAD_STORES:
+    for store in A_STORES:
         for item in rng.sample(items, k=min(12, len(items))):
             qty = round(rng.uniform(0, 140), 1)
             rows.append(
@@ -320,7 +338,7 @@ def lad_inventory(day: date, rng: random.Random, items: list[dict]) -> list[dict
     return rows
 
 
-def lad_wastage(day: date, rng: random.Random, items: list[dict], employees: list[dict]) -> list[dict]:
+def a_wastage(day: date, rng: random.Random, items: list[dict], employees: list[dict]) -> list[dict]:
     live = [e["employee_id"] for e in employees if e["employment_status"] == "active"]
     rows = []
     for i in range(rng.randint(18, 30)):
@@ -329,7 +347,7 @@ def lad_wastage(day: date, rng: random.Random, items: list[dict], employees: lis
         rows.append(
             {
                 "wastage_id": f"WST-{day:%Y%m%d}-{i + 1:04d}",
-                "store_id": rng.choice(LAD_STORES),
+                "store_id": rng.choice(A_STORES),
                 "sku": item["sku"],
                 "staff_id": rng.choice(live),
                 "wastage_ts": datetime.combine(
@@ -343,7 +361,7 @@ def lad_wastage(day: date, rng: random.Random, items: list[dict], employees: lis
     return rows
 
 
-def lad_stock_transfers(day: date, rng: random.Random, items: list[dict]) -> list[dict]:
+def a_stock_transfers(day: date, rng: random.Random, items: list[dict]) -> list[dict]:
     rows = []
     for i in range(rng.randint(10, 18)):
         dispatched = day - timedelta(days=rng.randint(0, 9))
@@ -355,8 +373,8 @@ def lad_stock_transfers(day: date, rng: random.Random, items: list[dict]) -> lis
         rows.append(
             {
                 "transfer_id": f"TRF-{day:%Y%m%d}-{i + 1:04d}",
-                "from_store": rng.choice(LAD_STORES),
-                "to_store": rng.choice(LAD_STORES),
+                "from_store": rng.choice(A_STORES),
+                "to_store": rng.choice(A_STORES),
                 "sku": rng.choice(items)["sku"],
                 "qty": f"{round(rng.uniform(5, 90), 1)}",
                 "dispatched_ts": datetime.combine(
@@ -371,7 +389,7 @@ def lad_stock_transfers(day: date, rng: random.Random, items: list[dict]) -> lis
     return rows
 
 
-def lad_attendance(day: date, rng: random.Random, employees: list[dict]) -> list[dict]:
+def a_attendance(day: date, rng: random.Random, employees: list[dict]) -> list[dict]:
     live = [e for e in employees if e["employment_status"] == "active"]
     rows = []
     for emp in live:
@@ -394,20 +412,20 @@ def lad_attendance(day: date, rng: random.Random, employees: list[dict]) -> list
 
 
 # ---------------------------------------------------------------------------
-# Al Boom Marine
+# Second configured client
 # ---------------------------------------------------------------------------
-def abm_employees(rng: random.Random, shared_ibans: list[str]) -> list[dict]:
+def b_employees(rng: random.Random, shared_ibans: list[str]) -> list[dict]:
     rows = []
     for i in range(1, 71):
         emp_id = f"EMP-A{i:04d}"
         exited = i >= 66
         # The first three employees deliberately share a bank account with a
-        # vendor - that is the ABM-CA-22 / ABM-CA-23 control breach.
+        # vendor - that is the CA-22 / CA-23 control breach.
         iban = shared_ibans[i - 1] if i <= len(shared_ibans) else _iban(rng, f"AE{i:06d}")
         rows.append(
             {
                 "employee_id": emp_id,
-                "full_name": _person_name(rng, f"ABM-{emp_id}"),
+                "full_name": _person_name(rng, f"{_SECOND}-{emp_id}"),
                 "nationality": rng.choice(NATIONALITIES),
                 "department": rng.choice(
                     ["Retail", "Distribution", "Finance", "HR", "Buying", "E-Commerce"]
@@ -415,31 +433,31 @@ def abm_employees(rng: random.Random, shared_ibans: list[str]) -> list[dict]:
                 "designation": rng.choice(
                     ["Sales Associate", "Store Supervisor", "Accountant", "Buyer", "Store Manager"]
                 ),
-                "home_store": rng.choice(ABM_STORES),
+                "home_store": rng.choice(B_STORES),
                 "employment_status": "exited" if exited else "active",
                 "exit_date": (date(2026, 9, 30).isoformat() if exited else ""),
                 "monthly_salary": f"{rng.randrange(4200, 26000)}",
                 "bank_iban": iban,
-                "bank_account_name": _person_name(rng, f"ABM-{emp_id}"),
+                "bank_account_name": _person_name(rng, f"{_SECOND}-{emp_id}"),
             }
         )
     return rows
 
 
-def abm_vendors(rng: random.Random, shared_ibans: list[str],
-                abm_emp: list[dict]) -> list[dict]:
+def b_vendors(rng: random.Random, shared_ibans: list[str],
+                b_emp: list[dict]) -> list[dict]:
     rows = []
     for i in range(1, 19):
         vendor_id = f"VND-A{i:04d}"
         fake = _faker_for(f"VND-{vendor_id}")
         # The first three vendors are held in the bank accounts of the first
-        # three employees: that is the ABM-CA-22 / ABM-CA-23 control breach,
+        # three employees: that is the CA-22 / CA-23 control breach,
         # and it is planted on BOTH the IBAN and the account holder name so
         # either detection path finds it.
         breach = i <= len(shared_ibans)
         iban = shared_ibans[i - 1] if breach else _iban(rng, f"AE5{i:05d}")
         account_name = (
-            abm_emp[i - 1]["bank_account_name"] if breach else fake.company()
+            b_emp[i - 1]["bank_account_name"] if breach else fake.company()
         )
         rows.append(
             {
@@ -457,7 +475,7 @@ def abm_vendors(rng: random.Random, shared_ibans: list[str],
     return rows
 
 
-def abm_sales(day: date, rng: random.Random, employees: list[dict]) -> list[dict]:
+def b_sales(day: date, rng: random.Random, employees: list[dict]) -> list[dict]:
     live = [e["employee_id"] for e in employees if e["employment_status"] == "active"]
     hours = list(range(TRADING_START_HOUR, TRADING_END_HOUR + 1))
     rows, seq = [], 0
@@ -466,14 +484,14 @@ def abm_sales(day: date, rng: random.Random, employees: list[dict]) -> list[dict
             seq += 1
             rows.append(
                 {
-                    "invoice_id": f"ABM-{day:%Y%m%d}-{seq:06d}",
+                    "invoice_id": f"{_SECOND}-{day:%Y%m%d}-{seq:06d}",
                     "invoice_ts": datetime.combine(
                         day, time(hour, rng.randrange(60), rng.randrange(60))
                     ).isoformat(sep=" "),
-                    "store_id": rng.choice(ABM_STORES),
+                    "store_id": rng.choice(B_STORES),
                     "staff_id": rng.choice(live),
                     "tender_type": rng.choices(["card", "cash", "credit"], weights=[58, 32, 10], k=1)[0],
-                    "item_group": rng.choices(ABM_ITEM_GROUPS, weights=[62, 24, 14], k=1)[0],
+                    "item_group": rng.choices(B_ITEM_GROUPS, weights=[62, 24, 14], k=1)[0],
                     "invoice_value": f"{round(rng.lognormvariate(5.5, 0.65), 2)}",
                     "is_void": "false",
                 }
@@ -483,7 +501,7 @@ def abm_sales(day: date, rng: random.Random, employees: list[dict]) -> list[dict
     return rows
 
 
-def abm_price_overrides(day: date, rng: random.Random, sales: list[dict], employees: list[dict]) -> list[dict]:
+def b_price_overrides(day: date, rng: random.Random, sales: list[dict], employees: list[dict]) -> list[dict]:
     live = [e["employee_id"] for e in employees if e["employment_status"] == "active"]
     rows = []
     for i in range(rng.randint(22, 38)):
@@ -493,9 +511,9 @@ def abm_price_overrides(day: date, rng: random.Random, sales: list[dict], employ
             {
                 "override_id": f"POV-{day:%Y%m%d}-{i + 1:04d}",
                 "invoice_id": rng.choice(sales)["invoice_id"] if sales else "",
-                "store_id": rng.choice(ABM_STORES),
+                "store_id": rng.choice(B_STORES),
                 "staff_id": rng.choice(live),
-                "sku": f"ABM-SKU-{rng.randrange(1000, 9999)}",
+                "sku": f"{_SECOND}-SKU-{rng.randrange(1000, 9999)}",
                 "override_ts": datetime.combine(
                     day, time(rng.randrange(10, 24), rng.randrange(60))
                 ).isoformat(sep=" "),
@@ -507,7 +525,7 @@ def abm_price_overrides(day: date, rng: random.Random, sales: list[dict], employ
     return rows
 
 
-def abm_discounts(day: date, rng: random.Random, sales: list[dict], employees: list[dict]) -> list[dict]:
+def b_discounts(day: date, rng: random.Random, sales: list[dict], employees: list[dict]) -> list[dict]:
     live = [e["employee_id"] for e in employees if e["employment_status"] == "active"]
     rows = []
     for i in range(rng.randint(30, 50)):
@@ -515,9 +533,9 @@ def abm_discounts(day: date, rng: random.Random, sales: list[dict], employees: l
             {
                 "discount_id": f"DSC-{day:%Y%m%d}-{i + 1:04d}",
                 "invoice_id": rng.choice(sales)["invoice_id"] if sales else "",
-                "store_id": rng.choice(ABM_STORES),
+                "store_id": rng.choice(B_STORES),
                 "staff_id": rng.choice(live),
-                "sku": f"ABM-SKU-{rng.randrange(1000, 9999)}",
+                "sku": f"{_SECOND}-SKU-{rng.randrange(1000, 9999)}",
                 "discount_ts": datetime.combine(
                     day, time(rng.randrange(10, 24), rng.randrange(60))
                 ).isoformat(sep=" "),
@@ -530,7 +548,7 @@ def abm_discounts(day: date, rng: random.Random, sales: list[dict], employees: l
     return rows
 
 
-def abm_procurement(day: date, rng: random.Random, vendors: list[dict]) -> tuple[list[dict], list[dict]]:
+def b_procurement(day: date, rng: random.Random, vendors: list[dict]) -> tuple[list[dict], list[dict]]:
     employees = [f"EMP-A{rng.randrange(1, 66):04d}" for _ in range(1)]
     pos_rows, grn_rows = [], []
     for i in range(rng.randint(30, 44)):
@@ -542,7 +560,7 @@ def abm_procurement(day: date, rng: random.Random, vendors: list[dict]) -> tuple
                 "po_number": po_number,
                 "vendor_id": vendor["vendor_id"],
                 "po_date": day.isoformat(),
-                "store_id": rng.choice(ABM_STORES),
+                "store_id": rng.choice(B_STORES),
                 "po_value": f"{po_value:.2f}",
                 "approved_by": rng.choice(employees),
                 "po_status": rng.choice(["OPEN", "RECEIVED", "CLOSED"]),
@@ -565,7 +583,7 @@ def abm_procurement(day: date, rng: random.Random, vendors: list[dict]) -> tuple
     return pos_rows, grn_rows
 
 
-def abm_customer_credit(rng: random.Random) -> list[dict]:
+def b_customer_credit(rng: random.Random) -> list[dict]:
     rows = []
     for i in range(1, 25):
         rows.append(
@@ -581,7 +599,7 @@ def abm_customer_credit(rng: random.Random) -> list[dict]:
     return rows
 
 
-def abm_attendance(day: date, rng: random.Random, employees: list[dict]) -> list[dict]:
+def b_attendance(day: date, rng: random.Random, employees: list[dict]) -> list[dict]:
     live = [e for e in employees if e["employment_status"] == "active"]
     rows = []
     for emp in live:
@@ -689,7 +707,7 @@ def seed_catalog(verbose: bool = True) -> int:
 
 def main() -> int:
     # --- master data, stable across all days -------------------------------
-    master_rng = random.Random("ABM-2026")
+    master_rng = random.Random("demo-b-2026")
 
     # Seeded ONCE, then drawn three times. This used to be
     #     [f"AE{random.Random('shared').randrange(...):016d}" for _ in range(3)]
@@ -697,63 +715,63 @@ def main() -> int:
     # produced the SAME IBAN three times. All six records then shared one
     # account, and the vendor/employee join returned a 3x3 cross product where
     # three one-to-one collisions were intended.
-    shared_rng = random.Random("ABM-shared-ibans")
+    shared_rng = random.Random("demo-b-shared-ibans")
     shared_ibans = [f"AE{shared_rng.randrange(10**16):016d}" for _ in range(3)]
 
-    lad_emp = lad_employees(random.Random("LAD-master"))
-    lad_item = lad_items(random.Random("LAD-items"))
-    lad_recipe = lad_recipes(random.Random("LAD-recipes"), lad_item)
+    a_emp = a_employees(random.Random("demo-a-master"))
+    a_item = a_items(random.Random("demo-a-items"))
+    a_recipe = a_recipes(random.Random("demo-a-recipes"), a_item)
 
-    abm_emp = abm_employees(master_rng, shared_ibans)
-    abm_vendor = abm_vendors(master_rng, shared_ibans, abm_emp)
-    abm_credit = abm_customer_credit(master_rng)
+    b_emp = b_employees(master_rng, shared_ibans)
+    b_vendor = b_vendors(master_rng, shared_ibans, b_emp)
+    b_credit = b_customer_credit(master_rng)
 
     for day in DAYS:
-        # --- LADUREE -------------------------------------------------------
-        rng = rng_for("LAD", day)
-        sales = lad_sales(day, rng, lad_emp)
-        lad_rows = {
+        # --- first configured client ------------------------------------------------------
+        rng = rng_for(_FIRST, day)
+        sales = a_sales(day, rng, a_emp)
+        a_rows = {
             "ipos_sales": sales,
-            "ipos_items": lad_item,
-            "ipos_voids": lad_voids(day, rng, sales, lad_emp),
-            "syn_inventory": lad_inventory(day, rng, lad_item),
-            "syn_recipes": lad_recipe,
-            "syn_wastage": lad_wastage(day, rng, lad_item, lad_emp),
-            "syn_stock_transfers": lad_stock_transfers(day, rng, lad_item),
-            "hr_employees": lad_emp,
-            "hr_attendance": lad_attendance(day, rng, lad_emp),
+            "ipos_items": a_item,
+            "ipos_voids": a_voids(day, rng, sales, a_emp),
+            "syn_inventory": a_inventory(day, rng, a_item),
+            "syn_recipes": a_recipe,
+            "syn_wastage": a_wastage(day, rng, a_item, a_emp),
+            "syn_stock_transfers": a_stock_transfers(day, rng, a_item),
+            "hr_employees": a_emp,
+            "hr_attendance": a_attendance(day, rng, a_emp),
         }
-        for table, rows in lad_rows.items():
-            _write("LAD", day, table, rows)
+        for table, rows in a_rows.items():
+            _write(_FIRST, day, table, rows)
 
-        # --- AL BOOM MARINE -------------------------------------------------
-        rng = rng_for("ABM", day)
-        abm_sales_rows = abm_sales(day, rng, abm_emp)
-        pos, grn = abm_procurement(day, rng, abm_vendor)
-        abm_rows = {
-            "ipos_sales": abm_sales_rows,
-            "ipos_price_overrides": abm_price_overrides(day, rng, abm_sales_rows, abm_emp),
-            "ipos_discounts": abm_discounts(day, rng, abm_sales_rows, abm_emp),
-            "hr_employees": abm_emp,
-            "hr_attendance": abm_attendance(day, rng, abm_emp),
+        # --- second configured client ------------------------------------------------
+        rng = rng_for(_SECOND, day)
+        b_sales_rows = b_sales(day, rng, b_emp)
+        pos, grn = b_procurement(day, rng, b_vendor)
+        b_rows = {
+            "ipos_sales": b_sales_rows,
+            "ipos_price_overrides": b_price_overrides(day, rng, b_sales_rows, b_emp),
+            "ipos_discounts": b_discounts(day, rng, b_sales_rows, b_emp),
+            "hr_employees": b_emp,
+            "hr_attendance": b_attendance(day, rng, b_emp),
             "bc_purchase_orders": pos,
             "bc_goods_receipts": grn,
-            "bc_vendors": abm_vendor,
-            "bc_customer_credit": abm_credit,
+            "bc_vendors": b_vendor,
+            "bc_customer_credit": b_credit,
         }
-        for table, rows in abm_rows.items():
-            _write("ABM", day, table, rows)
+        for table, rows in b_rows.items():
+            _write(_SECOND, day, table, rows)
 
         print(
-            f"  {day}  LAD[{scenario_for('LAD', day):<26}] "
-            f"ipos_sales={len(lad_rows['ipos_sales']):<5} "
-            f"| ABM ipos_sales={len(abm_rows['ipos_sales']):<5} "
+            f"  {day}  {_FIRST}[{scenario_for(_FIRST, day):<26}] "
+            f"ipos_sales={len(a_rows['ipos_sales']):<5} "
+            f"| {_SECOND} ipos_sales={len(b_rows['ipos_sales']):<5} "
             f"po={len(pos):<4} grn={len(grn)}"
         )
 
     print()
-    print(f"  LAD  9 tables x {len(DAYS)} days  (iPOS SaaS, Azure Synapse, HRMS)")
-    print(f"  ABM  9 tables x {len(DAYS)} days  (iPOS, HRMS, Business Central)")
+    print(f"  {_FIRST}  9 tables x {len(DAYS)} days  (POS, Warehouse, HRMS)")
+    print(f"  {_SECOND}  9 tables x {len(DAYS)} days  (POS, HRMS, ERP)")
     print(f"  Planted cross-system bank matches: {len(shared_ibans)} "
           f"(hr_employees.bank_iban == bc_vendors.vendor_bank_iban)")
     print(f"  Output: {SOURCEDATA_DIR}")

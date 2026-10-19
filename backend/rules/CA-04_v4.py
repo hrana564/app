@@ -1,10 +1,10 @@
 """
-LAD-CA-04  -  Single staff member dominates a day's cash settlement
+CA-04  -  Single staff member dominates a day's cash settlement
 
-Entity : Laduree
-System : iPOS (SaaS)  ->  ipos_sales
+Entity : CLIENT-A (demo estate)
+System : POS  ->  ipos_sales
 
-Source requirement (Laduree continuous auditing areas #4 and #6):
+Source requirement (demo estate continuous auditing areas #4 and #6):
     "Sales invoices settled by a single staff member accounting for more than
      a specified % of the total invoices settled during the day (say 50%)."
     "Sales invoices with tender type 'cash collections' settled by a single
@@ -15,20 +15,24 @@ Applied to cash-tendered invoices per the stricter of the two clauses.
 `is_cash` is derived here from tender_type rather than pre-computed: deciding
 what counts as a cash tender is this control's business, not the loader's.
 
-Threshold provenance:
-    Laduree's continuous auditing plan states 50% as an illustrative figure
+    Tender types NOT covered: card, wallet, transfer and voucher sales are
+    excluded. A staff member who dominates those is out of scope here - a
+    separate control would be needed.
+
+    Threshold provenance:
+    The demo estate's continuous auditing plan states 50% as an illustrative figure
     ("say 50%"), not a measured one. It is kept as a named constant so the
     business can move it without anyone editing the logic.
 """
 
 import polars as pl
 
-NAME = "LAD-CA-04 Single staff member dominates daily cash settlement"
+NAME = "CA-04 Single staff member dominates daily cash settlement"
 DESCRIPTION = (
     "One staff member settles more than the permitted share of the day's "
     "cash-tendered invoices."
 )
-ENTITY = "LAD"
+ENTITY = "CLIENT-A"
 DATASOURCES = ["ipos_sales"]
 
 # One staff member may settle at most this share of the day's cash invoices.
@@ -58,7 +62,7 @@ def run(ctx) -> dict:
         return {
             "status": "success",
             "error_message": None,
-            "summary": f"No cash invoices for LAD on {ctx.date}",
+            "summary": f"No cash invoices for CLIENT-A on {ctx.date}",
             "metrics": {},
             "rows": [],
         }

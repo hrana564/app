@@ -52,7 +52,7 @@ export const Login = () => {
             </Box>
             <Typography variant="h5">Scope Investments — Audit Portal</Typography>
             <Typography variant="body2" color="text.secondary" textAlign="center">
-              Continuous auditing for Laduree &amp; Al Boom Marine
+              Continuous auditing
             </Typography>
           </Stack>
 

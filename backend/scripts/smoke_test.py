@@ -14,6 +14,7 @@ Usage:  python scripts/smoke_test.py [base_url]
 
 from __future__ import annotations
 
+import re
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -27,22 +28,37 @@ ADMIN = ("admin_user", "Admin@2026")
 AUDITOR = ("audit_user", "Audit@2026")
 
 RULE_SPECS = [
-    ("LAD-CA-03", "LAD", "high", "LAD-CA-03_v1.py",
+    ("CA-03", "high", "CA-03_v1.py",
      "Value settled in the last hour of trading exceeds a multiple of the hourly average."),
-    ("LAD-CA-04", "LAD", "critical", "LAD-CA-04_v1.py",
+    ("CA-04", "critical", "CA-04_v1.py",
      "One staff member settles more than the permitted share of the day's cash invoices."),
-    ("ABM-CA-22", "ABM", "critical", "ABM-CA-22_v1.py",
-     "Vendor bank details in Business Central match employee bank details in HRMS."),
-    ("LAD-CA-06", "LAD", "high", "LAD-CA-06_v1.py",
+    ("CA-22", "critical", "CA-22_v1.py",
+     "Vendor bank details in the ERP match employee bank details in HRMS."),
+    ("CA-06", "high", "CA-06_v1.py",
      "Exited employees still settling POS transactions."),
 ]
 
 EXEC_EXPECTATIONS = {
-    "LAD-CA-03": ("2026-10-19", "2026-10-16"),
-    "LAD-CA-04": ("2026-10-19", "2026-10-17"),
-    "ABM-CA-22": (None, "2026-10-15"),
-    "LAD-CA-06": ("2026-10-16", "2026-10-15"),
+    "CA-03": ("2026-10-19", "2026-10-16"),
+    "CA-04": ("2026-10-19", "2026-10-17"),
+    "CA-22": (None, "2026-10-15"),
+    "CA-06": ("2026-10-16", "2026-10-15"),
 }
+
+
+def rule_entity(filename: str) -> str:
+    """The client a rule file scopes itself to, read from the rule.
+
+    Not hardcoded here. A literal would be a second source of truth that drifts
+    the first time a rule is retargeted, and the drift is silent: the API would
+    register the rule against one client while the file scopes itself to
+    another, and every assertion downstream would pass against the wrong one.
+    """
+    src = (RULES_DIR / filename).read_text(encoding="utf-8")
+    m = re.search(r'^ENTITY\s*=\s*"([^"]+)"', src, re.MULTILINE)
+    if not m:
+        raise SystemExit(f"{filename} declares no ENTITY constant")
+    return m.group(1)
 
 passes, failures = 0, 0
 
@@ -63,7 +79,7 @@ def section(title: str) -> None:
 
 def main() -> int:
     print("=" * 72)
-    print(f"ABM AUDIT PORTAL - smoke test against {BASE}")
+    print(f"AUDIT PORTAL - smoke test against {BASE}")
     print("=" * 72)
 
     with httpx.Client(base_url=BASE, timeout=180.0) as c:
@@ -94,6 +110,19 @@ def main() -> int:
         ah = {"Authorization": f"Bearer {admin['access_token']}"}
         ud = {"Authorization": f"Bearer {auditor['access_token']}"}
 
+        # Who is being audited is deployment configuration, so the suite asks the
+        # API rather than assuming. A smoke test that hardcoded the client codes
+        # would quietly stop testing anything the moment CLIENT_ENTITIES changed
+        # - and it would fail for the wrong reason, which is the expensive kind.
+        served = sorted(
+            e["code"]
+            for e in c.get("/api/datasources/entities", headers=ah).json()["entities"]
+        )
+        if len(served) < 2:
+            print("FAIL  deployment serves fewer than two clients; cannot scope the suite")
+            return 1
+        FIRST, SECOND = served[0], served[1]
+
         section("role based access control")
         check("auditor can read rules", c.get("/api/rules", headers=ud).status_code == 200)
         r = c.post("/api/rules", headers=ud,
@@ -105,16 +134,26 @@ def main() -> int:
 
         section("entities and datasources")
         ents = c.get("/api/datasources/entities", headers=ud).json()
-        check("two client entities LAD + ABM",
-              sorted(e["code"] for e in ents["entities"]) == ["ABM", "LAD"])
-        ds = c.get("/api/datasources", headers=ud).json()
-        check("LAD has iPOS/Synapse/HRMS tables",
+        check("both configured clients are served",
+              sorted(e["code"] for e in ents["entities"]) == sorted([FIRST, SECOND]))
+        # Asked per client, deliberately. The endpoint resolves a missing
+        # `entity` to the default client rather than returning everything, so
+        # one unscoped call here would see one client's tables and conclude the
+        # other client had none.
+        for ent in (FIRST, SECOND):
+            ds = c.get("/api/datasources", headers=ud, params={"entity": ent}).json()
+            check(f"{ent} scopes to its own tables",
+                  ds and {d["entity"] for d in ds} == {ent},
+                  str(sorted({d["entity"] for d in ds})))
+        ds = (c.get("/api/datasources", headers=ud, params={"entity": FIRST}).json()
+              + c.get("/api/datasources", headers=ud, params={"entity": SECOND}).json())
+        check(f"{FIRST} has the POS/Warehouse/HRMS tables",
               {"ipos_sales", "syn_inventory", "hr_employees"}
-              <= {d["name"] for d in ds if d["entity"] == "LAD"})
-        check("ABM has Business Central tables",
+              <= {d["name"] for d in ds if d["entity"] == FIRST})
+        check(f"{SECOND} has the ERP tables",
               {"bc_vendors", "bc_purchase_orders"}
-              <= {d["name"] for d in ds if d["entity"] == "ABM"})
-        for ent in ("LAD", "ABM"):
+              <= {d["name"] for d in ds if d["entity"] == SECOND})
+        for ent in (FIRST, SECOND):
             d = c.get("/api/datasources/available-dates", headers=ud,
                       params={"entity": ent}).json()
             check(f"{ent} day folders present", len(d["dates"]) == 6, str(d["dates"]))
@@ -123,8 +162,8 @@ def main() -> int:
         # --- the admin's job: see what landed, register it, retire what we
         # --- no longer consume. Every assertion below is idempotent.
         ov = c.get("/api/datasources/overview", headers=ud,
-                   params={"entity": "LAD"}).json()
-        check("overview names the entity", ov["entity"] == "LAD")
+                   params={"entity": FIRST}).json()
+        check("overview names the entity", ov["entity"] == FIRST)
         check("overview resolved a data date", bool(ov["data_date"]), ov["data_date"])
         check("overview lists registered tables", len(ov["registered"]) >= 9,
               str(len(ov["registered"])))
@@ -141,7 +180,7 @@ def main() -> int:
               any(d["row_count"] for d in ov["registered"] if d["name"] == "ipos_sales"))
 
         check("rule dependency is reported",
-              "LAD-CA-03" in registered["ipos_sales"]["used_by"],
+              "CA-03" in registered["ipos_sales"]["used_by"],
               str(registered["ipos_sales"]["used_by"]))
         check("a table no rule reads shows no dependents",
               registered.get("syn_wastage", {}).get("used_by") == [],
@@ -157,7 +196,7 @@ def main() -> int:
 
         # --- preview: what the file actually holds --------------------------
         prev = c.get("/api/datasources/preview", headers=ud, params={
-            "entity": "LAD", "name": "ipos_sales", "limit": 5}).json()
+            "entity": FIRST, "name": "ipos_sales", "limit": 5}).json()
         check("preview returns rows", len(prev["rows"]) == 5, str(len(prev["rows"])))
         check("preview reports the whole file's size, not just what it sent",
               prev["total_rows"] > 5, str(prev["total_rows"]))
@@ -174,10 +213,10 @@ def main() -> int:
         for bad in ("../../settings", "a/b", ".hidden"):
             check(f"preview refuses a path fragment: {bad!r}",
                   c.get("/api/datasources/preview", headers=ud,
-                        params={"entity": "LAD", "name": bad}).status_code == 400)
+                        params={"entity": FIRST, "name": bad}).status_code == 400)
         check("preview 404s a file that did not land",
               c.get("/api/datasources/preview", headers=ud,
-                    params={"entity": "LAD", "name": "definitely_not_here"}).status_code == 404)
+                    params={"entity": FIRST, "name": "definitely_not_here"}).status_code == 404)
 
         # --- register, then retire, then restore ----------------------------
         probe = "smoke_probe_table"
@@ -185,7 +224,7 @@ def main() -> int:
         # of things either way is what keeps the suite idempotent - a branch that
         # checks one more thing on first run makes run counts drift.
         new_row = c.post("/api/datasources", headers=ah, json={
-            "name": probe, "entity": "LAD", "system": "Smoke",
+            "name": probe, "entity": FIRST, "system": "Smoke",
             "description": "created by the smoke test", "grain": "one row per nothing",
             "columns": {"id": "VARCHAR"},
         })
@@ -194,7 +233,7 @@ def main() -> int:
               f"{new_row.status_code} {new_row.text[:140]}")
 
         listed = c.get("/api/datasources", headers=ud,
-                       params={"entity": "LAD"}).json()
+                       params={"entity": FIRST}).json()
         probe_row = next((d for d in listed if d["name"] == probe), None)
         check("registered table is listed", probe_row is not None)
         check("registered table keeps its declared columns",
@@ -207,7 +246,7 @@ def main() -> int:
         if probe_id is not None:
             check("auditor CANNOT register a datasource",
                   c.post("/api/datasources", headers=ud, json={
-                      "name": "x", "entity": "LAD"}).status_code == 403)
+                      "name": "x", "entity": FIRST}).status_code == 403)
             check("auditor CANNOT remove a datasource",
                   c.delete(f"/api/datasources/{probe_id}", headers=ud).status_code == 403)
 
@@ -224,7 +263,7 @@ def main() -> int:
             check("removal is real - it is gone from the list",
                   not any(d["name"] == probe for d in c.get(
                       "/api/datasources", headers=ud,
-                      params={"entity": "LAD"}).json()))
+                      params={"entity": FIRST}).json()))
             check("deleting it twice 404s",
                   c.delete(f"/api/datasources/{probe_id}", headers=ah).status_code == 404)
             check("auditor CANNOT remove a datasource",
@@ -245,10 +284,10 @@ def main() -> int:
                     params={"entity": "ZZZ"}).status_code == 404)
         check("a path-traversal name is refused",
               c.post("/api/datasources", headers=ah, json={
-                  "name": "../escape", "entity": "LAD"}).status_code == 400)
+                  "name": "../escape", "entity": FIRST}).status_code == 400)
         check("re-registering an active table is a conflict",
               c.post("/api/datasources", headers=ah, json={
-                  "name": "ipos_sales", "entity": "LAD"}).status_code == 409)
+                  "name": "ipos_sales", "entity": FIRST}).status_code == 409)
 
         section("params removed")
         check("GET /api/params returns 404",
@@ -257,13 +296,13 @@ def main() -> int:
         section("rules")
         existing = c.get("/api/rules", headers=ah).json()
         present = {x["code"] for x in existing["data"]}
-        for code, entity, severity, filename, desc in RULE_SPECS:
+        for code, severity, filename, desc in RULE_SPECS:
             if code in present:
                 check(f"{code} already registered", True)
                 continue
             src = (RULES_DIR / filename).read_text(encoding="utf-8")
             r = c.post("/api/rules", headers=ah, json={
-                "code": code, "name": code, "entity": entity, "description": desc,
+                "code": code, "name": code, "entity": rule_entity(filename), "description": desc,
                 "severity": severity,
                 "source_code": src, "status": "draft"})
             if r.status_code != 201:
@@ -280,24 +319,24 @@ def main() -> int:
 
         section("rule code validation")
         probe = "def run(ctx):\n    return {'status':'no_rows_returned'}\n"
-        for bad, why in [("lad ca 03", "spaces rejected"), ("LAD/CA", "slash rejected")]:
+        for bad, why in [("ca 03", "spaces rejected"), ("CA/03", "slash rejected")]:
             r = c.post("/api/rules", headers=ah,
                        json={"code": bad, "name": "code probe", "source_code": probe})
             check(why, r.status_code in (400, 409), f"{bad} -> {r.status_code}")
 
         r = c.post("/api/rules", headers=ah,
-                   json={"code": "lad-ca-99", "name": "lowercase probe",
+                   json={"code": "ca-99", "name": "lowercase probe",
                          "source_code": probe})
         check("lowercase code normalised to uppercase",
-              r.status_code == 201 and r.json()["code"] == "LAD-CA-99",
+              r.status_code == 201 and r.json()["code"] == "CA-99",
               f"{r.status_code} {r.text[:120]}")
         if r.status_code == 201:
             dup = c.post("/api/rules", headers=ah,
-                         json={"code": "LAD-CA-99", "name": "duplicate probe",
+                         json={"code": "CA-99", "name": "duplicate probe",
                                "source_code": probe})
             check("duplicate code rejected (409)", dup.status_code == 409,
                   f"got {dup.status_code}")
-            c.delete("/api/rules/LAD-CA-99", headers=ah)
+            c.delete("/api/rules/CA-99", headers=ah)
 
         section("validate and activate")
         for code, *_ in RULE_SPECS:
@@ -315,23 +354,23 @@ def main() -> int:
         # would succeed and destroy seeded data.
         sales_row = next(
             (d for d in c.get("/api/datasources", headers=ud,
-                              params={"entity": "LAD"}).json()
+                              params={"entity": FIRST}).json()
              if d["name"] == "ipos_sales"), None)
-        check("ipos_sales is registered for LAD", sales_row is not None)
+        check(f"ipos_sales is registered for {FIRST}", sales_row is not None)
         if sales_row:
             blocked = c.delete(f"/api/datasources/{sales_row['id']}", headers=ah)
             check("removing a table live rules read is refused", blocked.status_code == 409,
                   f"got {blocked.status_code}")
             body = blocked.json().get("detail", {})
             check("the refusal names the dependent rules",
-                  "LAD-CA-03" in (body.get("dependents") or []), str(body)[:160])
+                  "CA-03" in (body.get("dependents") or []), str(body)[:160])
             check("the refusal says the rule fails on its next run",
                   "next run" in (body.get("hint") or "").lower(),
                   str(body.get("hint"))[:140])
             check("the refused table is still registered",
                   any(d["name"] == "ipos_sales" for d in c.get(
                       "/api/datasources", headers=ud,
-                      params={"entity": "LAD"}).json()))
+                      params={"entity": FIRST}).json()))
 
         # ------------------------------------------------------------------ #
         # Versioning runs against a throwaway code, deleted at the end, so the
@@ -477,7 +516,7 @@ def main() -> int:
 
         section("rule return contract")
         # A clean day returns success + empty rows -> outcome=pass, no ticket
-        r = c.post("/api/rules/LAD-CA-03/test", headers=ud,
+        r = c.post("/api/rules/CA-03/test", headers=ud,
                    json={"data_date": "2026-10-19"}).json()
         check("clean day -> run.status=success", r.get("status") == "success",
               str(r.get("status")))
@@ -526,16 +565,16 @@ def main() -> int:
               str({x["outcome"] for x in executed["data"]}))
 
         section("cross-system join")
-        r = c.post("/api/rules/ABM-CA-22/test", headers=ud,
+        r = c.post("/api/rules/CA-22/test", headers=ud,
                    json={"data_date": "2026-10-15"}).json()
         rows = r.get("rows", [])
-        check("ABM-CA-22 joined HRMS employees to Business Central vendors",
+        check("CA-22 joined HRMS employees to ERP vendors",
               bool(rows) and "employee_id" in rows[0] and "vendor_id" in rows[0],
               str(rows[:1])[:200])
-        r = c.post("/api/rules/LAD-CA-06/test", headers=ud,
+        r = c.post("/api/rules/CA-06/test", headers=ud,
                    json={"data_date": "2026-10-15"}).json()
         rows = r.get("rows", [])
-        check("LAD-CA-06 joined iPOS activity to HRMS employment status",
+        check("CA-06 joined POS activity to HRMS employment status",
               bool(rows) and "exit_date" in rows[0], str(rows[:1])[:200])
 
         section("tickets")
@@ -544,11 +583,18 @@ def main() -> int:
         check("tickets carry rule_code", all(t.get("rule_code") for t in tickets["data"]))
         check("ticket summary comes from rule_runs join",
               all(t.get("summary") for t in tickets["data"]))
-        check("ticket numbers formatted",
-              all(t["ticket_no"].startswith("ABM-TKT-") for t in tickets["data"]))
+        # Each ticket number names the control that raised it, so this asserts
+        # the SHAPE rather than one rule's prefix: the list is unscoped and holds
+        # tickets from every control, and a prefix check would only ever confirm
+        # that the first row happened to be that control's.
+        check("ticket numbers name their control",
+              all(re.fullmatch(r"[A-Z0-9-]+-TKT-\d{5}", t["ticket_no"])
+                  and t["ticket_no"].startswith(f"{t['rule_code']}-TKT-")
+                  for t in tickets["data"]),
+              str([(t["rule_code"], t["ticket_no"]) for t in tickets["data"][:4]]))
         check("filter by rule_code works",
               c.get("/api/tickets", headers=ud,
-                    params={"rule_code": "ABM-CA-22", "perPage": 50}).json()["total"] >= 1)
+                    params={"rule_code": "CA-22", "perPage": 50}).json()["total"] >= 1)
         check("ticket summary aggregates",
               c.get("/api/tickets/summary", headers=ud).json()["total"] > 0)
 
@@ -568,7 +614,7 @@ def main() -> int:
             check("reopen works", r.status_code == 200 and r.json()["status"] == "open")
 
         section("delete protection")
-        r = c.delete("/api/rules/LAD-CA-03", headers=ah)
+        r = c.delete("/api/rules/CA-03", headers=ah)
         check("a rule with findings cannot be deleted", r.status_code == 409,
               f"got {r.status_code} {r.text[:140]}")
         check("the message points at retiring instead",
@@ -606,7 +652,7 @@ def main() -> int:
 
         section("schedules keyed by rule code")
         r = c.post("/api/rule-schedules", headers=ud,
-                   json={"rule_code": "LAD-CA-03", "kind": "DAILY",
+                   json={"rule_code": "CA-03", "kind": "DAILY",
                          "config": {"time_of_day": "06:30"}})
         check("auditor CANNOT create schedules", r.status_code == 403, f"got {r.status_code}")
         r = c.post("/api/rule-schedules", headers=ah,
@@ -616,7 +662,7 @@ def main() -> int:
               r.status_code == 404, f"got {r.status_code}")
 
         for s in c.get("/api/rule-schedules", headers=ud,
-                       params={"rule_code": "LAD-CA-03"}).json()["data"]:
+                       params={"rule_code": "CA-03"}).json()["data"]:
             c.delete(f"/api/rule-schedules/{s['id']}", headers=ah)
 
         created = []
@@ -626,7 +672,7 @@ def main() -> int:
             ("Month-end deep dive", "MONTHLY", {"time_of_day": "07:00", "day_of_month": 28}),
         ]:
             r = c.post("/api/rule-schedules", headers=ah, json={
-                "rule_code": "LAD-CA-03", "label": label, "kind": kind,
+                "rule_code": "CA-03", "label": label, "kind": kind,
                 "config": cfg, "timezone": "Asia/Dubai", "data_lag_days": 1})
             if r.status_code == 201:
                 created.append(r.json())
@@ -643,7 +689,7 @@ def main() -> int:
                   all(f"rule_schedule_{s['id']}" in registered for s in created),
                   str(sorted(registered))[:200])
             r = c.post("/api/rule-schedules", headers=ah,
-                       json={"rule_code": "LAD-CA-03", "kind": "DAILY",
+                       json={"rule_code": "CA-03", "kind": "DAILY",
                              "config": {"time_of_day": "06:30"}})
             check("duplicate cadence rejected (409)", r.status_code == 409,
                   f"got {r.status_code}")
@@ -688,7 +734,7 @@ def main() -> int:
         # parts add up to the whole: a filter that silently matched nothing, or
         # matched everything, passes a weaker check than this.
         section("client entity scope")
-        both = ("LAD", "ABM")
+        both = (FIRST, SECOND)
 
         def split(path: str, key: str = "total", **params) -> dict:
             whole = c.get(path, headers=ah, params=params).json()[key]
@@ -696,8 +742,8 @@ def main() -> int:
                 e: c.get(path, headers=ah, params={**params, "entity": e}).json()[key]
                 for e in both
             }
-            check(f"{path}: LAD + ABM == all clients", sum(parts.values()), whole)
-            check(f"{path}: LAD and ABM are disjoint", parts["LAD"] > 0 and parts["ABM"] > 0,
+            check(f"{path}: {FIRST} + {SECOND} == all clients", sum(parts.values()), whole)
+            check(f"{path}: the two clients are disjoint", parts[FIRST] > 0 and parts[SECOND] > 0,
                   str(parts))
             return parts
 
@@ -710,27 +756,38 @@ def main() -> int:
 
         # A run and a ticket carry no entity of their own - they inherit the
         # rule's - so the join is the thing most likely to be dropped.
-        lad_runs = c.get("/api/rule-runs", headers=ah,
-                         params={"entity": "LAD", "perPage": 200}).json()
-        check("a scoped run list carries only that client's rules",
-              all(x["rule_code"].startswith("LAD") for x in lad_runs["data"]),
-              str([x["rule_code"] for x in lad_runs["data"][:5]]))
-        lad_tix = c.get("/api/tickets", headers=ah,
-                        params={"entity": "LAD", "perPage": 500}).json()
-        check("a scoped ticket list carries only that client's rules",
-              all(x["rule_code"].startswith("LAD") for x in lad_tix["data"]),
-              str([x["rule_code"] for x in lad_tix["data"][:5]]))
+        #
+        # Asserted against rule_code -> entity from the rules list, NOT against a
+        # naming convention. Rule codes carry no client prefix, so `startswith`
+        # would have been asserting that a naming scheme had not changed - it
+        # would pass on a filter that leaked the other client's rows, and fail on
+        # a correctly scoped one. This is the actual question: does every row
+        # handed back belong to the client that was asked for?
+        owner = {x["code"]: x["entity"]
+                 for x in c.get("/api/rules", headers=ah, params={"perPage": 200}).json()["data"]}
+        runs_first = c.get("/api/rule-runs", headers=ah,
+                         params={"entity": FIRST, "perPage": 200}).json()
+        wrong = sorted({x["rule_code"] for x in runs_first["data"]
+                        if owner.get(x["rule_code"]) != FIRST})
+        check("a scoped run list carries only that client's rules", not wrong,
+              f"{FIRST} scope returned {wrong}")
+        tix_first = c.get("/api/tickets", headers=ah,
+                        params={"entity": FIRST, "perPage": 500}).json()
+        wrong = sorted({x["rule_code"] for x in tix_first["data"]
+                        if owner.get(x["rule_code"]) != FIRST})
+        check("a scoped ticket list carries only that client's rules", not wrong,
+              f"{FIRST} scope returned {wrong}")
 
-        lad_dash = c.get("/api/dashboard", headers=ah, params={"entity": "LAD"}).json()
-        check("dashboard reports the client it was scoped to", lad_dash["entity"] == "LAD", lad_dash["entity"])
+        dash_first = c.get("/api/dashboard", headers=ah, params={"entity": FIRST}).json()
+        check("dashboard reports the client it was scoped to", dash_first["entity"] == FIRST, dash_first["entity"])
         check("scoped dashboard controls == scoped rules list",
-              lad_dash["controls"]["total"]
-              == c.get("/api/rules", headers=ah, params={"entity": "LAD"}).json()["total"],
-              str(lad_dash["controls"]))
+              dash_first["controls"]["total"]
+              == c.get("/api/rules", headers=ah, params={"entity": FIRST}).json()["total"],
+              str(dash_first["controls"]))
         check("scoped dashboard findings == scoped ticket list",
-              lad_dash["open"]["findings"]
-              == c.get("/api/tickets", headers=ah, params={"entity": "LAD"}).json()["total"],
-              str(lad_dash["open"]))
+              dash_first["open"]["findings"]
+              == c.get("/api/tickets", headers=ah, params={"entity": FIRST}).json()["total"],
+              str(dash_first["open"]))
 
         # --- the assurance grid partitions the controls ----------------------
         # The assertion the whole read model rests on. A control that did not
@@ -789,25 +846,26 @@ def main() -> int:
                   all(o["missing_days"] > 0 for o in d["overdue"]),
                   str([(o["code"], o["missing_days"]) for o in d["overdue"]]))
             check(f"{ent}: the ranked list covers only this client's controls",
-                  all(o["code"].startswith(ent) for o in d["offenders"]),
-                  str([o["code"] for o in d["offenders"]]))
+                  all(owner.get(o["code"]) == ent for o in d["offenders"]),
+                  str([(o["code"], owner.get(o["code"])) for o in d["offenders"]]))
 
-        abm_dash = c.get("/api/dashboard", headers=ah, params={"entity": "ABM"}).json()
+        dash_second = c.get("/api/dashboard", headers=ah, params={"entity": SECOND}).json()
         check("scoped dashboards share no control",
-              not ({o["code"] for o in lad_dash["offenders"]}
-                   & {o["code"] for o in abm_dash["offenders"]}), "")
+              not ({o["code"] for o in dash_first["offenders"]}
+                   & {o["code"] for o in dash_second["offenders"]}), "")
+        unscoped = c.get("/api/dashboard", headers=ah).json()
+        reached = {owner.get(o["code"]) for o in unscoped["offenders"]}
         check("the unscoped dashboard reaches both clients",
-              {o["code"][:3] for o in c.get("/api/dashboard", headers=ah).json()["offenders"]}
-              >= {"LAD", "ABM"},
-              str([o["code"] for o in c.get("/api/dashboard", headers=ah).json()["offenders"]]))
+              reached >= {FIRST, SECOND},
+              str(sorted(x for x in reached if x)))
 
         # The window is a real filter, not a label.
         narrow = c.get("/api/dashboard", headers=ah,
-                       params={"entity": "LAD", "window": 2}).json()
+                       params={"entity": FIRST, "window": 2}).json()
         check("the window narrows the grid", len(narrow["days"]) == 2, len(narrow["days"]))
         check("a narrower window is the tail of the wider one",
               [r["date"] for r in narrow["days"]]
-              == [r["date"] for r in lad_dash["days"]][-2:],
+              == [r["date"] for r in dash_first["days"]][-2:],
               str([r["date"] for r in narrow["days"]]))
         check("the window cannot be set to nothing",
               c.get("/api/dashboard", headers=ah, params={"window": 1}).status_code == 422,
@@ -837,49 +895,49 @@ def main() -> int:
               "no shared severity - the bulk scope check is skipped")
 
         if sev:
-            lad_open = c.get("/api/tickets", headers=ah, params={
-                "severity": sev, "entity": "LAD", "status": "open",
+            first_open = c.get("/api/tickets", headers=ah, params={
+                "severity": sev, "entity": FIRST, "status": "open",
                 "perPage": 500}).json()["data"]
             all_open = c.get("/api/tickets", headers=ah, params={
                 "severity": sev, "status": "open", "perPage": 500}).json()
-            check("the unscoped set really is larger than LAD's alone",
-                  len(lad_open) < all_open["total"],
-                  f"lad={len(lad_open)} all={all_open['total']}")
+            check("the unscoped set really is larger than one client's alone",
+                  len(first_open) < all_open["total"],
+                  f"one={len(first_open)} all={all_open['total']}")
 
-            abm_open_before = all_open["total"] - len(lad_open)
+            abm_open_before = all_open["total"] - len(first_open)
             r = c.post("/api/tickets/acknowledge-all", headers=ah,
-                       json={"entity": "LAD", "status": "dismissed", "severity": sev,
+                       json={"entity": FIRST, "status": "dismissed", "severity": sev,
                              "note": "smoke: scope probe"})
             body = r.json() if r.status_code == 200 else {}
             touched = set(body.get("ticket_nos", []))
-            lad_only = {t["ticket_no"] for t in lad_open}
+            first_only = {t["ticket_no"] for t in first_open}
 
-            check("bulk acknowledge touched only LAD tickets",
-                  bool(touched) and touched <= lad_only,
-                  f"touched={len(touched)} lad={len(lad_only)}")
+            check(f"bulk acknowledge touched only {FIRST} tickets",
+                  bool(touched) and touched <= first_only,
+                  f"touched={len(touched)} first={len(first_only)}")
             check("bulk acknowledge touched fewer than the unscoped set",
                   len(touched) < all_open["total"],
                   f"{len(touched)} vs {all_open['total']}")
-            check("bulk acknowledge echoed the scope it used", body.get("entity"), "LAD")
+            check("bulk acknowledge echoed the scope it used", body.get("entity") == FIRST, body.get("entity"))
             check("the other client's open tickets were left alone",
                   c.get("/api/tickets", headers=ah, params={
-                      "severity": sev, "entity": "ABM", "status": "open",
+                      "severity": sev, "entity": SECOND, "status": "open",
                       "perPage": 1}).json()["total"], abm_open_before)
 
             # Put the inbox back exactly as it was found.
-            for t in lad_open:
+            for t in first_open:
                 c.post(f"/api/tickets/{t['id']}/reopen", headers=ah)
             check("the inbox is back as it was found",
                   c.get("/api/tickets", headers=ah, params={
-                      "severity": sev, "entity": "LAD", "status": "open",
-                      "perPage": 500}).json()["total"], len(lad_open))
+                      "severity": sev, "entity": FIRST, "status": "open",
+                      "perPage": 500}).json()["total"], len(first_open))
 
         section("rule generation")
         gen = c.get("/api/rules/generate/status", headers=ud).json()
         check(f"generate status configured={gen['configured']}",
               isinstance(gen["configured"], bool))
-        r = c.get("/api/rules/generate/context", headers=ud, params={"entity": "LAD"})
-        check("generate context lists LAD datasources",
+        r = c.get("/api/rules/generate/context", headers=ud, params={"entity": FIRST})
+        check(f"generate context lists {FIRST} datasources",
               r.status_code == 200 and "ipos_sales" in r.json()["datasources"])
 
     print("\n" + "=" * 72)

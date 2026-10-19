@@ -8,7 +8,7 @@ import TaskAltIcon from "@mui/icons-material/TaskAlt";
 import WarningAmberIcon from "@mui/icons-material/WarningAmber";
 import { api } from "../dataProvider";
 import { severityColor, FONT } from "../theme";
-import { ENTITIES, useEntityScope } from "../entityScope";
+import { useEntityScope } from "../entityScope";
 
 /* ================================================================== */
 /* The payload                                                         */
@@ -116,7 +116,7 @@ const plural = (n: number, one: string, many: string) => (n === 1 ? one : many);
  *
  * The VOCABULARY, since four words for related things is the actual problem:
  *
- *   rule             the thing that runs          LAD-CA-03
+ *   rule             the thing that runs          CA-03
  *   audit observation  one rule found something    1 per rule, per day
  *   exception line     one item it flagged        119 in that same day
  *   ticket            what an auditor acknowledges one per observation
@@ -292,8 +292,8 @@ export const Dashboard = () => {
   const [data, setData] = useState<Assurance | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const { entity } = useEntityScope();
-  const current = ENTITIES.find((e) => e.code === entity);
+  const { entity, entities } = useEntityScope();
+  const current = entities.find((e) => e.code === entity);
 
   useEffect(() => {
     let live = true;

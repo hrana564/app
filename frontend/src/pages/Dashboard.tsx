@@ -105,6 +105,21 @@ const longDate = (iso: string | null) =>
 
 const plural = (n: number, one: string, many: string) => (n === 1 ? one : many);
 
+/**
+ * The three words this page uses about a data date.
+ *
+ * The backend sends four states - passed, breach, errored, unchecked - because
+ * those partition the controls exactly and that is worth asserting on. But they
+ * are not words a head of audit thinks in, and "no opinion" is the internal
+ * distinction leaking onto the screen. `passed + breach` is simply "checked";
+ * whatever is left over "did not run".
+ *
+ * So the counts stay honest in the payload and the wording is derived here, in
+ * one place, rather than spelled out at each call site.
+ */
+const checkedOf = (d: DayRow) => d.passed + d.breach;
+const ranOf = (d: DayRow) => checkedOf(d) + d.errored;
+
 /* ================================================================== */
 /* Shared furniture                                                    */
 /* ================================================================== */
@@ -166,6 +181,69 @@ const Clamp = ({ children, lines = 2 }: { children: string; lines?: number }) =>
 );
 
 /**
+ * How many of the client's controls actually looked at this day's data.
+ *
+ * "2 of 3" says in two words what three columns used to say in six: two ran,
+ * one did not. The shortfall is amber and bold, because a control that never
+ * ran is the thing on this page most likely to go unnoticed.
+ */
+const Checked = ({ d }: { d: DayRow }) => {
+  const ran = checkedOf(d);
+  const short = d.assured - ran;
+  return (
+    <Stack
+      direction="row" spacing={0.4} justifyContent="flex-end" alignItems="baseline"
+      sx={{ fontVariantNumeric: "tabular-nums" }}
+    >
+      <Box component="span" sx={{ fontWeight: short ? 700 : 600 }}>
+        {ran}
+      </Box>
+      <Typography
+        component="span" variant="body2"
+        sx={{ color: short ? "warning.main" : ABSENT }}
+      >
+        of {d.assured}
+      </Typography>
+    </Stack>
+  );
+};
+
+/**
+ * What the controls that ran actually found.
+ *
+ * Four cases, and the colour rule is the point: GREEN is reserved for a day
+ * where every control ran AND found nothing. A day where some control never ran
+ * cannot go green however clean the rest of it was, because "clean" is a claim
+ * about the controls and an unrun control has made none. That false clean is
+ * what the whole page exists to refuse.
+ */
+const Found = ({ d }: { d: DayRow }) => {
+  if (d.breach > 0) {
+    return (
+      <Typography variant="body2" sx={{ fontWeight: 700, color: BREACH }}>
+        {d.breach} {plural(d.breach, "breach", "breaches")}
+      </Typography>
+    );
+  }
+  if (ranOf(d) === 0) {
+    return (
+      <Typography variant="body2" sx={{ color: "text.secondary" }}>
+        not checked
+      </Typography>
+    );
+  }
+  const complete = checkedOf(d) === d.assured;
+  return (
+    <Typography
+      variant="body2"
+      sx={{ color: complete ? PASSED : "text.secondary", fontWeight: complete ? 600 : 400 }}
+    >
+      nothing found
+    </Typography>
+  );
+};
+
+/**
  * One data date as four segments. It is the only chart on the page, because it
  * is the only one a head of audit needs: green that the control looked and
  * found nothing, red that it found something, grey that it did not look at all.
@@ -177,19 +255,25 @@ const DayBar = ({ d }: { d: DayRow }) => {
         <Box sx={{ width: `${(n / d.assured) * 100}%`, bgcolor: colour }} />
       </Tooltip>
     ) : null;
+  // Only the parts that happened, so the tooltip reads as a sentence about this
+  // day rather than as four numbers including the zeroes.
+  const what = [
+    d.passed && `${d.passed} ran, found nothing`,
+    d.breach && `${d.breach} found something`,
+    d.errored && `${d.errored} failed to run`,
+    d.unchecked && `${d.unchecked} did not run`,
+  ]
+    .filter(Boolean)
+    .join(" · ");
   return (
     <Tooltip
-      title={
-        `${longDate(d.date)} — ` +
-        `${d.passed} looked and found nothing, ${d.breach} found something, ` +
-        `${d.errored} failed to execute, ${d.unchecked} of ${d.assured} gave no opinion`
-      }
+      title={`${longDate(d.date)} — ${what || "no controls ran"} (of ${d.assured})`}
     >
       <Box sx={{ display: "flex", height: 9, borderRadius: 5, overflow: "hidden", bgcolor: "#eef1f6" }}>
-        {seg(d.passed, PASSED, "found nothing")}
+        {seg(d.passed, PASSED, "ran, found nothing")}
         {seg(d.breach, BREACH, "found something")}
-        {seg(d.errored, ERRORED, "failed to execute")}
-        {seg(d.unchecked, UNCHECKED, "no opinion recorded")}
+        {seg(d.errored, ERRORED, "failed to run")}
+        {seg(d.unchecked, UNCHECKED, "did not run")}
       </Box>
     </Tooltip>
   );
@@ -243,7 +327,11 @@ export const Dashboard = () => {
   // only one still open to change.
   const days = [...data.days].reverse();
   const latest = days[0];
-  const missing = latest.assured - latest.reported;
+  // The headline and the grid must count the same thing, or the top of the page
+  // contradicts the table under it. `checked` is passed+breach: a control that
+  // tried to run and failed has not checked anything, so it belongs in the
+  // shortfall, exactly where the grid puts it.
+  const missing = latest.assured - checkedOf(latest);
   const net = data.movement.raised_findings - data.movement.acknowledged_findings;
   const critical = data.open.by_severity.find((s) => s.severity === "critical");
 
@@ -282,16 +370,16 @@ export const Dashboard = () => {
         <Box>
           <Typography variant="h5">{current?.name ?? entity} — assurance position</Typography>
           <Typography variant="body2" color="text.secondary">
-            {data.controls.assured} {plural(data.controls.assured, "control", "controls")} reporting ·{" "}
+            {data.controls.assured} {plural(data.controls.assured, "control", "controls")} in scope ·{" "}
             last {data.window_days} data {plural(data.window_days, "day", "days")}
           </Typography>
         </Box>
         <Box sx={{ textAlign: "right", flexShrink: 0 }}>
-          <Typography variant="overline" color="text.secondary">Latest opinion</Typography>
+          <Typography variant="overline" color="text.secondary">Last checked</Typography>
           <Typography variant="h6" sx={{ fontWeight: 700 }}>{longDate(data.as_at)}</Typography>
           {data.as_at_age_days > 1 && (
             <Typography variant="caption" color="warning.main" sx={{ display: "block" }}>
-              {data.as_at_age_days} days old — stale
+              {data.as_at_age_days} days ago — stale
             </Typography>
           )}
         </Box>
@@ -301,15 +389,15 @@ export const Dashboard = () => {
       <Card sx={{ mb: 2.5 }}>
         <Box sx={{ display: "flex", flexWrap: "wrap", "& > * + *": { borderLeft: "1px solid #eef1f6" } }}>
           <Position
-            label="Controls reporting"
+            label="Controls checked"
             // Always "N of M", never "All N" - "All 1" reads as a mistake, and
             // the colour already carries whether the two numbers agree.
-            value={`${latest.reported} of ${latest.assured}`}
+            value={`${checkedOf(latest)} of ${latest.assured}`}
             tone={missing === 0 ? "success" : "warning"}
             sentence={
               missing === 0
-                ? `every control reported on ${day(latest.date)}`
-                : `${missing} gave no opinion on ${day(latest.date)} — unassured, not clean`
+                ? `every control ran on ${day(latest.date)}`
+                : `${missing} ${plural(missing, "control did", "controls did")} not run on ${day(latest.date)}`
             }
           />
           <Position
@@ -353,9 +441,9 @@ export const Dashboard = () => {
             </Typography>
             <Typography variant="caption" sx={{ display: "block" }}>
               {data.overdue
-                .map((o) => `${o.code} — no opinion on ${o.missing_days} of ${data.window_days}`)
+                .map((o) => `${o.code} did not run on ${o.missing_days} of the last ${data.window_days} days`)
                 .join(" · ")}
-              . Those days are unassured, not clean.
+              . Those days were not checked — which is not the same as clean.
             </Typography>
           </Box>
         </Alert>
@@ -370,8 +458,8 @@ export const Dashboard = () => {
             {data.controls.not_assured
               .map((c) => `${c.code} (${c.status}, ${c.validation_status})`)
               .join(" · ")}
-            . Excluded from the figures above: a control never switched on owes
-            no opinion.
+            . Excluded from the figures above: a control that was never switched
+            on is not expected to have checked anything.
           </Typography>
         </Alert>
       )}
@@ -392,18 +480,16 @@ export const Dashboard = () => {
       {/* --- question 1: did the controls look? ----------------------------- */}
       <Box sx={{ mb: 3 }}>
         <SectionTitle aside={`${data.window_days} data days, most recent first`}>
-          Daily assurance — did every control look, and what did it find?
+          Daily assurance — how many controls checked each day, and what they found
         </SectionTitle>
         <Card>
           <Table size="small">
             <TableHead>
               <TableRow>
-                <TableCell sx={{ ...headCell, width: 160 }}>Date</TableCell>
-                <TableCell sx={{ ...headCell, width: 100, textAlign: "right" }}>Controls</TableCell>
-                <TableCell sx={{ ...headCell, width: 70, textAlign: "right" }}>Pass</TableCell>
-                <TableCell sx={{ ...headCell, width: 80, textAlign: "right" }}>Breach</TableCell>
-                <TableCell sx={{ ...headCell, width: 110, textAlign: "right" }}>No opinion</TableCell>
-                <TableCell sx={{ ...headCell, width: 110, textAlign: "right" }}>Exceptions</TableCell>
+                <TableCell sx={{ ...headCell, width: 170 }}>Date</TableCell>
+                <TableCell sx={{ ...headCell, width: 100, textAlign: "right" }}>Checked</TableCell>
+                <TableCell sx={{ ...headCell, width: 130 }}>Found</TableCell>
+                <TableCell sx={{ ...headCell, width: 120, textAlign: "right" }}>Exceptions</TableCell>
                 <TableCell sx={{ ...headCell, width: 190 }}>Coverage</TableCell>
               </TableRow>
             </TableHead>
@@ -416,20 +502,8 @@ export const Dashboard = () => {
                       <Chip size="small" label="latest" sx={{ ml: 1, height: 20 }} />
                     )}
                   </TableCell>
-                  <TableCell sx={{ ...bodyCell, textAlign: "right" }}>
-                    <Box component="span" sx={{ fontVariantNumeric: "tabular-nums", fontWeight: d.reported < d.assured ? 700 : 400 }}>
-                      {d.reported}/{d.assured}
-                    </Box>
-                  </TableCell>
-                  <TableCell sx={{ ...bodyCell, textAlign: "right", color: d.passed ? PASSED : ABSENT }}>
-                    <Maybe n={d.passed} />
-                  </TableCell>
-                  <TableCell sx={{ ...bodyCell, textAlign: "right", color: d.breach ? BREACH : ABSENT }}>
-                    <Maybe n={d.breach} emphasise />
-                  </TableCell>
-                  <TableCell sx={{ ...bodyCell, textAlign: "right", color: d.unchecked ? "text.primary" : ABSENT }}>
-                    <Maybe n={d.unchecked} emphasise={d.unchecked > 0} />
-                  </TableCell>
+                  <TableCell sx={bodyCell}><Checked d={d} /></TableCell>
+                  <TableCell sx={bodyCell}><Found d={d} /></TableCell>
                   <TableCell sx={{ ...bodyCell, textAlign: "right" }}>
                     <Maybe n={d.exceptions} emphasise />
                   </TableCell>
@@ -444,8 +518,8 @@ export const Dashboard = () => {
             direction="row" spacing={2.5} flexWrap="wrap" useFlexGap
             sx={{ px: 2, py: 1, borderTop: "1px solid #eef1f6" }}
           >
-            {([[PASSED, "looked, found nothing"], [BREACH, "looked, found something"],
-               [ERRORED, "failed to execute"], [UNCHECKED, "no opinion recorded"]] as const).map(
+            {([[PASSED, "checked, nothing found"], [BREACH, "checked, found something"],
+               [ERRORED, "failed to run"], [UNCHECKED, "did not run"]] as const).map(
               ([colour, label]) => (
                 <Stack key={label} direction="row" spacing={0.75} alignItems="center">
                   <Box sx={{ width: 10, height: 10, borderRadius: 3, bgcolor: colour, flexShrink: 0 }} />

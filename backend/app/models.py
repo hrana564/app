@@ -191,6 +191,10 @@ class Run(Base):
         ForeignKey("rules_master.id", ondelete="RESTRICT"), nullable=False, index=True
     )
     rule_code: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    # Denormalised alongside rule_code for the same reason: a list view must be
+    # able to say WHICH version produced a run without joining back to the
+    # version history. rule_id remains the authoritative pointer.
+    rule_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
     schedule_id: Mapped[int | None] = mapped_column(
         ForeignKey("rule_schedules.id", ondelete="SET NULL"), index=True
     )
@@ -200,7 +204,14 @@ class Run(Base):
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # status  = did the rule EXECUTE?   running | success | failed
+    # outcome = what did the control find? pass | fail, NULL when it never ran
+    #
+    # These are different questions and used to share one column, which made a
+    # rule that worked perfectly and found a breach look identical to a rule
+    # that crashed. See app/engine/ticketing.py for the mapping, expressed once.
     status: Mapped[str] = mapped_column(String(16), default="running", nullable=False, index=True)
+    outcome: Mapped[str | None] = mapped_column(String(16), nullable=True, index=True)
     summary: Mapped[str] = mapped_column(Text, default="")
     metrics: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, nullable=False)
     rows: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, default=list, nullable=False)

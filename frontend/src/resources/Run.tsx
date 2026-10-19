@@ -12,7 +12,7 @@ import { api } from "../dataProvider";
 import {
   IdField, JsonBlock, RowsTable, StatusField, ActionIcon,
 } from "../components/ui";
-import { statusColor, FONT } from "../theme";
+import { runOutcomeColor, runStatusColor, FONT } from "../theme";
 
 /**
  * A run summary is written for a detail page, so it runs to 160 characters and
@@ -70,8 +70,8 @@ const RerunButton = ({ label }: { label?: string }) => {
         e.stopPropagation();
         try {
           const run = await api.rerun(record.id);
-          notify(`Re-run finished: ${run.status}`, {
-            type: run.status === "pass" ? "success" : "warning",
+          notify(`Re-run finished: ${run.status} / ${run.outcome ?? "no outcome"}`, {
+            type: run.status === "success" ? "success" : "error",
           });
         } catch (err: any) {
           notify(`Re-run failed: ${err.message}`, { type: "error" });
@@ -82,13 +82,14 @@ const RerunButton = ({ label }: { label?: string }) => {
 };
 
 /**
- * Result as coloured words rather than a filled chip.
+ * Did it run, and what did it find - as two columns.
  *
- * A chip per row is a block of colour the size of a postage stamp, and on a list
- * of 100 runs it out-shouts the one thing being scanned for. The word still
- * carries the colour, so it is not weaker - it just stops competing.
+ * These were one column reading "Fail", which is why a runs list looked like a
+ * wall of faults. A red `fail` here means the control worked and caught
+ * something; it is not a broken system. Only `failed` is a broken system, and
+ * it now sits in the column that actually answers that question.
  */
-const RunResult = ({ source }: { source: string; label?: string }) => {
+const RunStatusCell = ({ source }: { source: string; label?: string }) => {
   const record = useRecordContext<any>();
   const theme = useTheme();
   const status = record?.[source];
@@ -97,12 +98,40 @@ const RunResult = ({ source }: { source: string; label?: string }) => {
     <Typography
       variant="body2"
       sx={{
-        color: palette[statusColor[status] ?? "info"]?.main ?? "#8d99ae",
+        color: palette[runStatusColor[status] ?? "info"]?.main ?? "#8d99ae",
         fontWeight: 700,
         textTransform: "capitalize",
       }}
     >
       {status ?? "—"}
+    </Typography>
+  );
+};
+
+const RunOutcomeCell = ({ source }: { source: string; label?: string }) => {
+  const record = useRecordContext<any>();
+  const theme = useTheme();
+  const outcome = record?.[source];
+  const palette = theme.palette as unknown as Record<string, { main?: string } | undefined>;
+  if (!outcome) {
+    // No outcome because the rule never got to one. Saying nothing is honest;
+    // printing "pass" here would mean the exact opposite of what happened.
+    return (
+      <Typography variant="body2" color="text.disabled">
+        &mdash;
+      </Typography>
+    );
+  }
+  return (
+    <Typography
+      variant="body2"
+      sx={{
+        color: palette[runOutcomeColor[outcome] ?? "info"]?.main ?? "#8d99ae",
+        fontWeight: 700,
+        textTransform: "capitalize",
+      }}
+    >
+      {outcome}
     </Typography>
   );
 };
@@ -122,7 +151,7 @@ const RunSummary = ({ source }: { source: string; label?: string }) => {
         sx={{
           overflow: "hidden",
           textOverflow: "ellipsis",
-          color: record?.status === "error" ? "error.main" : "text.primary",
+          color: record?.status === "failed" ? "error.main" : "text.primary",
         }}
       >
         {shortenSummary(full)}
@@ -181,7 +210,7 @@ const columnWidth = (i: number, w: number) => ({
 });
 
 const FIXED_WIDTHS: Array<[number, number]> = [
-  [1, 60], [2, 116], [3, 100], [4, 78], [6, 72], [7, 84], [8, 126], [9, 52],
+  [1, 58], [2, 112], [3, 98], [4, 82], [5, 82], [7, 70], [8, 82], [9, 124], [10, 50],
 ];
 
 const widthSx = FIXED_WIDTHS.reduce<Record<string, { width: number }>>(
@@ -223,7 +252,8 @@ export const RunList = () => (
       <IdField source="id" label="#" />
       <TextLike source="rule_code" label="Rule" mono />
       <TextLike source="data_date" label="Data date" secondary />
-      <RunResult source="status" label="Result" />
+      <RunStatusCell source="status" label="Ran" />
+      <RunOutcomeCell source="outcome" label="Outcome" />
       <RunSummary source="summary" label="Finding" />
       <TextLike source="duration_ms" label="Took" render={duration} secondary />
       <TextLike source="triggered_by" label="By" render={(v: string) => TRIGGER_LABEL[v] ?? v} secondary />
@@ -245,26 +275,90 @@ const RunDetails = () => {
     <Box>
       <Card>
         <CardContent>
+          {/* The two answers, side by side, never merged into one word. */}
+          <Box
+            sx={{
+              display: "grid", gap: 1.5, mb: 2,
+              gridTemplateColumns: { xs: "1fr 1fr", sm: "repeat(4, 1fr)" },
+            }}
+          >
+            <Box>
+              <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5 }}>
+                Execution
+              </Typography>
+              <Typography variant="body1" sx={{ fontWeight: 600, textTransform: "capitalize" }}>
+                {record.status}
+              </Typography>
+              <Typography variant="caption" color="text.secondary" display="block">
+                {record.status === "success"
+                  ? "the rule executed"
+                  : record.status === "failed"
+                    ? "the rule never completed"
+                    : "in progress"}
+              </Typography>
+            </Box>
+            <Box>
+              <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5 }}>
+                Control outcome
+              </Typography>
+              <Typography variant="body1" sx={{ fontWeight: 600, textTransform: "capitalize" }}>
+                {record.outcome ?? "none"}
+              </Typography>
+              <Typography variant="caption" color="text.secondary" display="block">
+                {!record.outcome
+                  ? "the control never got an answer"
+                  : record.outcome === "fail"
+                    ? "breach found - a ticket was raised"
+                    : "no breach found"}
+              </Typography>
+            </Box>
+            <Box>
+              <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5 }}>
+                Exception rows
+              </Typography>
+              <Typography variant="body1" sx={{ fontWeight: 600 }}>
+                {record.rows?.length ?? 0}
+              </Typography>
+            </Box>
+            <Box>
+              <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5 }}>
+                Duration
+              </Typography>
+              <Typography variant="body1" sx={{ fontWeight: 600 }}>
+                {duration(record.duration_ms)}
+              </Typography>
+            </Box>
+          </Box>
+
           <Stack direction="row" spacing={1} sx={{ mb: 1.5, flexWrap: "wrap", gap: 1 }}>
-            <StatusField source="status" />
             <Chip size="small" variant="outlined" label={`rule v${record.rule_version}`} />
             <Chip
               size="small"
               variant="outlined"
               label={record.schedule_id ? `schedule #${record.schedule_id}` : "manual"}
             />
-            <Chip size="small" variant="outlined" label={`${record.duration_ms} ms`} />
+            <Chip size="small" variant="outlined" label={record.triggered_by} />
           </Stack>
           <Typography variant="body1" sx={{ fontWeight: 600 }}>{record.summary}</Typography>
           <Typography variant="caption" color="text.secondary">
-            Data date {record.data_date} · triggered by {record.triggered_by} ·{" "}
+            Data date {record.data_date} ·{" "}
             {new Date(record.started_at).toLocaleString()}
           </Typography>
-          {record.status === "error" && (
+
+          {/* Only a run that failed to execute has a fault to report. A breach
+              is the product working and is not shown as an error. */}
+          {record.status === "failed" && (
             <Alert severity="error" sx={{ mt: 2 }}>
+              <Typography variant="body2" sx={{ fontWeight: 700, mb: 0.5 }}>
+                This rule did not complete
+              </Typography>
               <Box component="pre" sx={{ m: 0, whiteSpace: "pre-wrap", fontSize: 12 }}>
-                {record.error_detail}
+                {record.error_detail || "no detail recorded"}
               </Box>
+              <Typography variant="caption" display="block" sx={{ mt: 1 }}>
+                No ticket was raised: a rule that never ran has no finding to report.
+                This day is unchecked, not clean.
+              </Typography>
             </Alert>
           )}
         </CardContent>

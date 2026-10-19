@@ -177,9 +177,14 @@ async def dashboard(session: SessionDep) -> dict:
         },
         "runs": {
             "total": await count(Run),
-            "pass": await count(Run, Run.status == "pass"),
-            "fail": await count(Run, Run.status == "fail"),
-            "error": await count(Run, Run.status == "error"),
+            # Execution, then control outcome - counted separately because
+            # "the rule ran" and "the rule found something" are not the same
+            # question and collapsing them makes working rules look broken.
+            "running": await count(Run, Run.status == "running"),
+            "completed": await count(Run, Run.status == "success"),
+            "failed": await count(Run, Run.status == "failed"),
+            "breaches": await count(Run, Run.outcome == "fail"),
+            "cleared": await count(Run, Run.outcome == "pass"),
         },
         "tickets": {
             "total": await count(Ticket),

@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import {
-  Box, Card, CardContent, Chip, Grid, LinearProgress, Stack, Typography, Tooltip,
+  Alert, Box, Card, CardContent, Chip, Grid, LinearProgress, Stack, Typography, Tooltip,
 } from "@mui/material";
 import RuleIcon from "@mui/icons-material/Rule";
 import ScheduleIcon from "@mui/icons-material/Schedule";
@@ -14,7 +14,10 @@ import { severityColor } from "../theme";
 interface Dashboard {
   rules: { total: number; active: number; draft: number; paused: number; validated: number };
   schedules: { total: number; live: number };
-  runs: { total: number; pass: number; fail: number; error: number };
+  runs: {
+    total: number; running: number; completed: number; failed: number;
+    breaches: number; cleared: number;
+  };
   tickets: { total: number; open: number; acknowledged: number; dismissed: number };
   scheduler: { running: boolean; jobs: number };
 }
@@ -78,7 +81,10 @@ export const Dashboard = () => {
 
   if (loading || !data) return <LinearProgress />;
 
-  const runTotal = Math.max(1, data.runs.total);
+  // Denominator for the control-outcome bars. Deliberately NOT runs.total:
+  // runs that failed to execute have no outcome, and counting them here would
+  // silently shrink every bar and read as "some controls found nothing".
+  const outcomeTotal = Math.max(1, data.runs.cleared + data.runs.breaches);
   const ticketTotal = Math.max(1, data.tickets.total);
 
   return (
@@ -106,7 +112,7 @@ export const Dashboard = () => {
         <Grid size={{ xs: 12, sm: 6, lg: 3 }}>
           <Stat
             title="RUNS" value={data.runs.total} color="#0277bd" to="/runs"
-            caption={`${data.runs.pass} pass · ${data.runs.fail} fail · ${data.runs.error} error`}
+            caption={`${data.runs.completed} ran · ${data.runs.failed} did not run · ${data.runs.running} in progress`}
             icon={<PlayCircleIcon />}
           />
         </Grid>
@@ -121,11 +127,16 @@ export const Dashboard = () => {
         <Grid size={{ xs: 12, lg: 7 }}>
           <Card sx={{ height: "100%" }}>
             <CardContent>
-              <Typography variant="h6" sx={{ mb: 2 }}>Run outcomes</Typography>
-              {(["pass", "fail", "error"] as const).map((key) => {
+              <Typography variant="h6" sx={{ mb: 0.5 }}>Control outcomes</Typography>
+              <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+                Only over runs that actually executed. A rule that did not run has no
+                opinion about the control, so it is counted separately below and
+                never here.
+              </Typography>
+              {(["cleared", "breaches"] as const).map((key) => {
                 const value = data.runs[key];
-                const pct = Math.round((value / runTotal) * 100);
-                const colors: Record<string, string> = { pass: "#2e7d32", fail: "#c62828", error: "#ef6c00" };
+                const pct = Math.round((value / outcomeTotal) * 100);
+                const colors: Record<string, string> = { cleared: "#2e7d32", breaches: "#c62828" };
                 return (
                   <Box key={key} sx={{ mb: 2 }}>
                     <Stack direction="row" justifyContent="space-between" sx={{ mb: 0.5 }}>
@@ -148,6 +159,18 @@ export const Dashboard = () => {
                   </Box>
                 );
               })}
+
+              {data.runs.failed > 0 && (
+                <Alert severity="warning" sx={{ mt: 1 }}>
+                  <Typography variant="body2" sx={{ fontWeight: 700 }}>
+                    {data.runs.failed} run(s) did not complete
+                  </Typography>
+                  <Typography variant="caption" display="block">
+                    Those days are unchecked, not clean - the control never got to
+                    an opinion. They are excluded from the bars above.
+                  </Typography>
+                </Alert>
+              )}
 
               <Typography variant="h6" sx={{ mt: 3, mb: 1 }}>Ticket queue</Typography>
               {(["open", "acknowledged", "dismissed"] as const).map((key) => {

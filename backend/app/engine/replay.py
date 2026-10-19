@@ -34,7 +34,7 @@ from app.engine.ctx import RuleContext
 from app.engine.datasources import registry_for
 from app.engine.loader import load_rule_at
 from app.engine.snapshot import RULE_COPY_NAME, Snapshot
-from app.engine.ticketing import run_status_for
+from app.engine.ticketing import run_outcome_for, run_status_for
 
 _RULE_MARKER = '"""'
 
@@ -70,22 +70,26 @@ def _compare(recorded: dict | None, fresh: dict) -> str | None:
     if recorded is None:
         return None
 
-    # The rule's own status and the run's recorded status are different things:
-    # a rule that ran and returned rows is a `success` to itself and a `fail` to
-    # the ledger. Derive it the same way the runner does, or a faithful replay
-    # would report a difference that is not one.
+    # The rule's own status, the run's execution status and the run's control
+    # outcome are three different things. Derive them the same way the runner
+    # does, or a faithful replay would report a difference that is not one.
+    fresh_status = fresh.get("status", "success")
     new_rows = len(fresh.get("rows") or [])
-    new_status = run_status_for(fresh.get("status", "success"), new_rows)
+    new_status = run_status_for(fresh_status)
+    new_outcome = run_outcome_for(fresh_status, new_rows)
 
     rec_status = recorded.get("status")
+    rec_outcome = recorded.get("outcome")
     rec_rows = len(recorded.get("rows") or [])
 
-    if rec_status == new_status and rec_rows == new_rows:
+    if rec_status == new_status and rec_outcome == new_outcome and rec_rows == new_rows:
         return f"reproduces the recorded run ({new_status}, {new_rows} rows)"
 
     return (
         f"DIFFERS from the recorded run: "
-        f"status {rec_status} -> {new_status}, rows {rec_rows} -> {new_rows}"
+        f"status {rec_status} -> {new_status}, "
+        f"outcome {rec_outcome} -> {new_outcome}, "
+        f"rows {rec_rows} -> {new_rows}"
     )
 
 

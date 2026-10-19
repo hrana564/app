@@ -289,29 +289,70 @@ def main() -> int:
             if clean_day:
                 r = c.post(f"/api/rules/{rcode}/test", headers=ud,
                            json={"data_date": clean_day}).json()
-                check(f"{rcode} passes on {clean_day} (got {r.get('status')})",
-                      r.get("status") == "pass", r.get("summary", "")[:110])
+                check(f"{rcode} finds nothing on {clean_day} "
+                      f"(ran {r.get('status')}, outcome {r.get('outcome')})",
+                      r.get("status") == "success" and r.get("outcome") == "pass"
+                      and not r.get("rows"),
+                      r.get("summary", "")[:110])
             r = c.post(f"/api/rules/{rcode}/test", headers=ud,
                        json={"data_date": breach_day}).json()
             check(f"{rcode} fails on {breach_day} with rows "
-                  f"(got {r.get('status')}, {len(r.get('rows', []))} rows)",
-                  r.get("status") == "fail" and len(r.get("rows", [])) > 0,
+                  f"(got {r.get('outcome')}, {len(r.get('rows', []))} rows)",
+                  r.get("outcome") == "fail" and len(r.get("rows", [])) > 0,
                   r.get("summary", "")[:110])
+            # A breach is the audit working. It must not read as a fault.
+            check(f"{rcode} executed cleanly on {breach_day}",
+                  r.get("status") == "success", str(r.get("status")))
 
         section("rule return contract")
-        # A clean day returns success + empty rows -> run.status=pass, no ticket
+        # A clean day returns success + empty rows -> outcome=pass, no ticket
         r = c.post("/api/rules/LAD-CA-03/test", headers=ud,
                    json={"data_date": "2026-10-19"}).json()
-        check("clean day -> run.status=pass", r.get("status") == "pass", str(r.get("status")))
+        check("clean day -> run.status=success", r.get("status") == "success",
+              str(r.get("status")))
+        check("clean day -> outcome=pass", r.get("outcome") == "pass",
+              str(r.get("outcome")))
         check("clean day -> no rows", len(r.get("rows", [])) == 0)
         check("clean day -> has summary", bool(r.get("summary")))
 
-        section("rule return contract")
-        r = c.post("/api/rules/LAD-CA-03/test", headers=ud,
-                   json={"data_date": "2026-10-19"}).json()
-        check("clean day -> run.status=pass", r.get("status") == "pass", str(r.get("status")))
-        check("clean day -> no rows", len(r.get("rows", [])) == 0)
-        check("clean day -> has summary", bool(r.get("summary")))
+        section("execution and outcome are independent")
+        # The whole point of the split: a breach and a crash used to be the
+        # same value. Nothing in the suite can crash a rule on demand, so the
+        # guarantee is asserted on the shape instead - every run must be
+        # internally consistent, and the two must never be inferred from
+        # one another.
+        runs_all = c.get("/api/rule-runs", headers=ud, params={"perPage": 500}).json()["data"]
+        check("every run executed or is still running",
+              all(x["status"] in ("success", "failed", "running") for x in runs_all),
+              str({x["status"] for x in runs_all}))
+        check("no run holds a legacy status value",
+              not any(x["status"] in ("pass", "fail", "error") for x in runs_all),
+              str({x["status"] for x in runs_all}))
+        check("a completed run always has an outcome",
+              all(x["outcome"] in ("pass", "fail") for x in runs_all if x["status"] == "success"),
+              "a success with no outcome would read as a crash in the UI")
+        check("a run that did not execute has no outcome",
+              all(x["outcome"] is None for x in runs_all if x["status"] != "success"),
+              "a failed execution has no opinion about the control")
+        check("outcome=fail implies rows, outcome=pass implies none",
+              all((len(x["rows"]) > 0) == (x["outcome"] == "fail")
+                  for x in runs_all if x["status"] == "success"))
+
+        breached = c.get("/api/rule-runs", headers=ud,
+                         params={"outcome": "fail", "perPage": 200}).json()
+        check("outcome filter selects breaches", breached["total"] > 0,
+              f"total={breached['total']}")
+        check("outcome filter returns only executed runs",
+              all(x["status"] == "success" for x in breached["data"]))
+        executed = c.get("/api/rule-runs", headers=ud,
+                         params={"status": "success", "perPage": 200}).json()
+        check("status filter selects execution, not findings",
+              executed["total"] >= breached["total"],
+              f"executed={executed['total']} breached={breached['total']}")
+        check("status=success spans both outcomes",
+              {x["outcome"] for x in executed["data"]} >= {"pass", "fail"}
+              or executed["total"] == breached["total"],
+              str({x["outcome"] for x in executed["data"]}))
 
         section("cross-system join")
         r = c.post("/api/rules/ABM-CA-22/test", headers=ud,
@@ -443,13 +484,30 @@ def main() -> int:
         runs = c.get("/api/rule-runs", headers=ud, params={"perPage": 200}).json()
         check("rule_runs recorded", runs["total"] >= 8, f"total={runs['total']}")
         check("rule_runs carry rule_code", all(x.get("rule_code") for x in runs["data"]))
+        # The detail page renders "rule v<n>" from this. It was read off a field
+        # the response never had, so every run page said "vundefined".
+        check("rule_runs carry the version that produced them",
+              all(x.get("rule_version") is not None for x in runs["data"]),
+              str([x.get("rule_version") for x in runs["data"][:5]]))
+        one = c.get(f"/api/rule-runs/{runs['data'][0]['id']}", headers=ud).json()
+        check("a single run resolves its version", one.get("rule_version") is not None,
+              str(one.get("rule_version")))
         rsum = c.get("/api/rule-runs/summary", headers=ud).json()
-        check("run summary has pass+fail", rsum["pass"] > 0 and rsum["fail"] > 0, str(rsum))
+        check("run summary separates execution from findings",
+              rsum["breaches"] > 0 and rsum["cleared"] > 0, str(rsum))
+        check("completed == breaches + cleared",
+              rsum["completed"] == rsum["breaches"] + rsum["cleared"], str(rsum))
+        check("total == completed + failed + running",
+              rsum["total"] == rsum["completed"] + rsum["failed"] + rsum["running"],
+              str(rsum))
 
         dash = c.get("/api/dashboard").json()
         check("dashboard totals", dash["rules"]["total"] >= 4, str(dash))
         check("dashboard counts versions separately",
               dash["rules"]["versions"] >= dash["rules"]["total"], str(dash["rules"]))
+        check("dashboard splits execution from findings",
+              dash["runs"]["completed"] == dash["runs"]["breaches"] + dash["runs"]["cleared"],
+              str(dash["runs"]))
 
         section("rule generation")
         gen = c.get("/api/rules/generate/status", headers=ud).json()

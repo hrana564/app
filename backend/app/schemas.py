@@ -9,7 +9,10 @@ from pydantic import BaseModel, Field
 
 RuleStatus = Literal["draft", "active", "paused", "retired"]
 Severity = Literal["low", "medium", "high", "critical"]
-RunStatus = Literal["running", "pass", "fail", "error"]
+# Did the rule EXECUTE? Independent of what it found.
+RunStatus = Literal["running", "success", "failed"]
+# What did the control find? None when the rule never got to an answer.
+RunOutcome = Literal["pass", "fail"]
 TicketStatus = Literal["open", "acknowledged", "dismissed"]
 CadenceKind = Literal[
     "HOURLY", "DAILY", "WEEKDAYS", "WEEKLY", "MONTHLY", "CUSTOM"
@@ -185,6 +188,7 @@ class RuleGenerateResponse(BaseModel):
 class RuleTestResponse(BaseModel):
     run_id: int
     status: RunStatus
+    outcome: RunOutcome | None
     summary: str
     metrics: dict[str, Any]
     rows: list[dict[str, Any]]
@@ -268,12 +272,14 @@ class RunOut(BaseModel):
     id: int
     rule_id: int
     rule_code: str
+    rule_version: int | None
     schedule_id: int | None
     data_date: date | None
     triggered_by: str
     started_at: datetime
     finished_at: datetime | None
     status: RunStatus
+    outcome: RunOutcome | None
     summary: str
     metrics: dict[str, Any]
     rows: list[dict[str, Any]]

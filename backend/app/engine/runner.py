@@ -39,7 +39,7 @@ from app.engine.ctx import RuleContext
 from app.engine.datasources import registry_for
 from app.engine.loader import load_rule
 from app.engine.snapshot import capture
-from app.engine.ticketing import raise_ticket, run_status_for
+from app.engine.ticketing import raise_ticket, run_outcome_for, run_status_for
 from app.models import Rule, Run, Ticket
 from app.schemas import RuleResult
 from app.settings import settings
@@ -84,6 +84,7 @@ async def execute_rule(
     run = Run(
         rule_id=rule.id,
         rule_code=rule.code,
+        rule_version=rule.version,
         schedule_id=schedule_id,
         data_date=data_date,
         triggered_by=triggered_by,
@@ -110,7 +111,8 @@ async def execute_rule(
             rule_version=rule.version,
         )
     except Exception as exc:  # noqa: BLE001
-        run.status = "error"
+        run.status = "failed"
+        run.outcome = None
         run.error_detail = f"snapshot failed: {type(exc).__name__}: {exc}"
         run.summary = f"Could not stage inputs for {rule.code}"
         run.metrics = {"traceback": traceback.format_exc()[-4000:]}
@@ -122,7 +124,8 @@ async def execute_rule(
 
     problem = snap.blocking_problem()
     if problem:
-        run.status = "error"
+        run.status = "failed"
+        run.outcome = None
         run.error_detail = f"missing input: {problem}"
         run.summary = f"{rule.code} could not run - source data incomplete"
         run.metrics = {
@@ -164,7 +167,10 @@ async def execute_rule(
         run.metrics = json_safe(result.metrics)
         run.rows = json_safe(result.rows)
 
-        run.status = run_status_for(result.status, len(result.rows))
+        # Two independent questions, answered independently: did the rule run,
+        # and what did it find. Both derived in one place and shared with replay.
+        run.status = run_status_for(result.status)
+        run.outcome = run_outcome_for(result.status, len(result.rows))
         if result.status != "success":
             run.error_detail = result.error_message or "Rule reported status=failed"
 
@@ -172,7 +178,8 @@ async def execute_rule(
             run.summary = (run.summary + " | logs: " + "; ".join(logs)).strip()
 
     except Exception as exc:  # noqa: BLE001 - a bad rule must not kill the process
-        run.status = "error"
+        run.status = "failed"
+        run.outcome = None
         run.error_detail = f"{type(exc).__name__}: {exc}"
         run.summary = f"Rule {rule.code} raised {type(exc).__name__}"
         run.metrics = {"traceback": traceback.format_exc()[-4000:]}
@@ -189,6 +196,7 @@ async def execute_rule(
             "rule_code": run.rule_code,
             "data_date": str(run.data_date),
             "status": run.status,
+            "outcome": run.outcome,
             "summary": run.summary,
             "metrics": run.metrics,
             "rows": run.rows,
@@ -198,9 +206,9 @@ async def execute_rule(
         }
     )
 
-    # A failing run with rows opens exactly one ticket. Ticketing reads the run
-    # and nothing else - see app/engine/ticketing.py.
-    if run.status == "fail":
+    # A run that completed and found a breach opens exactly one ticket.
+    # Ticketing reads the run and nothing else - see app/engine/ticketing.py.
+    if run.outcome == "fail":
         try:
             await raise_ticket(
                 session, run=run, severity=rule.severity, schedule_id=schedule_id

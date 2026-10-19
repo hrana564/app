@@ -145,6 +145,32 @@ export const statusColor: Record<string, "error" | "warning" | "info" | "success
   retired: "info",
 };
 
+/**
+ * Did the rule RUN? Green means the script executed, whatever it then found.
+ *
+ * Kept separate from statusColor on purpose. `statusColor` is shared with rules
+ * and tickets, and a run's status used to live in it - where "fail" meant a
+ * breach and "error" meant a crash, on the same word. Two vocabularies that
+ * answer different questions do not belong in one lookup table.
+ */
+export const runStatusColor: Record<string, "error" | "warning" | "info" | "success"> = {
+  success: "success",
+  failed: "error",
+  running: "info",
+};
+
+/**
+ * What did the control FIND? Only ever reached by a run that executed.
+ *
+ * Red here is the product working: it found a breach. That is the same red a
+ * genuine fault uses, which is why the two sit in different columns and are
+ * never read together as one word.
+ */
+export const runOutcomeColor: Record<string, "error" | "warning" | "info" | "success"> = {
+  fail: "error",
+  pass: "success",
+};
+
 export const entityColor: Record<string, "primary" | "secondary"> = {
   LAD: "secondary",
   ABM: "primary",

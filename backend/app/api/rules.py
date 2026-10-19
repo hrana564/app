@@ -605,6 +605,7 @@ async def test_rule(
     return RuleTestResponse(
         run_id=run.id,
         status=run.status,
+        outcome=run.outcome,
         summary=run.summary,
         metrics=run.metrics,
         rows=run.rows,

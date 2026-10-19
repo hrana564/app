@@ -129,8 +129,9 @@ async def run_schedule_job(schedule_id: int) -> None:
             sched.last_run_at = run.finished_at or datetime.now(timezone.utc)
             await session.commit()
             log.info(
-                "schedule %s (rule %s) -> run %s status=%s rows=%s",
-                schedule_id, rule.code, run.id, run.status, len(run.rows or []),
+                "schedule %s (rule %s) -> run %s status=%s outcome=%s rows=%s",
+                schedule_id, rule.code, run.id, run.status, run.outcome,
+                len(run.rows or []),
             )
     except Exception:  # noqa: BLE001
         log.exception("schedule %s failed", schedule_id)

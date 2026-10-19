@@ -25,25 +25,36 @@ from app.models import Run, Ticket
 log = logging.getLogger("abm.ticketing")
 
 
-def run_status_for(rule_status: str, row_count: int) -> str:
-    """Map what a rule reported onto the status the run ledger records.
+def run_status_for(rule_status: str) -> str:
+    """Did the rule EXECUTE? `success`|`failed` from the rule becomes the same.
 
-    A rule that ran and returned rows has failed its control, whatever the rule
-    itself chose to call it. That sentence is the whole of this module's reason
-    to exist, so it is expressed once here and used by both the runner and the
-    replay tool - if the two derived the status differently, a replay would
-    report a difference that is not one.
+    Nothing here looks at the rows. A rule that runs and finds a breach ran
+    perfectly well, and recording that as a failed execution is how an audit
+    tool starts reporting its own successes as faults.
+    """
+    return "success" if rule_status == "success" else "failed"
+
+
+def run_outcome_for(rule_status: str, row_count: int) -> str | None:
+    """What did the control FIND? `pass`|`fail`, or None if it never ran.
+
+    A rule that could not run has no opinion about the control, so it has no
+    outcome. That is the distinction this whole module exists to keep.
+
+    Both this and run_status_for are pure and are used by the runner AND the
+    replay tool - if the two derived them differently, a replay would report a
+    difference that is not one.
     """
     if rule_status != "success":
-        return "error"
+        return None
     return "fail" if row_count else "pass"
 
 
 async def raise_ticket(
     session: AsyncSession, *, run: Run, severity: str, schedule_id: int | None
 ) -> Ticket | None:
-    """Open one ticket for a failed run. Returns None if there is nothing to report."""
-    if run.status != "fail" or not run.rows:
+    """Open one ticket for a breach. Returns None if there is nothing to report."""
+    if run.outcome != "fail" or not run.rows:
         return None
 
     ticket = Ticket(

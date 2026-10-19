@@ -22,6 +22,7 @@ async def list_runs(
     page: int = Query(1, ge=1),
     perPage: int = Query(25, ge=1, le=500),
     status_: str | None = Query(None, alias="status"),
+    outcome_: str | None = Query(None, alias="outcome"),
     rule_code: str | None = None,
     sort: str = "started_at",
     order: str = "DESC",
@@ -29,9 +30,15 @@ async def list_runs(
     stmt = select(Run)
     count_stmt = select(func.count()).select_from(Run)
 
+    # `status` asks whether the rule ran; `outcome` asks what it found. They are
+    # separate columns because they are separate questions, and filtering one
+    # must never imply the other.
     if status_:
         stmt = stmt.where(Run.status == status_)
         count_stmt = count_stmt.where(Run.status == status_)
+    if outcome_:
+        stmt = stmt.where(Run.outcome == outcome_)
+        count_stmt = count_stmt.where(Run.outcome == outcome_)
     if rule_code is not None:
         stmt = stmt.where(Run.rule_code == rule_code)
         count_stmt = count_stmt.where(Run.rule_code == rule_code)
@@ -50,8 +57,13 @@ async def list_runs(
 
 @router.get("/summary")
 async def summary(session: SessionDep, _user: CurrentUser) -> dict:
-    rows = (await session.execute(select(Run.status, func.count()).group_by(Run.status))).all()
-    by_status = {status: count for status, count in rows}
+    rows = (
+        await session.execute(select(Run.status, Run.outcome, func.count()).group_by(Run.status, Run.outcome))
+    ).all()
+    tally: dict[tuple[str, str | None], int] = {
+        (status, outcome): count for status, outcome, count in rows
+    }
+    at = lambda s, o: tally.get((s, o), 0)  # noqa: E731
 
     since = datetime.now(timezone.utc) - timedelta(days=7)
     recent = (
@@ -61,10 +73,14 @@ async def summary(session: SessionDep, _user: CurrentUser) -> dict:
     ).scalar_one()
 
     return {
-        "total": sum(by_status.values()),
-        "pass": by_status.get("pass", 0),
-        "fail": by_status.get("fail", 0),
-        "error": by_status.get("error", 0),
+        "total": sum(tally.values()),
+        # Execution
+        "running": at("running", None),
+        "completed": at("success", "pass") + at("success", "fail"),
+        "failed": at("failed", None),
+        # Control outcome - only over runs that actually produced one
+        "breaches": at("success", "fail"),
+        "cleared": at("success", "pass"),
         "last_7_days": recent,
     }
 

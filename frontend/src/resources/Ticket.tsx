@@ -1,6 +1,6 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ShowBase, useNotify, useRecordContext, useRefresh } from "react-admin";
-import { useNavigate } from "react-router-dom";
+import { useNavigate } from "react-router";
 import {
   Alert, Box, Button, Card, CardContent, Chip, CircularProgress, Dialog,
   DialogActions, DialogContent, DialogTitle, Divider, MenuItem, Stack,

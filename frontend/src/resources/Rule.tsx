@@ -3,7 +3,7 @@ import {
   Datagrid, Edit, List, Pagination, ShowBase, TextField, TopToolbar,
   useListContext, useNotify, useRecordContext, useRefresh,
 } from "react-admin";
-import { useNavigate } from "react-router-dom";
+import { useNavigate } from "react-router";
 import {
   Alert, Box, Button, Card, CardContent, Chip, CircularProgress, Dialog,
   DialogActions, DialogContent, DialogTitle, Divider, IconButton,

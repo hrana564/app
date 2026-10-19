@@ -1,7 +1,7 @@
 import {
   Chip, Box, IconButton, Stack, Tooltip, Typography, useTheme,
 } from "@mui/material";
-import { Link } from "react-router-dom";
+import { Link } from "react-router";
 import { useRecordContext } from "react-admin";
 import { severityColor, statusColor, entityColor, FONT } from "../theme";
 

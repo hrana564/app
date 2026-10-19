@@ -21,7 +21,6 @@ asyncpg==0.31.0
 
 apscheduler==3.11.3
 croniter==6.0.0
-orjson==3.11.7
 
 # Rules are written as polars operations over the CSVs a run staged.
 # polars is MIT. Lazy evaluation means a rule streams its inputs rather than
@@ -36,10 +35,10 @@ python-dotenv==1.2.1
 openai==2.14.0
 
 # --- dev / tooling ---
-# NOTE: pytest-asyncio 1.2.0 requires pytest <9, hence the cap below.
-pytest>=8.3,<9
-pytest-asyncio==1.2.0
-pip-licenses==6.0.0b13
+# The test suite is scripts/smoke_test.py, a plain script against a running API.
+# It uses httpx, which no other declared dependency is obliged to keep installed,
+# so it is declared here rather than inherited by accident.
+httpx==0.28.1
 
 # Sample-data generation only - never imported by the app or by a rule.
 # Pinned because the names it produces are what the planted breaches are

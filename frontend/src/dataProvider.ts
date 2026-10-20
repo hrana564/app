@@ -38,6 +38,59 @@ export const clearSession = () => {
   window.dispatchEvent(new Event(SESSION_EVENT));
 };
 
+/**
+ * Where to go once the visitor has signed in.
+ *
+ * A deep link is a link somebody was sent, and it is the reason the session
+ * existed at all - so signing in should return to it rather than to the
+ * dashboard. The app has to remember it itself, because it decides which
+ * route to show before the sign-in has happened.
+ */
+const RETURN_TO_KEY = "audit.returnTo";
+
+/** Remember the route the visitor was trying to reach, if it is worth returning to. */
+export const rememberReturnTo = (hash: string) => {
+  const path = hash.replace(/^#/, "");
+  if (!path || path.startsWith("/login")) return;
+  try {
+    sessionStorage.setItem(RETURN_TO_KEY, path);
+  } catch {
+    /* private browsing: the visitor lands on the dashboard instead */
+  }
+};
+
+/** The remembered route, and forget it - a destination is used once. */
+export const takeReturnTo = (): string | undefined => {
+  try {
+    const path = sessionStorage.getItem(RETURN_TO_KEY) ?? undefined;
+    sessionStorage.removeItem(RETURN_TO_KEY);
+    return path;
+  } catch {
+    return undefined;
+  }
+};
+
+/**
+ * Put the app on the login route.
+ *
+ * There is one rule here - no session means the login form is what should be
+ * on screen - and it is enforced in two places, because it has to hold at two
+ * moments: before the first render, and when the session goes away while the
+ * app is open.
+ *
+ * It is worth being precise about why the app is put on the login route
+ * rather than being left to bounce off the protected routes. react-admin
+ * signs an anonymous visitor out of the protected branch, the sign-out clears
+ * the query cache, clearing the cache re-runs the auth check, the check
+ * fails, and the branch signs the visitor out again - fifty times over, which
+ * is where React's "maximum update depth exceeded" comes from. The login route
+ * is not that branch, so arriving on it is the one way in that does not loop.
+ */
+export const goToLogin = () => {
+  if (window.location.hash.includes("/login")) return;
+  window.location.hash = "#/login";
+};
+
 export class ApiError extends Error {
   status: number;
   constructor(status: number, message: string) {
@@ -72,7 +125,20 @@ const qs = (params: Query) => {
   return s ? `?${s}` : "";
 };
 
-async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
+/**
+ * One request, one answer.
+ *
+ * `unauthorizedIsAnAnswer` says that a 401 here is the response the caller
+ * asked for rather than an expired session. The sign-in endpoint is the case
+ * that matters: wrong credentials are what a 401 means there, and treating it
+ * as an expiry would report "your session has expired" to somebody who never
+ * had one, and clear a session they were trying to start.
+ */
+async function request<T>(
+  path: string,
+  options: RequestInit = {},
+  unauthorizedIsAnAnswer = false,
+): Promise<T> {
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
     ...((options.headers as Record<string, string>) || {}),
@@ -82,7 +148,7 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
 
   const response = await fetch(path, { ...options, headers });
 
-  if (response.status === 401) {
+  if (response.status === 401 && !unauthorizedIsAnAnswer) {
     clearSession();
     // Bounce to login without a full page reload loop.
     if (!window.location.hash.includes("/login")) {
@@ -329,6 +395,9 @@ export const api = {
     request<{ access_token: string; expires_in: number; user: any }>(
       "/api/auth/login",
       { method: "POST", body: JSON.stringify({ username, password }) },
+      // A refused sign-in is a 401, and it is the answer to the question that
+      // was asked - not an expired session.
+      true,
     ),
 
   me: () => request<any>("/api/auth/me"),

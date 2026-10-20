@@ -8,7 +8,7 @@ import {
 } from "react";
 import { Box, CircularProgress, Typography } from "@mui/material";
 import {
-  api, ApiError, getToken, SESSION_EVENT, type EntityOut,
+  api, ApiError, getToken, goToLogin, SESSION_EVENT, type EntityOut,
 } from "./dataProvider";
 
 /**
@@ -43,8 +43,22 @@ import {
  * form, so the portal could not be signed in to at all.
  *
  * Before sign-in there is no client to scope to, and the login page does not
- * ask for one. So the shell renders, react-admin puts the login form up, and
- * the list is fetched when there is a session to scope.
+ * ask for one. So the shell renders, the login form is put up, and the list is
+ * fetched when there is a session to scope.
+ *
+ * THE SESSION IS THIS PROVIDER'S TO ANSWER FOR
+ * -------------------------------------------
+ * With no session, the whole of the app is the login form. react-admin's admin
+ * is not mounted at all, and the app says so rather than mounting an admin
+ * that has no session and letting it bounce.
+ *
+ * That is not a preference. react-admin's own answer to "no session" is to
+ * sign the visitor out of the protected branch, and the sign-out clears the
+ * query cache, which re-runs the auth check, which fails, which signs the
+ * visitor out again - fifty times over, and that is the "maximum update depth
+ * exceeded" the console was full of. Mounting the admin only when there is a
+ * session means that machinery never sees an anonymous visitor, so it never
+ * has to sign one out.
  */
 
 export type Entity = EntityOut;
@@ -55,12 +69,21 @@ type Scope = {
   entity: string;
   setEntity: (code: string) => void;
   entities: Entity[];
+  /**
+   * Whether there is a session.
+   *
+   * The shell needs this and not just the client scope: with no session the
+   * login form is the whole of the app, and react-admin's admin is not mounted
+   * at all. See the note above on this provider.
+   */
+  signedIn: boolean;
 };
 
 const EntityContext = createContext<Scope>({
   entity: "",
   setEntity: () => undefined,
   entities: [],
+  signedIn: false,
 });
 
 export const EntityScope = ({ children }: { children: ReactNode }) => {
@@ -78,6 +101,14 @@ export const EntityScope = ({ children }: { children: ReactNode }) => {
     onSession();
     return () => window.removeEventListener(SESSION_EVENT, onSession);
   }, []);
+
+  // No session, so the login form is what should be on screen. This is the
+  // same rule the entry point applies before the first render, and it is
+  // applied here too because the session can go away while the app is open -
+  // a sign-out, or a 401 anywhere clearing it. See `goToLogin`.
+  useEffect(() => {
+    if (!signedIn) goToLogin();
+  }, [signedIn]);
 
   useEffect(() => {
     if (!signedIn) {
@@ -126,6 +157,7 @@ export const EntityScope = ({ children }: { children: ReactNode }) => {
     () => ({
       entity,
       entities: entities ?? [],
+      signedIn,
       setEntity: (code: string) => {
         if (!entities?.some((e) => e.code === code)) return;
         try {
@@ -136,13 +168,13 @@ export const EntityScope = ({ children }: { children: ReactNode }) => {
         set(code);
       },
     }),
-    [entity, entities],
+    [entity, entities, signedIn],
   );
 
-  // No session, no scope, and no list to wait for. The shell renders and
-  // react-admin puts the login form up. This is the whole fix: the list is
-  // an authenticated read, so asking for it as a stranger was asking for a
-  // 401, and the error that came back replaced the login form with a wall.
+  // No session, no scope, and no list to wait for. The shell renders and the
+  // login form is put up. This is the whole fix: the list is an authenticated
+  // read, so asking for it as a stranger was asking for a 401, and the error
+  // that came back replaced the login form with a wall.
   if (!signedIn) {
     return <EntityContext.Provider value={value}>{children}</EntityContext.Provider>;
   }

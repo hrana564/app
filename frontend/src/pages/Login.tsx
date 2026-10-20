@@ -1,27 +1,44 @@
 import { useState } from "react";
-import { useLogin, useNotify } from "react-admin";
 import { Alert, Box, Card, CardContent, Chip, Stack, TextField, Typography, Button, Divider, CircularProgress } from "@mui/material";
 import LockOutlinedIcon from "@mui/icons-material/LockOutlined";
+import { api, storeSession, takeReturnTo } from "../dataProvider";
 
 const DEMO = [
   { username: "admin_user", password: "Admin@2026", role: "admin", blurb: "authors rules, schedules and parameters" },
   { username: "audit_user", password: "Audit@2026", role: "auditor", blurb: "reviews runs and acknowledges tickets" },
 ];
 
+/**
+ * The sign-in form.
+ *
+ * It stands on its own: with no session there is no react-admin admin around
+ * it, so it cannot use react-admin's `useLogin` or `useNotify`. It signs in
+ * through the same data provider everything else uses, and reports a refusal
+ * in the page rather than in a snackbar - a snackbar needs the admin too.
+ */
 export const Login = () => {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [pending, setPending] = useState(false);
-  const login = useLogin();
-  const notify = useNotify();
+  const [error, setError] = useState<string | null>(null);
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     setPending(true);
+    setError(null);
     try {
-      await login({ username, password });
-    } catch {
-      notify("Invalid username or password", { type: "error" });
+      const result = await api.login(username, password);
+      // The deep link the visitor was actually sent is where they belong
+      // afterwards, not the dashboard. The address is set BEFORE the session
+      // is stored, because the router is created when the admin mounts and
+      // reads the address then. The dashboard is the fallback, and it is also
+      // what takes the visitor off the sign-in route - which react-admin
+      // would otherwise answer with a sign-in form.
+      const destination = takeReturnTo() ?? "/";
+      window.location.hash = `#${destination}`;
+      storeSession(result.access_token, result.user);
+    } catch (err: any) {
+      setError(err?.message || "Invalid username or password");
     } finally {
       setPending(false);
     }
@@ -87,6 +104,12 @@ export const Login = () => {
               </Button>
             </Stack>
           </form>
+
+          {error && (
+            <Alert severity="error" sx={{ mt: 2 }}>
+              {error}
+            </Alert>
+          )}
 
           <Divider sx={{ my: 3 }}>
             <Typography variant="caption" color="text.secondary">

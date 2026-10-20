@@ -129,8 +129,27 @@ export const fieldFromRecord =
     return <>{render(record?.[source], record)}</>;
   };
 
+/**
+ * The same chip, two ways: as a `<Datagrid>` column, or handed a `record`
+ * directly where there is no row to read from.
+ *
+ * The second path exists because a rule's detail page showed these chips in a
+ * page header and not in a grid, and passing it an `EntityField` there was
+ * refused at runtime - the field names its column through react-admin's
+ * context, so without one the header threw.
+ */
+const chipsFor =
+  (render: (props: { value?: string }) => React.ReactElement) =>
+  // eslint-disable-next-line react/display-name
+  ({ source, record }: { source: string; record?: any }) => {
+    const contextRecord = useRecordContext<any>();
+    return render({ value: (record ?? contextRecord)?.[source] });
+  };
+
 export const SeverityField = fieldFromRecord((v) => <SeverityChip value={v} />);
+export const SeverityChipField = chipsFor((p) => <SeverityChip {...p} />);
 export const StatusField = fieldFromRecord((v) => <StatusChip value={v} />);
+export const StatusChipField = chipsFor((p) => <StatusChip {...p} />);
 export const EntityField = fieldFromRecord((v) => <EntityChip value={v} />);
 export const RowCountField = fieldFromRecord((v) => <RowCount value={v?.length} />);
 export const IdField = fieldFromRecord((v) => <RowCount value={v} />);

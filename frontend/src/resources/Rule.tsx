@@ -34,7 +34,7 @@ import { TEMPLATES, templatePrompt } from "../components/rulePrompts";
 import { RunOutcomeCell, RunStatusCell } from "./Run";
 import {
   ActionIcon, CodeBlock, DotLabel, EntityField, IdField, JsonBlock, RowsTable,
-  RuleStateCell, SeverityField, StatusField, RowCountField,
+  RuleStateCell, SeverityChipField, StatusChipField, RowCountField,
 } from "../components/ui";
 import { severityColor, statusColor, SEVERITIES_ASC, FONT } from "../theme";
 import { useEntityScope } from "../entityScope";
@@ -1218,8 +1218,8 @@ const RuleDetails = () => {
         <CardContent>
           <Stack direction="row" spacing={1} sx={{ mb: 1.5, flexWrap: "wrap", gap: 1 }}>
             <EntityField source="entity" />
-            <SeverityField source="severity" />
-            <StatusField source="status" />
+            <SeverityChipField source="severity" record={record} />
+            <StatusChipField source="status" record={record} />
             <Chip size="small" label={`v${record.version}`} />
             <Chip
               size="small"
@@ -1560,8 +1560,8 @@ const TicketsForRule = ({ ruleCode }: { ruleCode: string }) => {
             <Typography variant="body2" sx={{ fontFamily: "monospace", fontWeight: 700 }}>
               {t.ticket_no}
             </Typography>
-            <SeverityField source="severity" />
-            <StatusField source="status" />
+            <SeverityChipField source="severity" record={t} />
+            <StatusChipField source="status" record={t} />
           </Stack>
           <Typography variant="body2" color="text.secondary">{t.summary}</Typography>
         </Box>

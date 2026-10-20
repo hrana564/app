@@ -486,12 +486,17 @@ guessing, and says what the code actually reads.
 
 ## 5. Running it
 
-```bash
-# API - 127.0.0.1:8000
-cd backend
-.\.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8000
+The API's port is `API_PORT` in `backend/.env` — **one** value. The server that
+binds it (`scripts/run_api.py`), the smoke test that calls it and the Vite dev
+proxy that fronts it all read it, so none of them can end up pointing
+somewhere else.
 
-# Frontend - 127.0.0.1:5173 (proxies /api to 8000)
+```bash
+# API - 127.0.0.1:3000
+cd backend
+.\.venv\Scripts\python.exe scripts\run_api.py
+
+# Frontend - 127.0.0.1:5173 (proxies /api to the API's port)
 cd frontend && npm run dev
 
 # Sample data with deliberately planted breaches
@@ -575,6 +580,7 @@ Each of these cost real time. They will cost it again.
 | **`captureBeyondViewport` screenshots clip the right edge** | The image comes out wider than the layout and text at the boundary looks truncated. It isn't: measure `scrollWidth <= clientWidth` on `.RaLayout-content` and on the app bar before believing a screenshot. |
 | **Changing `node_modules` leaves Vite serving the old dep** | `npm install` changes the optimised bundle in `node_modules/.vite`, and the dev server keeps serving what it built before. Stop the server, delete `node_modules/.vite`, start it again — and then *look* at the served module, because a stale dep bundle fails in ways that read like the app is broken. |
 | **`npm audit`'s decode-uri-component advisory cannot be fixed here** | Seven moderate advisories, all one problem: `decode-uri-component` ≤ 0.4.2, reached through `query-string` → `react-admin`. Both overrides are dead ends. Forcing `decode-uri-component` to 0.5.0 breaks at RUNTIME — it is ESM-only and `query-string@7` `require()`s it, so `decodeComponent is not a function` and every URL with a query string dies. Forcing `query-string` to 9.x breaks at BUILD time — v9 dropped the named `parse`/`stringify` exports react-admin imports. The fix is upstream, in react-admin's own `query-string` range. Do not spend the afternoon again. |
+| **`GET /v1/models 404` in the API log is not the app misbehaving** | The OpenCode CLI probes the local ports it knows to be OpenAI-compatible model servers, every thirty seconds: it asks `/health`, and when that answers 200 it assumes a model server and asks for `/v1/models`. The Audit Portal answers `/health` because it is a health endpoint, and has no `/v1` routes at all, so the probe 404s. The User-Agent says `opencode/latest/.../cli`. That is why the API is on **3000** and not 8000: 8000 is on OpenCode's probe list and 3000 is not. Verified by listening on nine candidate ports at once — only 1234 (LM Studio) and 11434 (Ollama) were knocked on. Do not move the port back to 8000 to "tidy" the log. |
 | **The venv is not what `requirements.txt` resolves to** | A long-lived `.venv` drifts: it kept three stale transitives that a clean install would not produce, and four orphan packages a clean install would not have. Neither shows up in `pip check`, which only looks at declared requirements. The witness is a clean venv: build one from `requirements.txt` and diff `pip list --format=freeze` against the working one. They should match exactly. |
 
 ---

@@ -121,6 +121,12 @@ class Settings(BaseSettings):
     # --- rule execution guardrails --------------------------------------
     max_rows_in_ticket: int = 500
 
+    # --- api ------------------------------------------------------------
+    # The port the API listens on. It is configuration because three things
+    # have to agree: the server that binds it, the smoke test that calls it,
+    # and the Vite dev proxy that fronts it. One value, read from here.
+    api_port: int = 3000
+
     # --- cors (frontend dev server) -------------------------------------
     cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
 

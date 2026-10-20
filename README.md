@@ -588,14 +588,18 @@ python -m venv .venv
 ### Step 3 — run
 
 ```bash
-.\.venv\Scripts\python.exe -m uvicorn app.main:app --reload --port 8000
+.\.venv\Scripts\python.exe scripts\run_api.py --reload
 ```
 
 Missing tables are created on startup, and the two users plus baseline parameters are seeded.
 
-- API → http://127.0.0.1:8000
-- Swagger → http://127.0.0.1:8000/docs
-- Health → http://127.0.0.1:8000/health (reports the table list)
+- API → http://127.0.0.1:3000
+- Swagger → http://127.0.0.1:3000/docs
+- Health → http://127.0.0.1:3000/health (reports the table list)
+
+The port is `API_PORT` in `backend/.env`. The server, the smoke test and the
+Vite dev proxy all read that one value, so they cannot disagree about where
+the API is.
 
 ### Step 4 — sample data
 
@@ -711,12 +715,13 @@ app/
 │   └── scripts/
 │       ├── make_sample_data.py     generate SourceData with planted breaches
 │       ├── smoke_test.py           end-to-end test suite
+│       ├── run_api.py              start the API on the port .env names
 │       ├── check_licenses.py       license gate
 │       └── write_third_party_notice.py  writes THIRD_PARTY_NOTICES.txt
 ├── docs/
 │   └── CREATING_A_RULE.md          a guide for the people who write the controls
 └── frontend/
-    ├── vite.config.ts              dev proxy to :8000
+    ├── vite.config.ts              dev proxy to the API's port
     └── src/
         ├── App.tsx                 Admin + resources
         ├── Layout.tsx              app bar: the product name + the client switch

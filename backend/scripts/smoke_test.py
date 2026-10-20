@@ -23,8 +23,16 @@ import httpx
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from app.engine.rules import scoped_code  # noqa: E402
+from app.settings import settings  # noqa: E402
 
-BASE = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8000"
+# Where the API is, unless told otherwise on the command line. The port comes
+# from the configuration, so the suite cannot end up testing a port the server
+# is not listening on.
+BASE = (
+    sys.argv[1]
+    if len(sys.argv) > 1
+    else f"http://127.0.0.1:{settings.api_port}"
+)
 RULES_DIR = Path(__file__).resolve().parent.parent / "rules"
 MOUNT_DIR = Path(__file__).resolve().parent.parent.parent / "mount"
 

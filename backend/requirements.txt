@@ -11,25 +11,25 @@
 #       BSD-3-Clause. BSD-3 is treated as permitted - see README "Licensing".
 # ---------------------------------------------------------------------------
 
-fastapi==0.143.3
+fastapi==0.150.0
 uvicorn[standard]==0.54.0
-pydantic==2.12.4
-pydantic-settings==2.12.0
+pydantic==2.14.1
+pydantic-settings==2.16.0
 
 sqlalchemy[asyncio]==2.1.5
-asyncpg==0.31.0
+asyncpg==0.32.0
 
 apscheduler==3.11.3
-croniter==6.0.0
+croniter==6.2.4
 
 # Rules are written as polars operations over the CSVs a run staged.
 # polars is MIT. Lazy evaluation means a rule streams its inputs rather than
 # loading the whole file, which is what keeps a wide rule affordable.
 polars==2.0.0
 
-pyjwt==2.10.1
+pyjwt==2.15.1
 bcrypt==5.0.0
-python-dotenv==1.2.1
+python-dotenv==1.2.4
 
 # Rule generation via any OpenAI-compatible endpoint (Foundry / Azure / Ollama / MiniMax)
 openai==2.14.0

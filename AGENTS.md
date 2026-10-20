@@ -573,6 +573,9 @@ Each of these cost real time. They will cost it again.
 | **`check()` in `smoke_test.py` is truthiness, not equality** | `check(label, ok, detail)` prints `PASS` whenever `ok` is merely truthy. So `check("x", offending, [])` **fails when the list is empty** — the one case it was written to catch. Write the comparison yourself: `check("x", not offending, str(offending))`. And `check("x", got, want)` passes on any non-empty `got`, so a mismatch reads green. |
 | **The smoke test writes to the ledger** | It POSTs `/api/rules/{code}/test`, and every call is a real execution: a `rule_runs` row, a `mount/Rules_Executions/<id>/` folder, and a ticket if the control breached. Ten passes in a row leave the same control recorded 28 times against the same data date, and the landing page's exception counts inflate by the same factor — 285 open exceptions reads as 4,851. Fine for correctness, misleading for anything you want to *look* at. |
 | **`captureBeyondViewport` screenshots clip the right edge** | The image comes out wider than the layout and text at the boundary looks truncated. It isn't: measure `scrollWidth <= clientWidth` on `.RaLayout-content` and on the app bar before believing a screenshot. |
+| **Changing `node_modules` leaves Vite serving the old dep** | `npm install` changes the optimised bundle in `node_modules/.vite`, and the dev server keeps serving what it built before. Stop the server, delete `node_modules/.vite`, start it again — and then *look* at the served module, because a stale dep bundle fails in ways that read like the app is broken. |
+| **`npm audit`'s decode-uri-component advisory cannot be fixed here** | Seven moderate advisories, all one problem: `decode-uri-component` ≤ 0.4.2, reached through `query-string` → `react-admin`. Both overrides are dead ends. Forcing `decode-uri-component` to 0.5.0 breaks at RUNTIME — it is ESM-only and `query-string@7` `require()`s it, so `decodeComponent is not a function` and every URL with a query string dies. Forcing `query-string` to 9.x breaks at BUILD time — v9 dropped the named `parse`/`stringify` exports react-admin imports. The fix is upstream, in react-admin's own `query-string` range. Do not spend the afternoon again. |
+| **The venv is not what `requirements.txt` resolves to** | A long-lived `.venv` drifts: it kept three stale transitives that a clean install would not produce, and four orphan packages a clean install would not have. Neither shows up in `pip check`, which only looks at declared requirements. The witness is a clean venv: build one from `requirements.txt` and diff `pip list --format=freeze` against the working one. They should match exactly. |
 
 ---
 
@@ -583,6 +586,16 @@ Each of these cost real time. They will cost it again.
 separate and both are real: the checker proves nothing in the tree is copyleft,
 and `scripts\write_third_party_notice.py` writes the `THIRD_PARTY_NOTICES.txt`
 you owe on redistribution. A clean checker does not produce that file.
+
+**The majors are not taken, and `npm outdated` is not a to-do list.** It offers
+`react-router` 8, which react-admin does not accept — it depends on
+`react-router@^6.28.1 || ^7.1.1` — so installing it breaks the framework. It
+offers TypeScript 7 (the native port) and Vite 8, which change no shipped
+behaviour. It offers MUI 9, which react-admin does support, and which is real
+work: three icon renames and one theme override, then a layout pass across
+every screen at 1920 and 1366. Do it when there is a reason, not because the
+list is there. A patch inside the range your manifest already allows is a
+different thing entirely — that one you take.
 
 Client identity is **configuration, not code** — `CLIENT_ENTITIES` in the
 deployment's `.env`, read once in `app/settings.py`. Nothing under `app/` or

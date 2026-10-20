@@ -146,6 +146,27 @@ def _trial_folder_count() -> int:
     return len([d for d in trials.iterdir() if d.is_dir()])
 
 
+def _fire_checker(hours, minute, weekdays=None, days=None):
+    """A predicate for "this fire time is the one the cadence promised".
+
+    Asserted on the hour, the minute and the day rather than on the date, so
+    the test says the same thing whenever it runs - and so that a rule firing
+    on the WRONG DAY is caught, which is the failure that matters: a control
+    that runs on the wrong day reports the wrong thing and looks like it is
+    working.
+    """
+    def matches(when: datetime) -> bool:
+        if when.hour not in hours or when.minute != minute:
+            return False
+        if weekdays is not None and when.weekday() not in weekdays:
+            return False
+        if days is not None and when.day not in days:
+            return False
+        return True
+
+    return matches
+
+
 def main() -> int:
     print("=" * 72)
     print(f"AUDIT PORTAL - smoke test against {BASE}")
@@ -793,6 +814,37 @@ def main() -> int:
         check("preview respects the timezone",
               str(datetime.fromisoformat(r["upcoming"][0]).utcoffset()) == "4:00:00",
               r["upcoming"][0])
+
+        # Every kind derives a cron, and every kind fires when it says it will.
+        #
+        # The derived expression used to be asserted for DAILY alone, and the
+        # fire time with it. The other five kinds had nothing, which meant a
+        # change in the mapping - or in the cron library underneath it - had
+        # nothing to notice it. Each kind is now asserted on both: the
+        # expression it derives, and the day and hour it fires on.
+        for kind, cfg, want_cron, fires_ok in [
+            ("HOURLY", {"time_of_day": "00:00", "interval_hours": 6}, "00 */6 * * *",
+             _fire_checker({0, 6, 12, 18}, 0)),
+            ("DAILY", {"time_of_day": "06:30"}, "30 06 * * *",
+             _fire_checker({6}, 30)),
+            ("WEEKDAYS", {"time_of_day": "08:00"}, "00 08 * * 1-5",
+             _fire_checker({8}, 0, weekdays={0, 1, 2, 3, 4})),
+            ("WEEKLY", {"time_of_day": "09:00", "days_of_week": [1, 3]}, "00 09 * * 1,3",
+             _fire_checker({9}, 0, weekdays={0, 2})),
+            ("MONTHLY", {"time_of_day": "07:00", "day_of_month": 15}, "00 07 15 * *",
+             _fire_checker({7}, 0, days={15})),
+            ("CUSTOM", {"cron_override": "0 3 * * *"}, "0 3 * * *",
+             _fire_checker({3}, 0)),
+        ]:
+            r = c.post("/api/rule-schedules/cadence-preview", headers=ud,
+                       json={"kind": kind, "config": cfg, "timezone": "UTC",
+                             "count": 4}).json()
+            check(f"{kind} derives {want_cron}",
+                  r.get("ok") is True and r.get("cron") == want_cron, str(r)[:160])
+            fires = [datetime.fromisoformat(x) for x in r.get("upcoming", [])]
+            check(f"{kind} fires when it says it will",
+                  len(fires) == 4 and all(fires_ok(d) for d in fires),
+                  str(fires)[:200])
 
         for kind, cfg, why in [
             ("MONTHLY", {"time_of_day": "07:00", "day_of_month": 31}, "day 31 rejected"),

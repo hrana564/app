@@ -591,11 +591,20 @@ you owe on redistribution. A clean checker does not produce that file.
 `react-router` 8, which react-admin does not accept — it depends on
 `react-router@^6.28.1 || ^7.1.1` — so installing it breaks the framework. It
 offers TypeScript 7 (the native port) and Vite 8, which change no shipped
-behaviour. It offers MUI 9, which react-admin does support, and which is real
-work: three icon renames and one theme override, then a layout pass across
-every screen at 1920 and 1366. Do it when there is a reason, not because the
-list is there. A patch inside the range your manifest already allows is a
-different thing entirely — that one you take.
+behaviour. A patch inside the range your manifest already allows is a different
+thing entirely — that one you take.
+
+**MUI v9 removed the system props from `Box`, `Typography`, `Stack`, `Grid` and
+`Link`.** `alignItems`, `color`, `display` and the rest are no longer props of
+the component; they are style, and style goes in `sx`. So `<Stack alignItems="center">`
+is now `<Stack sx={{ alignItems: "center" }}>`, and `<Typography color="text.secondary">`
+is `<Typography sx={{ color: "text.secondary" }}>`. A `Typography` that has an
+`sx` of its own gains the new properties inside it.
+
+That is not a cosmetic change and the compiler will not catch it going the
+wrong way: a dropped `alignItems` still compiles, and the row quietly stops
+being centred. So when the props move, the screen has to be measured, not
+looked at — §6's ruler, at both widths.
 
 Client identity is **configuration, not code** — `CLIENT_ENTITIES` in the
 deployment's `.env`, read once in `app/settings.py`. Nothing under `app/` or

@@ -57,7 +57,7 @@ export const Login = () => {
     >
       <Card sx={{ width: 440, maxWidth: "100%" }}>
         <CardContent sx={{ p: 4 }}>
-          <Stack alignItems="center" spacing={1} sx={{ mb: 3 }}>
+          <Stack spacing={1} sx={{ mb: 3, alignItems: "center" }}>
             <Box
               sx={{
                 width: 52, height: 52, borderRadius: "50%",
@@ -68,7 +68,7 @@ export const Login = () => {
               <LockOutlinedIcon fontSize="large" />
             </Box>
             <Typography variant="h5">Scope Investments — Audit Portal</Typography>
-            <Typography variant="body2" color="text.secondary" textAlign="center">
+            <Typography variant="body2" sx={{ color: "text.secondary", textAlign: "center" }}>
               Continuous auditing
             </Typography>
           </Stack>
@@ -112,7 +112,7 @@ export const Login = () => {
           )}
 
           <Divider sx={{ my: 3 }}>
-            <Typography variant="caption" color="text.secondary">
+            <Typography variant="caption" sx={{ color: "text.secondary" }}>
               DEMO ACCOUNTS
             </Typography>
           </Divider>
@@ -130,13 +130,13 @@ export const Login = () => {
                   cursor: "pointer", "&:hover": { borderColor: "primary.main", bgcolor: "#f7faff" },
                 }}
               >
-                <Stack direction="row" spacing={1} alignItems="center">
+                <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
                   <Chip size="small" label={d.role} color={d.role === "admin" ? "primary" : "secondary"} />
                   <Typography variant="body2" sx={{ fontFamily: "monospace", fontWeight: 700 }}>
                     {d.username}
                   </Typography>
                 </Stack>
-                <Typography variant="caption" color="text.secondary">
+                <Typography variant="caption" sx={{ color: "text.secondary" }}>
                   {d.blurb}
                 </Typography>
               </Box>

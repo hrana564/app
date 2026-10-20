@@ -118,7 +118,7 @@ export const RunOutcomeCell = ({ source }: { source: string; label?: string }) =
     // No outcome because the rule never got to one. Saying nothing is honest;
     // printing "pass" here would mean the exact opposite of what happened.
     return (
-      <Typography variant="body2" color="text.disabled">
+      <Typography variant="body2" sx={{ color: "text.disabled" }}>
         &mdash;
       </Typography>
     );
@@ -290,13 +290,16 @@ const RunDetails = () => {
             }}
           >
             <Box>
-              <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5 }}>
+              <Typography
+                variant="caption"
+                sx={{ fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5, color: "text.secondary" }}
+              >
                 Execution
               </Typography>
               <Typography variant="body1" sx={{ fontWeight: 600, textTransform: "capitalize" }}>
                 {record.status}
               </Typography>
-              <Typography variant="caption" color="text.secondary" display="block">
+              <Typography variant="caption" sx={{ color: "text.secondary", display: "block" }}>
                 {record.status === "success"
                   ? "the rule executed"
                   : record.status === "failed"
@@ -305,13 +308,16 @@ const RunDetails = () => {
               </Typography>
             </Box>
             <Box>
-              <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5 }}>
+              <Typography
+                variant="caption"
+                sx={{ fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5, color: "text.secondary" }}
+              >
                 Rule outcome
               </Typography>
               <Typography variant="body1" sx={{ fontWeight: 600, textTransform: "capitalize" }}>
                 {record.outcome ?? "none"}
               </Typography>
-              <Typography variant="caption" color="text.secondary" display="block">
+              <Typography variant="caption" sx={{ color: "text.secondary", display: "block" }}>
                 {!record.outcome
                   ? "the rule never got an answer"
                   : record.outcome === "fail"
@@ -320,7 +326,10 @@ const RunDetails = () => {
               </Typography>
             </Box>
             <Box>
-              <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5 }}>
+              <Typography
+                variant="caption"
+                sx={{ fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5, color: "text.secondary" }}
+              >
                 Exception lines
               </Typography>
               <Typography variant="body1" sx={{ fontWeight: 600 }}>
@@ -328,7 +337,10 @@ const RunDetails = () => {
               </Typography>
             </Box>
             <Box>
-              <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5 }}>
+              <Typography
+                variant="caption"
+                sx={{ fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5, color: "text.secondary" }}
+              >
                 Duration
               </Typography>
               <Typography variant="body1" sx={{ fontWeight: 600 }}>
@@ -347,7 +359,7 @@ const RunDetails = () => {
             <Chip size="small" variant="outlined" label={record.triggered_by} />
           </Stack>
           <Typography variant="body1" sx={{ fontWeight: 600 }}>{record.summary}</Typography>
-          <Typography variant="caption" color="text.secondary">
+          <Typography variant="caption" sx={{ color: "text.secondary" }}>
             Data date {record.data_date} ·{" "}
             {new Date(record.started_at).toLocaleString()}
           </Typography>
@@ -362,7 +374,7 @@ const RunDetails = () => {
               <Box component="pre" sx={{ m: 0, whiteSpace: "pre-wrap", fontSize: 12 }}>
                 {record.error_detail || "no detail recorded"}
               </Box>
-              <Typography variant="caption" display="block" sx={{ mt: 1 }}>
+              <Typography variant="caption" sx={{ mt: 1, display: "block" }}>
                 No ticket was opened: a rule that never ran has no observation to report.
                 This day is unchecked, not clean.
               </Typography>
@@ -443,7 +455,7 @@ const ScheduleOverview = () => {
 
   return (
     <Stack spacing={1.5}>
-      <Typography variant="body2" color="text.secondary">
+      <Typography variant="body2" sx={{ color: "text.secondary" }}>
         {rows.length} schedule{rows.length === 1 ? "" : "s"} across{" "}
         {new Set(rows.map((r) => r.rule_code)).size} rule(s). A schedule only fires
         while its rule is <strong>active</strong>.
@@ -454,10 +466,16 @@ const ScheduleOverview = () => {
         return (
           <Card key={s.id}>
             <CardContent>
-              <Stack direction="row" justifyContent="space-between" alignItems="center"
-                flexWrap="wrap" gap={1}>
+              <Stack
+                direction="row"
+                sx={{ justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 1 }}
+              >
                 <Box>
-                  <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" gap={1}>
+                  <Stack
+                    direction="row"
+                    spacing={1}
+                    sx={{ alignItems: "center", flexWrap: "wrap", gap: 1 }}
+                  >
                     <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>
                       {s.cadence_label}
                     </Typography>
@@ -480,7 +498,7 @@ const ScheduleOverview = () => {
                       color={live ? "success" : "warning"}
                     />
                   </Stack>
-                  <Typography variant="caption" color="text.secondary">
+                  <Typography variant="caption" sx={{ color: "text.secondary" }}>
                     next {s.next_run_relative ?? "unknown"}
                     {s.last_run_at && ` · last ran ${new Date(s.last_run_at).toLocaleString()}`}
                   </Typography>

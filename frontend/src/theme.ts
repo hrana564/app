@@ -87,9 +87,14 @@ export const theme = createTheme({
     },
     MuiChip: {
       styleOverrides: {
-        root: { fontWeight: 600 },
+        root: {
+          fontWeight: 600,
+          // MUI v9 removed the `sizeSmall` styleOverride key - a class name is
+          // no longer a slot you can style. A variant is, so the short chip's
+          // height is asked for the way v9 asks.
+          variants: [{ props: { size: "small" }, style: { height: 24 } }],
+        },
         label: { fontSize: FONT.label, paddingLeft: 10, paddingRight: 10 },
-        sizeSmall: { height: 24 },
       },
     },
     MuiTooltip: {

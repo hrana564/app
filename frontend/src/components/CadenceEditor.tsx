@@ -264,7 +264,7 @@ export const CadenceEditor = ({ value, onChange }: Props) => {
       <Divider sx={{ my: 2 }} />
 
       {/* What this actually means */}
-      <Stack direction="row" alignItems="center" spacing={1}>
+      <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
         <Typography variant="subtitle2">
           {preview?.cadence_label ?? "Choose a frequency"}
         </Typography>

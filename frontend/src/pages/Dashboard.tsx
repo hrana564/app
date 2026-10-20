@@ -131,11 +131,11 @@ const checkedOf = (d: DayRow) => d.passed + d.breach;
 /* Shared furniture                                                    */
 /* ================================================================== */
 const SectionTitle = ({ children, aside }: { children: string; aside?: string }) => (
-  <Stack direction="row" justifyContent="space-between" alignItems="baseline" sx={{ mb: 1.5 }}>
-    <Typography variant="overline" color="text.secondary" sx={{ letterSpacing: 0.8 }}>
+  <Stack direction="row" sx={{ mb: 1.5, justifyContent: "space-between", alignItems: "baseline" }}>
+    <Typography variant="overline" sx={{ letterSpacing: 0.8, color: "text.secondary" }}>
       {children}
     </Typography>
-    {aside && <Typography variant="caption" color="text.secondary">{aside}</Typography>}
+    {aside && <Typography variant="caption" sx={{ color: "text.secondary" }}>{aside}</Typography>}
   </Stack>
 );
 
@@ -177,11 +177,8 @@ const Maybe = ({ n, emphasise }: { n: number; emphasise?: boolean }) => (
 /** Two lines, then an ellipsis. A finding summary is a sentence, not a cell. */
 const Clamp = ({ children, lines = 2 }: { children: string; lines?: number }) => (
   <Typography
-    variant="caption" color="text.secondary"
-    sx={{
-      display: "-webkit-box", WebkitLineClamp: lines, WebkitBoxOrient: "vertical",
-      overflow: "hidden", lineHeight: 1.35,
-    }}
+    variant="caption"
+    sx={{ display: "-webkit-box", WebkitLineClamp: lines, WebkitBoxOrient: "vertical", overflow: "hidden", lineHeight: 1.35, color: "text.secondary" }}
   >
     {children}
   </Typography>
@@ -199,8 +196,9 @@ const RulesRan = ({ d }: { d: DayRow }) => {
   const short = d.assured - ran;
   return (
     <Stack
-      direction="row" spacing={0.4} justifyContent="flex-end" alignItems="baseline"
-      sx={{ fontVariantNumeric: "tabular-nums" }}
+      direction="row"
+      spacing={0.4}
+      sx={{ fontVariantNumeric: "tabular-nums", justifyContent: "flex-end", alignItems: "baseline" }}
     >
       <Box component="span" sx={{ fontWeight: short ? 700 : 600 }}>
         {ran}
@@ -348,8 +346,8 @@ export const Dashboard = () => {
     tone?: "error" | "warning" | "success";
   }) => (
     <Box sx={{ px: 3, py: 2.25, flex: 1, minWidth: 210 }}>
-      <Typography variant="overline" color="text.secondary">{label}</Typography>
-      <Stack direction="row" alignItems="baseline" spacing={1} sx={{ mt: 0.25 }}>
+      <Typography variant="overline" sx={{ color: "text.secondary" }}>{label}</Typography>
+      <Stack direction="row" spacing={1} sx={{ mt: 0.25, alignItems: "baseline" }}>
         <Typography
           sx={{
             fontSize: "2.125rem", fontWeight: 700, lineHeight: 1.15, letterSpacing: -0.5,
@@ -361,9 +359,9 @@ export const Dashboard = () => {
         >
           {value}
         </Typography>
-        {unit && <Typography variant="body2" color="text.secondary">{unit}</Typography>}
+        {unit && <Typography variant="body2" sx={{ color: "text.secondary" }}>{unit}</Typography>}
       </Stack>
-      <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 0.5 }}>
+      <Typography variant="caption" sx={{ display: "block", mt: 0.5, color: "text.secondary" }}>
         {sentence}
       </Typography>
     </Box>
@@ -372,19 +370,22 @@ export const Dashboard = () => {
   return (
     <Box>
       {/* --- header ------------------------------------------------------- */}
-      <Stack direction="row" justifyContent="space-between" alignItems="flex-start" sx={{ mb: 2.5 }}>
+      <Stack
+        direction="row"
+        sx={{ mb: 2.5, justifyContent: "space-between", alignItems: "flex-start" }}
+      >
         <Box>
           <Typography variant="h5">{current?.name ?? entity} — assurance position</Typography>
-          <Typography variant="body2" color="text.secondary">
+          <Typography variant="body2" sx={{ color: "text.secondary" }}>
             {data.controls.assured} {plural(data.controls.assured, "rule", "rules")} in scope ·{" "}
             last {data.window_days} data {plural(data.window_days, "day", "days")}
           </Typography>
         </Box>
         <Box sx={{ textAlign: "right", flexShrink: 0 }}>
-          <Typography variant="overline" color="text.secondary">Last checked</Typography>
+          <Typography variant="overline" sx={{ color: "text.secondary" }}>Last checked</Typography>
           <Typography variant="h6" sx={{ fontWeight: 700 }}>{longDate(data.as_at)}</Typography>
           {data.as_at_age_days > 1 && (
-            <Typography variant="caption" color="warning.main" sx={{ display: "block" }}>
+            <Typography variant="caption" sx={{ display: "block", color: "warning.main" }}>
               {data.as_at_age_days} days ago — stale
             </Typography>
           )}
@@ -521,15 +522,17 @@ export const Dashboard = () => {
             </TableBody>
           </Table>
           <Stack
-            direction="row" spacing={2.5} flexWrap="wrap" useFlexGap
-            sx={{ px: 2, py: 1, borderTop: "1px solid #eef1f6" }}
+            direction="row"
+            spacing={2.5}
+            useFlexGap
+            sx={{ px: 2, py: 1, borderTop: "1px solid #eef1f6", flexWrap: "wrap" }}
           >
             {([[PASSED, "ran, no observations"], [BREACH, "raised an observation"],
                [ERRORED, "failed to run"], [UNCHECKED, "did not run"]] as const).map(
               ([colour, label]) => (
-                <Stack key={label} direction="row" spacing={0.75} alignItems="center">
+                <Stack key={label} direction="row" spacing={0.75} sx={{ alignItems: "center" }}>
                   <Box sx={{ width: 10, height: 10, borderRadius: 3, bgcolor: colour, flexShrink: 0 }} />
-                  <Typography variant="caption" color="text.secondary">{label}</Typography>
+                  <Typography variant="caption" sx={{ color: "text.secondary" }}>{label}</Typography>
                 </Stack>
               ),
             )}
@@ -543,7 +546,11 @@ export const Dashboard = () => {
           <SectionTitle aside="most observations first">Rules with observations</SectionTitle>
           <Card sx={{ height: "100%" }}>
             {data.offenders.length === 0 ? (
-              <Stack direction="row" spacing={1} alignItems="center" sx={{ p: 2.5, color: "success.main" }}>
+              <Stack
+                direction="row"
+                spacing={1}
+                sx={{ p: 2.5, color: "success.main", alignItems: "center" }}
+              >
                 <TaskAltIcon />
                 <Typography variant="body2">
                   No rule raised an observation in this window.
@@ -563,7 +570,7 @@ export const Dashboard = () => {
                   {data.offenders.map((o) => (
                     <TableRow key={o.code}>
                       <TableCell sx={bodyCell}>
-                        <Stack direction="row" spacing={1} alignItems="center">
+                        <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
                           <Sev level={o.severity} />
                           <Box sx={{ minWidth: 0 }}>
                             <Typography
@@ -600,7 +607,11 @@ export const Dashboard = () => {
           </SectionTitle>
           <Card sx={{ height: "100%" }}>
             {data.longest_open.length === 0 ? (
-              <Stack direction="row" spacing={1} alignItems="center" sx={{ p: 2.5, color: "success.main" }}>
+              <Stack
+                direction="row"
+                spacing={1}
+                sx={{ p: 2.5, color: "success.main", alignItems: "center" }}
+              >
                 <TaskAltIcon />
                 <Typography variant="body2">Nothing open. The queue is clear.</Typography>
               </Stack>

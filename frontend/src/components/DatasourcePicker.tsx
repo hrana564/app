@@ -72,9 +72,9 @@ export const DatasourcePicker = ({
 
   if (rows === null) {
     return (
-      <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 2 }}>
+      <Stack direction="row" spacing={1} sx={{ mb: 2, alignItems: "center" }}>
         <CircularProgress size={18} />
-        <Typography variant="body2" color="text.secondary">Loading datasources…</Typography>
+        <Typography variant="body2" sx={{ color: "text.secondary" }}>Loading datasources…</Typography>
       </Stack>
     );
   }
@@ -86,9 +86,9 @@ export const DatasourcePicker = ({
 
   return (
     <Box sx={{ mb: 2 }}>
-      <Stack direction="row" spacing={1} alignItems="baseline" sx={{ mb: 0.5 }}>
+      <Stack direction="row" spacing={1} sx={{ mb: 0.5, alignItems: "baseline" }}>
         <Typography variant="subtitle2">Datasources</Typography>
-        <Typography variant="caption" color="text.secondary">
+        <Typography variant="caption" sx={{ color: "text.secondary" }}>
           writes <code>DATASOURCES</code> in the source below
         </Typography>
       </Stack>
@@ -114,10 +114,10 @@ export const DatasourcePicker = ({
           onChange={(_, next) => apply(next.map((o) => o.name))}
           getOptionLabel={(o) => o.name}
           isOptionEqualToValue={(a, b) => a.name === b.name}
-          renderTags={(value, getTagProps) =>
+          renderValue={(value, getItemProps) =>
             value.map((option, i) => (
               <Chip
-                {...getTagProps({ index: i })}
+                {...getItemProps({ index: i })}
                 key={option.name}
                 label={option.name}
                 size="small"
@@ -132,7 +132,7 @@ export const DatasourcePicker = ({
                 <Typography variant="body2" sx={{ fontFamily: "monospace", fontWeight: 600 }}>
                   {option.name}
                 </Typography>
-                <Typography variant="caption" color="text.secondary" display="block">
+                <Typography variant="caption" sx={{ color: "text.secondary", display: "block" }}>
                   {option.grain || option.description}
                 </Typography>
               </Box>
@@ -176,7 +176,7 @@ export const DatasourcePicker = ({
           !binding.undeclared.length &&
           !binding.unused.length &&
           !binding.unreadable && (
-            <Typography variant="caption" color="text.secondary">
+            <Typography variant="caption" sx={{ color: "text.secondary" }}>
               Declaration and code agree — every declared table is read, and every
               table read is declared.
             </Typography>

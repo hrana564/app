@@ -64,13 +64,13 @@ export const DotLabel = ({
 
   if (!value) {
     return (
-      <Typography variant="body2" color="text.secondary">
+      <Typography variant="body2" sx={{ color: "text.secondary" }}>
         &mdash;
       </Typography>
     );
   }
   return (
-    <Stack direction="row" spacing={0.75} alignItems="center" sx={{ minWidth: 0 }}>
+    <Stack direction="row" spacing={0.75} sx={{ minWidth: 0, alignItems: "center" }}>
       <Box
         sx={{
           width: 8,
@@ -98,7 +98,7 @@ export const RuleStateCell = ({ record }: { record: any }) => {
   return (
     <Stack spacing={0.15} sx={{ minWidth: 0 }}>
       <DotLabel value={status} tone={statusColor[status] ?? "default"} />
-      <Typography variant="caption" color="text.secondary" noWrap>
+      <Typography variant="caption" noWrap sx={{ color: "text.secondary" }}>
         {record?.validation_status === "valid"
           ? "validated"
           : record?.validation_status === "invalid"
@@ -375,7 +375,7 @@ export const RowsTable = ({
         </Box>
       </Box>
       {hidden > 0 && (
-        <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 0.75 }}>
+        <Typography variant="caption" sx={{ display: "block", mt: 0.75, color: "text.secondary" }}>
           {`${hidden} more column${hidden === 1 ? "" : "s"} not shown`}
         </Typography>
       )}

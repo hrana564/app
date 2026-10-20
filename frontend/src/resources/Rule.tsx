@@ -15,7 +15,7 @@ import PlayArrowIcon from "@mui/icons-material/PlayArrow";
 import BugReportIcon from "@mui/icons-material/BugReport";
 import FactCheckIcon from "@mui/icons-material/FactCheck";
 import AddIcon from "@mui/icons-material/Add";
-import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
+import DeleteOutlinedIcon from "@mui/icons-material/DeleteOutlined";
 import EditIcon from "@mui/icons-material/Edit";
 import VisibilityIcon from "@mui/icons-material/Visibility";
 import HistoryIcon from "@mui/icons-material/History";
@@ -237,13 +237,13 @@ export const GenerateRuleDialog = () => {
             </Alert>
           ) : step === "working" ? (
             <Stack spacing={2} sx={{ mt: 1 }}>
-              <Stack direction="row" spacing={1} alignItems="center">
+              <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
                 <CircularProgress size={20} />
                 <Typography variant="body1">
                   Writing the rule, then running it against real data
                 </Typography>
               </Stack>
-              <Typography variant="body2" color="text.secondary">
+              <Typography variant="body2" sx={{ color: "text.secondary" }}>
                 The agent checks its own work by executing the rule, and repairs it
                 if it does not run. A reasoning model can take a minute or two for
                 this - it is thinking, not hanging.
@@ -319,7 +319,7 @@ export const GenerateRuleDialog = () => {
                   </Typography>
                   <Stack spacing={0.5} sx={{ mt: 0.5 }}>
                     {result.attempts.map((a) => (
-                      <Typography key={a.n} variant="body2" color="text.secondary">
+                      <Typography key={a.n} variant="body2" sx={{ color: "text.secondary" }}>
                         Attempt {a.n}:{" "}
                         {a.ok ? "ran cleanly" : (a.error ?? "failed").split("\n")[0]}
                       </Typography>
@@ -335,7 +335,7 @@ export const GenerateRuleDialog = () => {
                   <CodeBlock code={result.source_code} />
                 </>
               )}
-              <Typography variant="body2" color="text.secondary">
+              <Typography variant="body2" sx={{ color: "text.secondary" }}>
                 Nothing was created. Try a narrower prompt, or add the datasource the
                 rule needs to the selection.
               </Typography>
@@ -353,7 +353,11 @@ export const GenerateRuleDialog = () => {
                 placeholder="e.g. Flag POS transactions settled by an employee who exited the company in the last 30 days"
                 helperText="Plain language. Say what should not happen, and what the finding should show. Anything in angle brackets is a question for you to answer." />
 
-              <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" gap={1}>
+              <Stack
+                direction="row"
+                spacing={1}
+                sx={{ alignItems: "center", flexWrap: "wrap", gap: 1 }}
+              >
                 <Button size="small" variant="outlined" startIcon={<AutoAwesomeIcon />}
                   onClick={(e) => setStarterMenu(e.currentTarget)}>
                   Start from a template
@@ -395,7 +399,10 @@ export const GenerateRuleDialog = () => {
                       >
                         <Box>
                           <Typography variant="body2">{t.label}</Typography>
-                          <Typography variant="caption" color="text.secondary" display="block">
+                          <Typography
+                            variant="caption"
+                            sx={{ color: "text.secondary", display: "block" }}
+                          >
                             {missing.length > 0
                               ? `needs ${missing.join(", ")} — not registered for this client`
                               : t.programme}
@@ -405,7 +412,7 @@ export const GenerateRuleDialog = () => {
                     );
                   })}
                 </Menu>
-                <Typography variant="caption" color="text.secondary">
+                <Typography variant="caption" sx={{ color: "text.secondary" }}>
                   A template fills in what the catalogue already knows - the
                   table, and what one row in it is - and leaves you the
                   judgement.
@@ -417,9 +424,9 @@ export const GenerateRuleDialog = () => {
                 onChange={(_, next) => setTables(next.map((o) => o.name))}
                 getOptionLabel={(o) => o.name}
                 isOptionEqualToValue={(a, b) => a.name === b.name}
-                renderTags={(value, getTagProps) =>
+                renderValue={(value, getItemProps) =>
                   value.map((option, i) => (
-                    <Chip {...getTagProps({ index: i })} key={option.name} label={option.name}
+                    <Chip {...getItemProps({ index: i })} key={option.name} label={option.name}
                       size="small" variant="outlined" sx={{ fontFamily: "monospace" }} />
                   ))
                 }
@@ -429,7 +436,10 @@ export const GenerateRuleDialog = () => {
                       <Typography variant="body2" sx={{ fontFamily: "monospace", fontWeight: 600 }}>
                         {option.name}
                       </Typography>
-                      <Typography variant="caption" color="text.secondary" display="block">
+                      <Typography
+                        variant="caption"
+                        sx={{ color: "text.secondary", display: "block" }}
+                      >
                         {option.grain || option.description}
                         {Object.keys(option.columns ?? {}).length
                           ? ` - ${Object.keys(option.columns).length} columns`
@@ -445,10 +455,10 @@ export const GenerateRuleDialog = () => {
                 )}
               />
 
-              <Stack direction="row" spacing={2} alignItems="flex-start">
+              <Stack direction="row" spacing={2} sx={{ alignItems: "flex-start" }}>
                 <MuiTextField type="number" label="Lookback days" value={lookback}
                   onChange={(e) => setLookback(Math.max(1, Number(e.target.value) || 1))}
-                  inputProps={{ min: 1, max: 365 }} sx={{ width: 160 }}
+                  slotProps={{ htmlInput: { min: 1, max: 365 } }} sx={{ width: 160 }}
                   helperText={
                     lookback === 1
                       ? "That day alone"
@@ -464,7 +474,7 @@ export const GenerateRuleDialog = () => {
                   ))}
                 </MuiTextField>
                 <Box sx={{ pt: 0.5 }}>
-                  <Typography variant="caption" color="text.secondary" display="block">
+                  <Typography variant="caption" sx={{ color: "text.secondary", display: "block" }}>
                     {overview
                       ? `Tested against ${current?.name ?? entity} data for ${testDate}.`
                       : "Loading the available datasources..."}
@@ -649,7 +659,7 @@ const useScheduleIndex = () => {
 const ScheduleSummary = ({ schedules }: { schedules: any[] }) => {
   if (!schedules?.length) {
     return (
-      <Typography variant="body2" color="text.secondary">
+      <Typography variant="body2" sx={{ color: "text.secondary" }}>
         manual only
       </Typography>
     );
@@ -662,7 +672,7 @@ const ScheduleSummary = ({ schedules }: { schedules: any[] }) => {
         </Typography>
       ))}
       {schedules.length > 2 && (
-        <Typography variant="caption" color="text.secondary">
+        <Typography variant="caption" sx={{ color: "text.secondary" }}>
           +{schedules.length - 2} more
         </Typography>
       )}
@@ -719,7 +729,7 @@ export const RunRuleDialog = ({
     <Dialog open onClose={busy ? undefined : onClose} maxWidth="lg" fullWidth>
       <DialogTitle sx={{ pb: 1 }}>
         Run {rule.code}
-        <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
+        <Typography variant="body2" sx={{ mt: 0.5, color: "text.secondary" }}>
           {rule.name}
         </Typography>
       </DialogTitle>
@@ -755,7 +765,7 @@ export const RunRuleDialog = ({
           </Stack>
         ) : (
           <Stack spacing={2} sx={{ mt: 1 }}>
-            <Stack direction="row" spacing={1} alignItems="center">
+            <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
               <DotLabel value={out.status} tone={statusColor[out.status] ?? "default"} />
               <Typography variant="body2">{out.summary}</Typography>
             </Stack>
@@ -951,7 +961,7 @@ export const VersionSourceDialog = ({
       <DialogTitle sx={{ pb: 1 }}>
         {code} · version {version}
         {found && (
-          <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
+          <Typography variant="body2" sx={{ mt: 0.5, color: "text.secondary" }}>
             {found.change_note || "(no note)"} · {found.created_by} ·{" "}
             {new Date(found.created_at).toLocaleString()}
           </Typography>
@@ -1073,8 +1083,11 @@ const SchedulesSection = ({ ruleCode, isAdmin }: { ruleCode: string; isAdmin: bo
   return (
     <Card>
       <CardContent>
-        <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 1.5 }}>
-          <Stack direction="row" spacing={1} alignItems="center">
+        <Stack
+          direction="row"
+          sx={{ mb: 1.5, justifyContent: "space-between", alignItems: "center" }}
+        >
+          <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
             <ScheduleIcon color="action" />
             <Typography variant="h6">Schedules</Typography>
             <Chip size="small" label={schedules?.length ?? 0} />
@@ -1089,7 +1102,7 @@ const SchedulesSection = ({ ruleCode, isAdmin }: { ruleCode: string; isAdmin: bo
         {!schedules && <CircularProgress size={22} />}
 
         {schedules?.length === 0 && (
-          <Typography variant="body2" color="text.secondary">
+          <Typography variant="body2" sx={{ color: "text.secondary" }}>
             No schedules. A rule with no schedule will only ever run when triggered manually.
           </Typography>
         )}
@@ -1097,9 +1110,9 @@ const SchedulesSection = ({ ruleCode, isAdmin }: { ruleCode: string; isAdmin: bo
         <Stack spacing={1}>
           {schedules?.map((s) => (
             <Box key={s.id} sx={{ p: 1.5, border: "1px solid #e9edf4", borderRadius: 2, bgcolor: "#fcfdff" }}>
-              <Stack direction="row" justifyContent="space-between" alignItems="center">
+              <Stack direction="row" sx={{ justifyContent: "space-between", alignItems: "center" }}>
                 <Box>
-                  <Stack direction="row" spacing={1} alignItems="center">
+                  <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
                     <Typography variant="body2" sx={{ fontWeight: 700 }}>{s.cadence_label}</Typography>
                     {s.label && s.label !== s.cadence_label && (
                       <Chip size="small" variant="outlined" label={s.label} />
@@ -1108,7 +1121,7 @@ const SchedulesSection = ({ ruleCode, isAdmin }: { ruleCode: string; isAdmin: bo
                     <Chip size="small" variant="outlined"
                       label={s.data_lag_days === 1 ? "yesterday's data" : `${s.data_lag_days}d lag`} />
                   </Stack>
-                  <Typography variant="caption" color="text.secondary">
+                  <Typography variant="caption" sx={{ color: "text.secondary" }}>
                     next {s.next_run_relative ?? "unknown"}
                     {s.upcoming_runs?.[1] &&
                       ` · then ${new Date(s.upcoming_runs[1]).toLocaleString()}`}
@@ -1123,7 +1136,7 @@ const SchedulesSection = ({ ruleCode, isAdmin }: { ruleCode: string; isAdmin: bo
                     <Button size="small" onClick={() => setEditing(s)}>Edit</Button>
                     <Tooltip title="Remove schedule">
                       <IconButton size="small" onClick={() => remove(s.id)}>
-                        <DeleteOutlineIcon fontSize="small" />
+                        <DeleteOutlinedIcon fontSize="small" />
                       </IconButton>
                     </Tooltip>
                   </Stack>
@@ -1242,11 +1255,11 @@ const RuleDetails = () => {
           </Stack>
 
           <Typography variant="h6" sx={{ mb: 0.5 }}>{record.code}</Typography>
-          <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
+          <Typography variant="body2" sx={{ mb: 1.5, color: "text.secondary" }}>
             {record.description}
           </Typography>
 
-          <Stack direction="row" spacing={1} flexWrap="wrap" gap={1}>
+          <Stack direction="row" spacing={1} sx={{ flexWrap: "wrap", gap: 1 }}>
             <Chip size="small" label={`file: ${record.source_file}`} />
             <Chip size="small" label={`by ${record.created_by}`} />
           </Stack>
@@ -1256,7 +1269,11 @@ const RuleDetails = () => {
           {isAdmin && (
             <>
               <Divider sx={{ my: 2 }} />
-              <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" gap={1}>
+              <Stack
+                direction="row"
+                spacing={1}
+                sx={{ alignItems: "center", flexWrap: "wrap", gap: 1 }}
+              >
                 <Button size="small" startIcon={<FactCheckIcon />} onClick={runValidation}
                   disabled={validating}>
                   {validating ? "Validating…" : "Validate"}
@@ -1279,7 +1296,7 @@ const RuleDetails = () => {
                   </Button>
                 )}
                 {record.validation_status !== "valid" && record.status !== "active" && (
-                  <Typography variant="caption" color="text.secondary">
+                  <Typography variant="caption" sx={{ color: "text.secondary" }}>
                     Activation requires a passing validation.
                   </Typography>
                 )}
@@ -1331,12 +1348,12 @@ const RuleDetails = () => {
                 <Box key={v.version}
                   sx={{ p: 1.25, borderRadius: 1.5, border: "1px solid #e9edf4",
                         bgcolor: v.version === record.version ? "#eef6ff" : "#fafbfe" }}>
-                  <Stack direction="row" spacing={1} alignItems="center">
+                  <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
                     <Chip size="small" label={`v${v.version}`}
                       color={v.version === record.version ? "primary" : "default"} />
                     <Typography variant="body2">{v.change_note || "(no note)"}</Typography>
                   </Stack>
-                  <Typography variant="caption" color="text.secondary">
+                  <Typography variant="caption" sx={{ color: "text.secondary" }}>
                     {v.created_by} · {new Date(v.created_at).toLocaleString()}
                   </Typography>
                 </Box>
@@ -1390,7 +1407,7 @@ const RuleDatasources = ({ entity, names }: { entity: string; names: string[] })
     return (
       <Box sx={{ mt: 2 }}>
         <Divider sx={{ my: 1.5 }} />
-        <Typography variant="body2" color="text.secondary">
+        <Typography variant="body2" sx={{ color: "text.secondary" }}>
           This rule reads no data sources.
         </Typography>
       </Box>
@@ -1404,11 +1421,17 @@ const RuleDatasources = ({ entity, names }: { entity: string; names: string[] })
   return (
     <Box sx={{ mt: 2 }}>
       <Divider sx={{ my: 1.5 }} />
-      <Stack direction="row" alignItems="baseline" justifyContent="space-between" sx={{ mb: 1 }}>
+      <Stack
+        direction="row"
+        sx={{ mb: 1, alignItems: "baseline", justifyContent: "space-between" }}
+      >
         <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>
           Data sources
-          <Typography component="span" variant="caption" color="text.secondary"
-            sx={{ ml: 1, fontWeight: 400 }}>
+          <Typography
+            component="span"
+            variant="caption"
+            sx={{ ml: 1, fontWeight: 400, color: "text.secondary" }}
+          >
             {names.length} table{names.length === 1 ? "" : "s"}
           </Typography>
         </Typography>
@@ -1430,10 +1453,10 @@ const RuleDatasources = ({ entity, names }: { entity: string; names: string[] })
                 sx={{ fontFamily: "monospace", fontWeight: 600, color: "primary.main" }}>
                 {name}
               </Typography>
-              <Typography variant="body2" color="text.secondary">
+              <Typography variant="body2" sx={{ color: "text.secondary" }}>
                 {registered === null ? "—" : row?.system || "—"}
               </Typography>
-              <Typography variant="caption" color="text.secondary">
+              <Typography variant="caption" sx={{ color: "text.secondary" }}>
                 {registered === null
                   ? ""
                   : row?.grain || (row ? "" : "not registered")}
@@ -1550,20 +1573,24 @@ const TicketsForRule = ({ ruleCode }: { ruleCode: string }) => {
 
   if (!tickets) return <CircularProgress size={22} />;
   if (!tickets.length) {
-    return <Typography variant="body2" color="text.secondary">This rule has not raised any alerts.</Typography>;
+    return <Typography variant="body2" sx={{ color: "text.secondary" }}>This rule has not raised any alerts.</Typography>;
   }
   return (
     <Stack spacing={1}>
       {tickets.map((t) => (
         <Box key={t.id} sx={{ p: 1.25, border: "1px solid #e9edf4", borderRadius: 1.5 }}>
-          <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" gap={1}>
+          <Stack
+            direction="row"
+            spacing={1}
+            sx={{ alignItems: "center", flexWrap: "wrap", gap: 1 }}
+          >
             <Typography variant="body2" sx={{ fontFamily: "monospace", fontWeight: 700 }}>
               {t.ticket_no}
             </Typography>
             <SeverityChipField source="severity" record={t} />
             <StatusChipField source="status" record={t} />
           </Stack>
-          <Typography variant="body2" color="text.secondary">{t.summary}</Typography>
+          <Typography variant="body2" sx={{ color: "text.secondary" }}>{t.summary}</Typography>
         </Box>
       ))}
     </Stack>
@@ -1597,7 +1624,7 @@ const SortableHeader = ({
     >
       {/* A flex Stack INSIDE the cell. Setting display:flex on a td would drop
           it out of the table layout and break column alignment. */}
-      <Stack direction="row" spacing={0.25} alignItems="center" sx={{ width: "fit-content" }}>
+      <Stack direction="row" spacing={0.25} sx={{ width: "fit-content", alignItems: "center" }}>
         <span>{label}</span>
         <Box component="span" sx={{ display: "inline-flex", opacity: active ? 0.85 : 0.25 }}>
           {ascending ? (
@@ -1708,7 +1735,7 @@ const RuleTable = () => {
   if (!rules.length) {
     return (
       <Box sx={{ p: 6, textAlign: "center" }}>
-        <Typography variant="body1" color="text.secondary">
+        <Typography variant="body1" sx={{ color: "text.secondary" }}>
           No rules match these filters.
         </Typography>
       </Box>
@@ -1751,7 +1778,7 @@ const RuleTable = () => {
                 >
                   {/* Rule */}
                   <TableCell sx={{ width: "38%" }}>
-                    <Stack direction="row" spacing={0} alignItems="flex-start">
+                    <Stack direction="row" spacing={0} sx={{ alignItems: "flex-start" }}>
                       <Box
                         onClick={(e) => { e.stopPropagation(); toggle(rule.code); }}
                         role="button"
@@ -1771,23 +1798,23 @@ const RuleTable = () => {
                       </Box>
 
                       <Box sx={{ minWidth: 0 }}>
-                        <Stack direction="row" spacing={0.75} alignItems="baseline">
+                        <Stack direction="row" spacing={0.75} sx={{ alignItems: "baseline" }}>
                           <Typography
                             variant="body2"
                             sx={{ fontFamily: "monospace", fontWeight: 700 }}
                           >
                             {rule.code}
                           </Typography>
-                          <Typography variant="caption" color="text.secondary">
+                          <Typography variant="caption" sx={{ color: "text.secondary" }}>
                             {rule.entity}
                           </Typography>
                           {totalVersions > 1 && (
-                            <Typography variant="caption" color="text.secondary">
+                            <Typography variant="caption" sx={{ color: "text.secondary" }}>
                               · {totalVersions} versions
                             </Typography>
                           )}
                         </Stack>
-                        <Typography variant="body2" color="text.secondary" noWrap>
+                        <Typography variant="body2" noWrap sx={{ color: "text.secondary" }}>
                           {rule.name}
                         </Typography>
                       </Box>
@@ -1811,7 +1838,7 @@ const RuleTable = () => {
 
                   {/* Actions */}
                   <TableCell align="right" onClick={(e) => e.stopPropagation()}>
-                    <Stack direction="row" spacing={0} justifyContent="flex-end">
+                    <Stack direction="row" spacing={0} sx={{ justifyContent: "flex-end" }}>
                       <ActionIcon
                         title="Run this rule now"
                         color="primary"
@@ -1826,7 +1853,7 @@ const RuleTable = () => {
                       />
                       <ActionIcon
                         title={admin ? "Delete rule" : "Deleting is admin only"}
-                        icon={<DeleteOutlineIcon fontSize="small" />}
+                        icon={<DeleteOutlinedIcon fontSize="small" />}
                         color="error"
                         disabled={!admin}
                         onClick={() => setDeleteFor(rule)}
@@ -1842,7 +1869,7 @@ const RuleTable = () => {
                         sx={{ bgcolor: "#fafbfe", "&:hover": { bgcolor: "#f4f7fc" } }}
                       >
                         <TableCell sx={{ pl: 6, py: 1 }}>
-                          <Stack direction="row" spacing={1} alignItems="baseline">
+                          <Stack direction="row" spacing={1} sx={{ alignItems: "baseline" }}>
                             <Typography
                               variant="body2"
                               sx={{ fontFamily: "monospace", fontWeight: 700, color: "text.secondary" }}
@@ -1852,7 +1879,7 @@ const RuleTable = () => {
                             <Typography variant="body2" noWrap>
                               {v.change_note || "(no note)"}
                             </Typography>
-                            <Typography variant="caption" color="text.secondary" noWrap>
+                            <Typography variant="caption" noWrap sx={{ color: "text.secondary" }}>
                               · {v.created_by} · {new Date(v.created_at).toLocaleDateString()}
                             </Typography>
                           </Stack>
@@ -1866,7 +1893,7 @@ const RuleTable = () => {
                         </TableCell>
                         <TableCell />
                         <TableCell align="right">
-                          <Stack direction="row" spacing={0} justifyContent="flex-end">
+                          <Stack direction="row" spacing={0} sx={{ justifyContent: "flex-end" }}>
                             <ActionIcon
                               title="View this version's source"
                               icon={<VisibilityIcon fontSize="small" />}
@@ -2064,9 +2091,12 @@ const RuleEditForm = () => {
 
       <Card>
         <CardContent>
-          <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 1 }}>
+          <Stack
+            direction="row"
+            sx={{ mb: 1, justifyContent: "space-between", alignItems: "center" }}
+          >
             <Typography variant="h6">Python source</Typography>
-            <Typography variant="caption" color="text.secondary">
+            <Typography variant="caption" sx={{ color: "text.secondary" }}>
               {record.source_file} &rarr; v{nextVersion} on save
             </Typography>
           </Stack>
@@ -2106,7 +2136,7 @@ const RuleEditForm = () => {
         </CardContent>
       </Card>
 
-      <Stack direction="row" spacing={1} justifyContent="flex-end">
+      <Stack direction="row" spacing={1} sx={{ justifyContent: "flex-end" }}>
         <Button
           onClick={() => navigate(`/rules/${encodeURIComponent(record.code)}/show`)}
           disabled={busy}

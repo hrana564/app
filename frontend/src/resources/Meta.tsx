@@ -6,9 +6,9 @@ import {
   TextField, ToggleButton, ToggleButtonGroup, Tooltip, Typography,
 } from "@mui/material";
 import BlockOutlinedIcon from "@mui/icons-material/BlockOutlined";
-import CheckCircleOutlineIcon from "@mui/icons-material/CheckCircleOutline";
-import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
-import ErrorOutlineIcon from "@mui/icons-material/ErrorOutline";
+import CheckCircleOutlinedIcon from "@mui/icons-material/CheckCircleOutlined";
+import DeleteOutlinedIcon from "@mui/icons-material/DeleteOutlined";
+import ErrorOutlinedIcon from "@mui/icons-material/ErrorOutlined";
 import LockOutlinedIcon from "@mui/icons-material/LockOutlined";
 import StorageIcon from "@mui/icons-material/Storage";
 import { useNotify } from "react-admin";
@@ -89,9 +89,9 @@ export const DatasourceList = () => {
 
   if (!overview) {
     return (
-      <Stack direction="row" spacing={1} alignItems="center">
+      <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
         <CircularProgress size={20} />
-        <Typography variant="body2" color="text.secondary">Loading datasources…</Typography>
+        <Typography variant="body2" sx={{ color: "text.secondary" }}>Loading datasources…</Typography>
       </Stack>
     );
   }
@@ -106,18 +106,20 @@ export const DatasourceList = () => {
       <Stack
         direction="row"
         spacing={2}
-        alignItems="center"
-        justifyContent="space-between"
-        sx={{ mb: 2, flexWrap: "wrap", gap: 1 }}
+        sx={{ mb: 2, flexWrap: "wrap", gap: 1, alignItems: "center", justifyContent: "space-between" }}
       >
         <Typography variant="h6" sx={{ fontWeight: 700 }}>
           {current?.name ?? entity}
-          <Typography component="span" variant="body2" color="text.secondary" sx={{ ml: 1 }}>
+          <Typography component="span" variant="body2" sx={{ ml: 1, color: "text.secondary" }}>
             what the ETL delivered for this client, and what we consume
           </Typography>
         </Typography>
 
-        <Stack direction="row" spacing={1.5} alignItems="center" sx={{ flexWrap: "wrap", gap: 1 }}>
+        <Stack
+          direction="row"
+          spacing={1.5}
+          sx={{ flexWrap: "wrap", gap: 1, alignItems: "center" }}
+        >
           <TextField
             select size="small" label="Data date" value={dataDate}
             onChange={(e) => setDataDate(e.target.value)} sx={{ minWidth: 150 }}
@@ -214,7 +216,7 @@ const Stat = ({
   const body = (
     <Card sx={{ minWidth: 150, flex: "1 1 150px" }}>
       <CardContent sx={{ py: 1.5, "&:last-child": { pb: 1.5 } }}>
-        <Typography variant="caption" color="text.secondary" display="block">
+        <Typography variant="caption" sx={{ color: "text.secondary", display: "block" }}>
           {label}
         </Typography>
         <Typography variant="h5" sx={{ color: tone === "default" ? "text.primary" : colour }}>
@@ -297,7 +299,7 @@ const RegisteredTable = ({
                     <Typography variant="body2" noWrap>{row.system || "—"}</Typography>
                   </TableCell>
                   <TableCell>
-                    <Typography variant="body2" noWrap color="text.secondary">
+                    <Typography variant="body2" noWrap sx={{ color: "text.secondary" }}>
                       {row.grain || "—"}
                     </Typography>
                   </TableCell>
@@ -307,7 +309,7 @@ const RegisteredTable = ({
                     </Typography>
                   </TableCell>
                   <TableCell align="right">
-                    <Typography variant="body2" color="text.secondary">
+                    <Typography variant="body2" sx={{ color: "text.secondary" }}>
                       {row.row_count ?? "—"}
                     </Typography>
                   </TableCell>
@@ -328,7 +330,7 @@ const RegisteredTable = ({
                               size="small" aria-label={`delete-${row.name}`}
                               onClick={() => onDelete(row)} disabled={busy}
                             >
-                              <DeleteOutlineIcon fontSize="small" />
+                              <DeleteOutlinedIcon fontSize="small" />
                             </IconButton>
                           </span>
                         </Tooltip>
@@ -352,7 +354,7 @@ const RegisteredTable = ({
                   <TableCell colSpan={8} sx={{ py: 0, border: 0 }}>
                     <Box sx={{ py: 2 }}>
                         {row.description && (
-                          <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
+                          <Typography variant="body2" sx={{ mb: 1.5, color: "text.secondary" }}>
                             {row.description}
                           </Typography>
                         )}
@@ -413,22 +415,22 @@ const DataPreview = ({ entity, name, day }: {
 
   if (error) {
     return (
-      <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+      <Typography variant="body2" sx={{ mb: 2, color: "text.secondary" }}>
         No preview — {error}
       </Typography>
     );
   }
   if (!data) {
     return (
-      <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 2, minHeight: 34 }}>
+      <Stack direction="row" spacing={1} sx={{ mb: 2, minHeight: 34, alignItems: "center" }}>
         <CircularProgress size={16} />
-        <Typography variant="body2" color="text.secondary">Reading rows…</Typography>
+        <Typography variant="body2" sx={{ color: "text.secondary" }}>Reading rows…</Typography>
       </Stack>
     );
   }
   if (!data.rows.length) {
     return (
-      <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+      <Typography variant="body2" sx={{ mb: 2, color: "text.secondary" }}>
         {data.name}.csv on {data.data_date} has no readable rows.
       </Typography>
     );
@@ -436,9 +438,9 @@ const DataPreview = ({ entity, name, day }: {
 
   return (
     <Box sx={{ mb: 2 }}>
-      <Stack direction="row" alignItems="baseline" spacing={1} sx={{ mb: 0.75 }}>
+      <Stack direction="row" spacing={1} sx={{ mb: 0.75, alignItems: "baseline" }}>
         <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>Sample data</Typography>
-        <Typography variant="caption" color="text.secondary">
+        <Typography variant="caption" sx={{ color: "text.secondary" }}>
           {`first ${data.rows.length} of ${data.total_rows ?? "?"} rows · ${data.data_date}`}
         </Typography>
       </Stack>
@@ -509,10 +511,10 @@ const LandedTable = ({
                 <Typography variant="body2">{f.column_count}</Typography>
               </TableCell>
               <TableCell align="right">
-                <Typography variant="body2" color="text.secondary">{f.row_count}</Typography>
+                <Typography variant="body2" sx={{ color: "text.secondary" }}>{f.row_count}</Typography>
               </TableCell>
               <TableCell align="right">
-                <Typography variant="body2" color="text.secondary">
+                <Typography variant="body2" sx={{ color: "text.secondary" }}>
                   {(f.size_bytes / 1024).toFixed(1)} KB
                 </Typography>
               </TableCell>
@@ -550,13 +552,13 @@ const LandedTable = ({
 const RuleUsers = ({ codes }: { codes: string[] }) => {
   if (!codes.length) {
     return (
-      <Typography variant="body2" color="text.disabled">no rule</Typography>
+      <Typography variant="body2" sx={{ color: "text.disabled" }}>no rule</Typography>
     );
   }
   const shown = codes.slice(0, 2);
   const hidden = codes.slice(2);
   return (
-    <Stack direction="row" spacing={0.5} alignItems="center" sx={{ minWidth: 0 }}>
+    <Stack direction="row" spacing={0.5} sx={{ minWidth: 0, alignItems: "center" }}>
       {shown.map((code) => (
         <Chip key={code} size="small" variant="outlined" label={code} />
       ))}
@@ -575,20 +577,20 @@ const LandingChip = ({
   if (landing === "landed") {
     return (
       <Tooltip title={lastSeen ? `Landed ${lastSeen}` : "Landed"}>
-        <CheckCircleOutlineIcon fontSize="small" color="success" />
+        <CheckCircleOutlinedIcon fontSize="small" color="success" />
       </Tooltip>
     );
   }
   return (
     <Tooltip title="Registered, but the file did not land on this date">
-      <ErrorOutlineIcon fontSize="small" color="error" />
+      <ErrorOutlinedIcon fontSize="small" color="error" />
     </Tooltip>
   );
 };
 
 const StateChip = ({ state }: { state: DiscoveredFile["state"] }) => {
   const map = {
-    registered: { label: "Registered", color: "success" as const, icon: <CheckCircleOutlineIcon /> },
+    registered: { label: "Registered", color: "success" as const, icon: <CheckCircleOutlinedIcon /> },
     new: { label: "Not registered", color: "warning" as const, icon: <StorageIcon /> },
   };
   const c = map[state];
@@ -620,8 +622,10 @@ const ColumnGrid = ({ columns }: { columns: Record<string, string> }) => {
     >
       {entries.map(([name, type]) => (
         <Stack
-          key={name} direction="row" spacing={1} alignItems="baseline"
-          sx={{ minWidth: 0 }}
+          key={name}
+          direction="row"
+          spacing={1}
+          sx={{ minWidth: 0, alignItems: "baseline" }}
         >
           <Typography
             variant="caption" noWrap
@@ -629,7 +633,7 @@ const ColumnGrid = ({ columns }: { columns: Record<string, string> }) => {
           >
             {name}
           </Typography>
-          <Typography variant="caption" color="text.secondary" noWrap>
+          <Typography variant="caption" noWrap sx={{ color: "text.secondary" }}>
             {type}
           </Typography>
         </Stack>
@@ -688,7 +692,7 @@ const RegisterDialog = ({
         Register {file?.name}
       </DialogTitle>
       <DialogContent>
-        <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+        <Typography variant="body2" sx={{ mb: 2, color: "text.secondary" }}>
           Columns were read from the file header on {file?.data_date} —{" "}
           {file?.column_count} {file?.column_count === 1 ? "column" : "columns"},{" "}
           {file?.row_count} {file?.row_count === 1 ? "row" : "rows"}. A rule can
@@ -709,7 +713,7 @@ const RegisterDialog = ({
             helperText="What one row represents. This is what stops two people counting differently."
           />
           <Box>
-            <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1 }}>
+            <Typography variant="caption" sx={{ mb: 1, color: "text.secondary", display: "block" }}>
               COLUMNS READ FROM THE FILE
             </Typography>
             <ColumnGrid columns={file?.columns ?? {}} />

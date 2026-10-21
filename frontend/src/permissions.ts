@@ -27,6 +27,7 @@ export type Permission =
   | "rules.activate"
   | "rules.delete"
   | "rules.generate"
+  | "rules.explain_review"
   | "schedules.read"
   | "schedules.write"
   | "runs.read"
@@ -56,6 +57,7 @@ export const PERMISSIONS: Permission[] = [
   "rules.activate",
   "rules.delete",
   "rules.generate",
+  "rules.explain_review",
   "schedules.read",
   "schedules.write",
   "runs.read",

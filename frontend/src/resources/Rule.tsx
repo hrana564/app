@@ -2,10 +2,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Datagrid, Edit, List, Pagination, ShowBase, TextField, TopToolbar,
   useListContext, useNotify, useRecordContext, useRefresh, useRequireAccess,
+  useShowContext,
 } from "react-admin";
-import { useNavigate } from "react-router";
+import { useNavigate, useParams } from "react-router";
 import {
-  Alert, Autocomplete, Box, Button, Card, CardContent, Chip, CircularProgress,
+  Alert, Autocomplete, Box, Button, ButtonBase, Card, CardContent, Chip,
+  CircularProgress, Collapse,
   Dialog, DialogActions, DialogContent, DialogTitle, Divider, IconButton,
   Menu, MenuItem, Stack, Table, TableBody, TableCell, TableContainer, TableHead,
   TableRow, TextField as MuiTextField, Tooltip, Typography,
@@ -23,6 +25,8 @@ import ChevronRightIcon from "@mui/icons-material/ChevronRight";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import ArrowUpwardIcon from "@mui/icons-material/ArrowUpward";
 import ArrowDownwardIcon from "@mui/icons-material/ArrowDownward";
+import KeyboardArrowDownIcon from "@mui/icons-material/KeyboardArrowDown";
+import KeyboardArrowRightIcon from "@mui/icons-material/KeyboardArrowRight";
 import ScheduleIcon from "@mui/icons-material/Schedule";
 import {
   api, type DatasourceOverview, type DatasourceRow,
@@ -30,6 +34,7 @@ import {
 } from "../dataProvider";
 import { CadenceEditor, type CadenceConfig } from "../components/CadenceEditor";
 import { DatasourcePicker } from "../components/DatasourcePicker";
+import { RuleExplainer } from "../components/RuleExplainer";
 import { TEMPLATES, templatePrompt } from "../components/rulePrompts";
 import { RunOutcomeCell, RunStatusCell } from "./Run";
 import {
@@ -39,6 +44,7 @@ import {
 import { severityColor, statusColor, SEVERITIES_ASC, FONT } from "../theme";
 import { can, usePermissions } from "../permissions";
 import { useEntityScope } from "../entityScope";
+import { ruleShowPath, ruleEditPath, versionFromParam } from "../rulePaths";
 
 /* ================================================================== */
 /* Filter vocabulary - mirrors the Literals in backend/app/schemas.py */
@@ -199,7 +205,9 @@ export const GenerateRuleDialog = () => {
       }
       refresh();
       setOpen(false);
-      navigate(`/rules/${encodeURIComponent(filed)}/show`);
+      // A brand new rule has exactly one version, so the page it lands on can
+      // name it rather than making the doorway do it.
+      navigate(ruleShowPath(filed, created.version));
     } catch (e: any) {
       notify(e.message ?? String(e), { type: "error" });
     } finally {
@@ -932,86 +940,6 @@ export const DeleteRuleDialog = ({
 };
 
 /* ================================================================== */
-/* One version's source, read-only                                      */
-/* ================================================================== */
-export const VersionSourceDialog = ({
-  code, version, onClose,
-}: {
-  code: string | null;
-  version: number | null;
-  onClose: () => void;
-}) => {
-  const [found, setFound] = useState<any>(null);
-  const [busy, setBusy] = useState(false);
-  const notify = useNotify();
-  const refresh = useRefresh();
-  const perms = usePermissions();
-  const canActivate = can(perms, "rules.activate");
-
-  useEffect(() => {
-    if (!code || version === null) return;
-    setFound(null);
-    api.ruleVersions(code)
-      .then((list: any[]) => setFound(list.find((v) => v.version === version) ?? null))
-      .catch(() => setFound(null));
-  }, [code, version]);
-
-  if (!code || version === null) return null;
-
-  const restore = async () => {
-    setBusy(true);
-    try {
-      const next = await api.rollbackRule(code, version);
-      notify(`${code} v${next.version} created from v${version} as draft - validate it to activate`, {
-        type: "success",
-      });
-      refresh();
-      onClose();
-    } catch (e: any) {
-      notify(e.message, { type: "error" });
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <Dialog open onClose={onClose} maxWidth="lg" fullWidth>
-      <DialogTitle sx={{ pb: 1 }}>
-        {code} · version {version}
-        {found && (
-          <Typography variant="body2" sx={{ mt: 0.5, color: "text.secondary" }}>
-            {found.change_note || "(no note)"} · {found.created_by} ·{" "}
-            {new Date(found.created_at).toLocaleString()}
-          </Typography>
-        )}
-      </DialogTitle>
-      <DialogContent>
-        {!found ? (
-          <Box sx={{ py: 4, textAlign: "center" }}>
-            <CircularProgress size={24} />
-          </Box>
-        ) : (
-          <CodeBlock code={found.source_code} />
-        )}
-      </DialogContent>
-      <DialogActions>
-        {/* Restore copies v(n) FORWARD into a new version - it does not rewind. */}
-        {canActivate && (
-          <Tooltip title="Copies this source forward into a new draft version. It does not rewind history.">
-            <span>
-              <Button onClick={restore} disabled={busy || !found} startIcon={<HistoryIcon />}>
-                {busy ? "Restoring…" : "Restore this version"}
-              </Button>
-            </span>
-          </Tooltip>
-        )}
-        <Button onClick={onClose}>Close</Button>
-      </DialogActions>
-    </Dialog>
-  );
-};
-
-/* ================================================================== */
 /* Schedules section                                                   */
 /* ================================================================== */
 const ScheduleDialog = ({
@@ -1179,14 +1107,17 @@ const SchedulesSection = ({ ruleCode, canWrite }: { ruleCode: string; canWrite: 
 /* ================================================================== */
 /* Rule detail                                                         */
 /* ================================================================== */
-const RuleDetails = () => {
+const RuleDetails = ({ asked }: { asked?: number }) => {
   const record = useRecordContext<any>();
+  const navigate = useNavigate();
   const [source, setSource] = useState("");
   const [versions, setVersions] = useState<any[]>([]);
   const [report, setReport] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [validating, setValidating] = useState(false);
   const [runOpen, setRunOpen] = useState(false);
+  const [restoreOpen, setRestoreOpen] = useState(false);
+  const [restoring, setRestoring] = useState(false);
   const notify = useNotify();
   const refresh = useRefresh();
 
@@ -1208,7 +1139,11 @@ const RuleDetails = () => {
   const load = () => {
     if (!record?.id) return;
     setLoading(true);
-    Promise.all([api.ruleSource(record.code), api.ruleVersions(record.code), api.validationReport(record.code)])
+    Promise.all([
+      api.ruleSource(record.code, record.version),
+      api.ruleVersions(record.code),
+      api.validationReport(record.code, record.version),
+    ])
       .then(([s, v, r]) => {
         setSource(s.source_code ?? "");
         setVersions(v ?? []);
@@ -1219,6 +1154,16 @@ const RuleDetails = () => {
   };
 
   useEffect(load, [record?.code, record?.version, record?.validation_status]);
+
+  // `/rules/X/show` is a doorway, not a page: it lands on the head and replaces
+  // the URL with the version it landed on, so the address bar always names the
+  // row on screen. Links written before versions were in the URL - a ticket, a
+  // run, a bookmark - therefore still work and end up canonical.
+  useEffect(() => {
+    if (asked == null && record?.code && record?.version) {
+      navigate(ruleShowPath(record.code, record.version), { replace: true });
+    }
+  }, [asked, record?.code, record?.version, navigate]);
 
   const runValidation = async () => {
     setValidating(true);
@@ -1245,95 +1190,184 @@ const RuleDetails = () => {
     }
   };
 
+  /**
+   * Put an old version back on the air.
+   *
+   * It is a copy forward, never a rewind: the server publishes the next version
+   * number with this source, validates it, and only then activates it. The
+   * version history keeps saying what actually happened.
+   */
+  const restore = async () => {
+    setRestoring(true);
+    try {
+      const result = await api.rollbackRule(record.code, record.version);
+      const next = result.rule;
+      notify(
+        result.activated
+          ? `v${next.version} created from v${record.version} and activated`
+          : `v${next.version} created from v${record.version}, but it did not validate - nothing was activated`,
+        { type: result.activated ? "success" : "warning" },
+      );
+      setRestoreOpen(false);
+      navigate(ruleShowPath(next.code, next.version));
+    } catch (e: any) {
+      notify(e.message, { type: "error" });
+    } finally {
+      setRestoring(false);
+    }
+  };
+
   if (!record) return null;
+
+  // The head is the version the scheduler runs. A page about an older row is a
+  // record of what the control used to do, so it offers no edits to that row -
+  // only the one forward move that puts the code back on the air.
+  const headVersion =
+    versions.find((v) => v.is_version_active)?.version ?? record.version;
+  const superseded = !record.is_version_active;
 
   const errors = report?.errors ?? [];
   const warnings = report?.warnings ?? [];
 
+  // One sentence, in the words a person uses. It replaces four chips -
+  // `VALIDATED`, `v1`, `manual` and `anchor day` - which said the same things
+  // in a vocabulary only the rule's author shared.
+  const health = [
+    record.status === "active"
+      ? "Active"
+      : record.status === "paused"
+        ? "Paused"
+        : record.status === "retired"
+          ? "Retired"
+          : "In draft",
+    record.validation_status === "valid"
+      ? "validated"
+      : record.validation_status === "invalid"
+        ? "failed validation"
+        : "not yet validated",
+    record.lookback_days === 1
+      ? "reading the day's own data"
+      : `reading the last ${record.lookback_days} days of data`,
+  ].join(", ");
+
   return (
-    <Stack spacing={2}>
+    // `minWidth: 0` is load-bearing. The tabs below embed react-admin <List>s,
+    // whose tables refuse to be narrower than their columns; without this the
+    // flex item's automatic minimum width lets that table set the width of the
+    // whole page, and at 1366 the rule page scrolled sideways by 225px.
+    <Stack spacing={2} sx={{ minWidth: 0 }}>
+      {/* An old version is a record. Saying so before the title is the only
+          way to be sure it is read before somebody presses something. */}
+      {superseded && (
+        <Alert
+          severity="info"
+          action={
+            headVersion !== record.version && (
+              <Button
+                color="inherit"
+                size="small"
+                onClick={() => navigate(ruleShowPath(record.code, headVersion))}
+              >
+                Open v{headVersion}
+              </Button>
+            )
+          }
+        >
+          You are reading <strong>v{record.version}</strong>. v{headVersion} is the
+          current version, and the scheduler runs that one. This page is a record
+          of what v{record.version} did, and cannot be edited.
+        </Alert>
+      )}
+
       {/* Overview */}
       <Card>
         <CardContent>
-          <Stack direction="row" spacing={1} sx={{ mb: 1.5, flexWrap: "wrap", gap: 1 }}>
-            <EntityField source="entity" />
-            <SeverityChipField source="severity" record={record} />
-            <StatusChipField source="status" record={record} />
-            <Chip size="small" label={`v${record.version}`} />
-            <Chip
-              size="small"
-              variant="outlined"
-              label={record.lookback_days === 1
-                ? "anchor day"
-                : `T-${record.lookback_days - 1} to T`}
-            />
-            <Chip size="small" variant="outlined" label={record.origin} />
-            <Chip
-              size="small"
-              label={
-                record.validation_status === "valid" ? "VALIDATED"
-                : record.validation_status === "invalid" ? "VALIDATION FAILED"
-                : "NOT VALIDATED"
-              }
-              color={record.validation_status === "valid" ? "success"
-                : record.validation_status === "invalid" ? "error" : "warning"}
-            />
+          <Stack
+            direction="row"
+            sx={{ alignItems: "flex-start", justifyContent: "space-between", gap: 2, flexWrap: "wrap" }}
+          >
+            <Box sx={{ minWidth: 0 }}>
+              <Stack direction="row" spacing={1} sx={{ alignItems: "center", flexWrap: "wrap", gap: 1, mb: 0.75 }}>
+                <Typography sx={{ fontSize: "1.375rem", fontWeight: 700, lineHeight: 1.2 }}>
+                  {record.name || record.code}
+                </Typography>
+                <Chip size="small" variant="outlined" label={record.code} />
+              </Stack>
+              <Stack direction="row" spacing={0.75} sx={{ alignItems: "center", flexWrap: "wrap", gap: 0.75 }}>
+                <EntityField source="entity" />
+                <SeverityChipField source="severity" record={record} />
+                <StatusChipField source="status" record={record} />
+                <Typography variant="body2" sx={{ color: "text.secondary" }}>
+                  {health}
+                </Typography>
+              </Stack>
+            </Box>
+
+            {superseded ? (
+              mayActivate && (
+                <Stack direction="row" spacing={1} sx={{ alignItems: "center", flexWrap: "wrap", gap: 1 }}>
+                  <Button
+                    size="small"
+                    variant="contained"
+                    startIcon={<HistoryIcon />}
+                    onClick={() => setRestoreOpen(true)}
+                  >
+                    Restore v{record.version} as the current version
+                  </Button>
+                </Stack>
+              )
+            ) : (
+              (mayTest || mayWrite || mayActivate) && (
+                <Stack direction="row" spacing={1} sx={{ alignItems: "center", flexWrap: "wrap", gap: 1 }}>
+                  {mayWrite && (
+                    <Button size="small" startIcon={<FactCheckIcon />} onClick={runValidation}
+                      disabled={validating}>
+                      {validating ? "Validating…" : "Validate"}
+                    </Button>
+                  )}
+                  {mayTest && (
+                    <Button
+                      size="small"
+                      startIcon={<PlayArrowIcon />}
+                      onClick={() => setRunOpen(true)}
+                    >
+                      Run now
+                    </Button>
+                  )}
+                  {mayActivate &&
+                    (record.status === "active" ? (
+                      <Button size="small" color="warning" onClick={() => setStatus("paused")}>
+                        Pause rule
+                      </Button>
+                    ) : (
+                      <Button size="small" variant="contained" disabled={record.validation_status !== "valid"}
+                        onClick={() => setStatus("active")}>
+                        Activate
+                      </Button>
+                    ))}
+                </Stack>
+              )
+            )}
           </Stack>
 
-          <Typography variant="h6" sx={{ mb: 0.5 }}>{record.code}</Typography>
-          <Typography variant="body2" sx={{ mb: 1.5, color: "text.secondary" }}>
-            {record.description}
-          </Typography>
+          {!superseded && mayActivate && record.validation_status !== "valid" && record.status !== "active" && (
+            <Typography variant="caption" sx={{ color: "text.secondary", display: "block", mt: 1 }}>
+              Activation requires a passing validation.
+            </Typography>
+          )}
 
-          <Stack direction="row" spacing={1} sx={{ flexWrap: "wrap", gap: 1 }}>
-            <Chip size="small" label={`file: ${record.source_file}`} />
-            <Chip size="small" label={`by ${record.created_by}`} />
-          </Stack>
+          {record.description && (
+            <Typography sx={{ mt: 1.5, color: "text.secondary", fontSize: "0.9375rem", lineHeight: 1.5 }}>
+              {record.description}
+            </Typography>
+          )}
 
           <RuleDatasources entity={record.entity} names={record.declared_datasources ?? []} />
 
-          {(mayTest || mayWrite || mayActivate) && (
-            <>
-              <Divider sx={{ my: 2 }} />
-              <Stack
-                direction="row"
-                spacing={1}
-                sx={{ alignItems: "center", flexWrap: "wrap", gap: 1 }}
-              >
-                {mayWrite && (
-                  <Button size="small" startIcon={<FactCheckIcon />} onClick={runValidation}
-                    disabled={validating}>
-                    {validating ? "Validating…" : "Validate"}
-                  </Button>
-                )}
-                {mayTest && (
-                  <Button
-                    size="small"
-                    startIcon={<PlayArrowIcon />}
-                    onClick={() => setRunOpen(true)}
-                  >
-                    Run now
-                  </Button>
-                )}
-                {mayActivate &&
-                  (record.status === "active" ? (
-                    <Button size="small" color="warning" onClick={() => setStatus("paused")}>
-                      Pause rule
-                    </Button>
-                  ) : (
-                    <Button size="small" variant="contained" disabled={record.validation_status !== "valid"}
-                      onClick={() => setStatus("active")}>
-                      Activate
-                    </Button>
-                  ))}
-                {mayActivate && record.validation_status !== "valid" && record.status !== "active" && (
-                  <Typography variant="caption" sx={{ color: "text.secondary" }}>
-                    Activation requires a passing validation.
-                  </Typography>
-                )}
-              </Stack>
-            </>
-          )}
+          {/* Everything a maintainer needs and nobody else does. Off the page
+              until asked for: a file name, a version and an author are not what
+              a head of audit opened this screen to read. */}
+          <TechnicalDetails record={record} />
         </CardContent>
       </Card>
 
@@ -1352,16 +1386,20 @@ const RuleDetails = () => {
         </Alert>
       )}
 
-      {/* Schedules */}
-      <SchedulesSection ruleCode={record.code} canWrite={mayWriteSchedules} />
+      {/* What it does, and the code it does it in */}
+      <RuleExplainer
+        ruleCode={record.code}
+        version={record.version}
+        source={source}
+        mayWrite={mayWrite}
+        mayReview={can(perms, "rules.explain_review")}
+        readOnly={superseded}
+        onChanged={refresh}
+      />
 
-      {/* Code */}
-      <Card>
-        <CardContent>
-          <Typography variant="h6" sx={{ mb: 1 }}>Python source</Typography>
-          {loading ? <CircularProgress size={24} /> : <CodeBlock code={source} />}
-        </CardContent>
-      </Card>
+      {/* Schedules belong to the rule, not to one version, but a page about an
+          old version is not the place to change when the control runs. */}
+      <SchedulesSection ruleCode={record.code} canWrite={mayWriteSchedules && !superseded} />
 
       {/* Version history */}
       {versions.length > 0 && (
@@ -1376,12 +1414,30 @@ const RuleDetails = () => {
                 // harmless and the list still renders, which is why it went
                 // unnoticed: a console error that changes nothing is easy to
                 // mistake for noise from someone else's library.
-                <Box key={v.version}
-                  sx={{ p: 1.25, borderRadius: 1.5, border: "1px solid #e9edf4",
-                        bgcolor: v.version === record.version ? "#eef6ff" : "#fafbfe" }}>
-                  <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
+                <Box
+                  key={v.version}
+                  role="link"
+                  tabIndex={0}
+                  onClick={() => navigate(ruleShowPath(record.code, v.version))}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      navigate(ruleShowPath(record.code, v.version));
+                    }
+                  }}
+                  sx={{
+                    p: 1.25, borderRadius: 1.5, border: "1px solid #e9edf4",
+                    cursor: "pointer",
+                    bgcolor: v.version === record.version ? "#eef6ff" : "#fafbfe",
+                    "&:hover": { borderColor: "#c3d4ee" },
+                  }}
+                >
+                  <Stack direction="row" spacing={1} sx={{ alignItems: "center", flexWrap: "wrap" }}>
                     <Chip size="small" label={`v${v.version}`}
                       color={v.version === record.version ? "primary" : "default"} />
+                    {v.is_version_active && (
+                      <Chip size="small" variant="outlined" color="success" label="current" />
+                    )}
                     <Typography variant="body2">{v.change_note || "(no note)"}</Typography>
                   </Stack>
                   <Typography variant="caption" sx={{ color: "text.secondary" }}>
@@ -1398,7 +1454,102 @@ const RuleDetails = () => {
       <RuleActivity ruleCode={record.code} />
 
       <RunRuleDialog rule={runOpen ? record : null} onClose={() => setRunOpen(false)} onDone={refresh} />
+
+      <Dialog open={restoreOpen} onClose={() => setRestoreOpen(false)} maxWidth="sm" fullWidth>
+        <DialogTitle>Restore v{record.version} as the current version?</DialogTitle>
+        <DialogContent>
+          <Typography variant="body2" sx={{ mb: 1.5 }}>
+            This copies v{record.version}'s code forward into a new version and
+            puts it live. History is not rewritten: the version number only
+            moves forward, and v{record.version} keeps its place in it.
+          </Typography>
+          <Typography variant="body2" sx={{ color: "text.secondary" }}>
+            The copy is validated first. If the estate has moved since
+            v{record.version} ran - a table it read may have been removed - it
+            stays a draft and nothing is activated.
+          </Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setRestoreOpen(false)} disabled={restoring}>Cancel</Button>
+          <Button variant="contained" onClick={restore} disabled={restoring}>
+            {restoring ? "Restoring…" : `Create v${headVersion + 1} and activate it`}
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Stack>
+  );
+};
+
+/* ================================================================== */
+/* The facts a maintainer needs, a reader does not                      */
+/* ================================================================== */
+/**
+ * The file name, the version, who created it and what wrote it.
+ *
+ * These were chips across the top of the page, at the same weight as the
+ * control's state and before the reader knew what the control checked. They
+ * are not noise - they are how you find the file when a rule misbehaves - so
+ * they are kept, one click away, in the order somebody debugging would want
+ * them.
+ */
+const TechnicalDetails = ({ record }: { record: any }) => {
+  const [open, setOpen] = useState(false);
+  return (
+    <Box sx={{ mt: 1.5 }}>
+      <ButtonBase
+        onClick={() => setOpen((o) => !o)}
+        sx={{
+          display: "inline-grid", gridTemplateColumns: "auto auto",
+          columnGap: 0.5, alignItems: "center", px: 0.5, py: 0.25,
+          borderRadius: 1, "&:hover": { bgcolor: "#f2f5fa" },
+        }}
+      >
+        {open ? (
+          <KeyboardArrowDownIcon sx={{ fontSize: 18, color: "text.secondary" }} />
+        ) : (
+          <KeyboardArrowRightIcon sx={{ fontSize: 18, color: "text.secondary" }} />
+        )}
+        <Typography variant="caption" sx={{ color: "text.secondary", fontWeight: 600 }}>
+          Technical details
+        </Typography>
+      </ButtonBase>
+
+      <Collapse in={open} timeout="auto" unmountOnExit>
+        <Box
+          sx={{
+            mt: 0.75, p: 1.5, borderRadius: 1.5,
+            bgcolor: "#fafbfe", border: "1px solid #e9edf4",
+            display: "grid", rowGap: 0.75,
+            gridTemplateColumns: { xs: "1fr", sm: "170px 1fr" },
+            columnGap: 2, alignItems: "baseline",
+          }}
+        >
+          {[
+            ["Source file", record.source_file],
+            ["Version", `v${record.version}${record.is_version_active ? " (current)" : ""}`],
+            ["Created by", record.created_by || "—"],
+            [
+              "Written",
+              record.origin === "llm" ? "by the rule assistant, read and saved by a person" : "by hand",
+            ],
+            ["Lookback", `${record.lookback_days} day(s)`],
+            [
+              "Last updated",
+              record.updated_at ? new Date(record.updated_at).toLocaleString() : "—",
+            ],
+          ].map(([label, value]) => (
+            <Box key={label} sx={{ display: "contents" }}>
+              <Typography variant="caption" sx={{ color: "text.secondary" }}>
+                {label}
+              </Typography>
+              <Typography variant="body2" sx={{ fontFamily: label === "Source file" ? "monospace" : undefined }}>
+                {value}
+              </Typography>
+            </Box>
+          ))}
+        </Box>
+      </Collapse>
+    </Box>
   );
 };
 
@@ -1539,7 +1690,7 @@ const RuleActivity = ({ ruleCode }: { ruleCode: string }) => {
           ))}
         </Stack>
         {tab === "runs" ? (
-          <Box sx={{ "& .RaDatagrid-root": { boxShadow: "none" } }}>
+          <Box sx={{ minWidth: 0, overflowX: "auto", contain: "inline-size", "& .RaDatagrid-root": { boxShadow: "none" } }}>
             {/* Pagination goes in as the `pagination` prop, not as a child.
                 A <Pagination> child renders a second footer underneath the one
                 the Datagrid already draws - two identical page pickers, stacked,
@@ -1628,11 +1779,54 @@ const TicketsForRule = ({ ruleCode }: { ruleCode: string }) => {
   );
 };
 
-export const RuleShow = () => (
-  <ShowBase>
-    <RuleDetails />
-  </ShowBase>
-);
+/**
+ * A version that is not there.
+ *
+ * Left to react-admin, a bad version redirects to the rules list with no
+ * explanation, and the reader is left wondering whether they mis-clicked. The
+ * server knows exactly what is wrong - "it has v1 to v2" - so the page says it.
+ */
+const RuleVersionMissing = () => {
+  const { id } = useParams();
+  const { error } = useShowContext<any>();
+  const navigate = useNavigate();
+  const detail =
+    // The server's refusal is more useful than "something went wrong": it says
+    // which versions do exist.
+    (error as any)?.body?.detail ??
+    error?.message ??
+    "This rule has no such version.";
+  return (
+    <Box sx={{ p: 3, maxWidth: 640 }}>
+      <Typography variant="h6" sx={{ mb: 1 }}>That version does not exist</Typography>
+      <Typography variant="body2" sx={{ color: "text.secondary", mb: 2 }}>
+        {detail}
+      </Typography>
+      <Button variant="contained" onClick={() => navigate(ruleShowPath(id ?? ""))}>
+        Open the current version
+      </Button>
+    </Box>
+  );
+};
+
+export const RuleShow = () => {
+  const { version } = useParams();
+  const asked = versionFromParam(version);
+  return (
+    // `resource` because this page is reached by its own route, outside the
+    // resource's generated ones - without it the show controller has no idea
+    // which resource it is showing. `meta` is how the route segment reaches the
+    // request: the provider turns it into `?version=n`, so the record on the
+    // page IS the version in the URL.
+    <ShowBase
+      resource="rules"
+      queryOptions={{ meta: asked ? { version: asked } : undefined }}
+      error={<RuleVersionMissing />}
+    >
+      <RuleDetails asked={asked} />
+    </ShowBase>
+  );
+};
 
 /* ================================================================== */
 /* The rules table - one row per rule, versions nested beneath          */
@@ -1702,7 +1896,6 @@ const RuleTable = () => {
   const [paged, setPaged] = useState<Record<string, VersionRow[]>>({});
   const [runFor, setRunFor] = useState<any>(null);
   const [deleteFor, setDeleteFor] = useState<any>(null);
-  const [viewVersion, setViewVersion] = useState<{ code: string; version: number } | null>(null);
   const navigate = useNavigate();
   const refresh = useRefresh();
   const perms = usePermissions();
@@ -1775,8 +1968,9 @@ const RuleTable = () => {
     );
   }
 
-  const openShow = (code: string) => navigate(`/rules/${encodeURIComponent(code)}/show`);
-  const openEdit = (code: string) => navigate(`/rules/${encodeURIComponent(code)}/edit`);
+  const openShow = (code: string, version?: number) =>
+    navigate(ruleShowPath(code, version));
+  const openEdit = (code: string) => navigate(ruleEditPath(code));
 
   return (
     <>
@@ -1806,7 +2000,7 @@ const RuleTable = () => {
                 <TableRow
                   key={rule.code}
                   hover
-                  onClick={() => openShow(rule.code)}
+                  onClick={() => openShow(rule.code, rule.version)}
                   sx={{ cursor: "pointer", "& td": { py: 1.5 } }}
                 >
                   {/* Rule */}
@@ -1899,7 +2093,9 @@ const RuleTable = () => {
                   ? history.map((v) => (
                       <TableRow
                         key={`${rule.code}-v${v.version}`}
-                        sx={{ bgcolor: "#fafbfe", "&:hover": { bgcolor: "#f4f7fc" } }}
+                        hover
+                        onClick={() => openShow(rule.code, v.version)}
+                        sx={{ cursor: "pointer", bgcolor: "#fafbfe", "&:hover": { bgcolor: "#f4f7fc" } }}
                       >
                         <TableCell sx={{ pl: 6, py: 1 }}>
                           <Stack direction="row" spacing={1} sx={{ alignItems: "baseline" }}>
@@ -1928,11 +2124,9 @@ const RuleTable = () => {
                         <TableCell align="right">
                           <Stack direction="row" spacing={0} sx={{ justifyContent: "flex-end" }}>
                             <ActionIcon
-                              title="View this version's source"
+                              title="Open this version"
                               icon={<VisibilityIcon fontSize="small" />}
-                              onClick={() =>
-                                setViewVersion({ code: rule.code, version: v.version })
-                              }
+                              onClick={() => openShow(rule.code, v.version)}
                             />
                           </Stack>
                         </TableCell>
@@ -1950,11 +2144,6 @@ const RuleTable = () => {
         rule={deleteFor}
         onClose={() => setDeleteFor(null)}
         onDone={refresh}
-      />
-      <VersionSourceDialog
-        code={viewVersion?.code ?? null}
-        version={viewVersion?.version ?? null}
-        onClose={() => setViewVersion(null)}
       />
     </>
   );
@@ -2032,7 +2221,7 @@ const RuleEditForm = () => {
       notify(`${record.code} v${updated.version} published as draft - validate it to activate`, {
         type: "success",
       });
-      navigate(`/rules/${encodeURIComponent(record.code)}/show`);
+      navigate(ruleShowPath(record.code, updated.version));
     } catch (e: any) {
       notify(e.message, { type: "error" });
     } finally {
@@ -2171,7 +2360,7 @@ const RuleEditForm = () => {
 
       <Stack direction="row" spacing={1} sx={{ justifyContent: "flex-end" }}>
         <Button
-          onClick={() => navigate(`/rules/${encodeURIComponent(record.code)}/show`)}
+          onClick={() => navigate(ruleShowPath(record.code))}
           disabled={busy}
         >
           Cancel

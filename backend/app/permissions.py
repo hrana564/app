@@ -42,6 +42,12 @@ RULES_ACTIVATE = "rules.activate"
 RULES_DELETE = "rules.delete"
 RULES_GENERATE = "rules.generate"
 
+# Reading a description is part of reading the estate, which every role may do.
+# *Approving* one is a sign-off, and the whole point of the review state is that
+# the person who signs it is the person answerable for the control - an auditor,
+# not whoever last edited the rule. So it is its own capability.
+RULES_EXPLAIN_REVIEW = "rules.explain_review"
+
 SCHEDULES_READ = "schedules.read"
 SCHEDULES_WRITE = "schedules.write"
 
@@ -65,7 +71,7 @@ USERS_WRITE = "users.write"
 # the other way round.
 CAPABILITY_ORDER: tuple[str, ...] = (
     RULES_READ, RULES_TEST, RULES_WRITE, RULES_ACTIVATE, RULES_DELETE,
-    RULES_GENERATE,
+    RULES_GENERATE, RULES_EXPLAIN_REVIEW,
     SCHEDULES_READ, SCHEDULES_WRITE,
     RUNS_READ, RUNS_RERUN,
     TICKETS_READ, TICKETS_ACKNOWLEDGE,
@@ -88,7 +94,7 @@ ROLE_CAPABILITIES: dict[str, frozenset[str]] = {
     ROLE_MANAGER: ALL_CAPABILITIES - {USERS_READ, USERS_WRITE},
     ROLE_AUDITOR: frozenset(
         {
-            RULES_READ, RULES_TEST,
+            RULES_READ, RULES_TEST, RULES_EXPLAIN_REVIEW,
             SCHEDULES_READ,
             RUNS_READ, RUNS_RERUN,
             TICKETS_READ, TICKETS_ACKNOWLEDGE,
@@ -188,6 +194,7 @@ CAPABILITY_LABELS: dict[str, str] = {
     RULES_ACTIVATE: "Activate, pause and retire a rule",
     RULES_DELETE: "Remove a rule",
     RULES_GENERATE: "Draft a rule with the assistant",
+    RULES_EXPLAIN_REVIEW: "Sign off a rule's plain-English description",
     SCHEDULES_READ: "Read the schedules",
     SCHEDULES_WRITE: "Create and edit schedules",
     RUNS_READ: "Read the runs",

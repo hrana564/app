@@ -238,7 +238,12 @@ export const dataProvider: DataProvider = {
   },
 
   getOne: async (resource, params) => {
-    const record = await request<any>(`${base(resource)}/${params.id}`);
+    // A rule is a chain of versions; the page asks for one of them by number.
+    // `meta.version` is how a route segment reaches the request without the
+    // provider having to know which screen asked.
+    const version = (params.meta as { version?: number } | undefined)?.version;
+    const query = version ? `?version=${version}` : "";
+    const record = await request<any>(`${base(resource)}/${params.id}${query}`);
     // Rules must report `id` as the code, because that is what was requested.
     return { data: resource === "rules" ? identifyRules([record])[0] : record };
   },
@@ -461,6 +466,67 @@ export interface RuleGenerateResponse {
   error: string | null;
 }
 
+/**
+ * One step of a rule, in the words somebody wrote for it.
+ *
+ * `lines` always comes from the rule's own source, so the reference beside a
+ * step lands on the code that step describes even after a model has rewritten
+ * the sentence.
+ */
+export interface ExplanationStep {
+  n: number;
+  text: string;
+  lines: number[];
+  kind: string;
+  explainable: boolean;
+}
+
+export interface ExplanationLimit {
+  label: string;
+  constant: string;
+  value: number;
+}
+
+/** One check a description had to pass before it was shown. */
+export interface ExplanationGate {
+  name: string;
+  ok: boolean;
+  detail: string;
+}
+
+/**
+ * What a rule does, and who says so.
+ *
+ * `origin` is the question an auditor asks before trusting the words:
+ * `derived` was read off the source, `ai` was written by a model and gated,
+ * `edited` was written by a person. `stale` means the code has moved since -
+ * the words are withheld rather than shown out of date.
+ */
+export interface RuleExplanation {
+  code: string;
+  version: number;
+  source_sha256: string;
+  origin: "derived" | "ai" | "edited";
+  stored: boolean;
+  stale: boolean;
+  llm_configured: boolean;
+  purpose: string;
+  breach_condition: string;
+  steps: ExplanationStep[];
+  limits: ExplanationLimit[];
+  outputs: string[];
+  cap: number | null;
+  cannot_explain: { n: number; reason: string }[];
+  gates: ExplanationGate[];
+  probe: { matches?: boolean; why?: string; model?: string } | null;
+  generated_by: string;
+  model: string;
+  prompt_version: string;
+  generated_at: string | null;
+  reviewed_by: string | null;
+  reviewed_at: string | null;
+}
+
 // --- custom endpoints used by the UI ---------------------------------------
 export const api = {
   login: (username: string, password: string) =>
@@ -563,7 +629,14 @@ export const api = {
     request<any>(`/api/tickets/${id}/reopen`, { method: "POST" }),
 
   // --- rules (addressed by code) ----------------------------------------
-  ruleSource: (code: string) => request<any>(`/api/rules/${code}/source`),
+  /**
+   * One version's source, or the head's when no version is named.
+   *
+   * The version is not a nicety: each row has its own file on disk, so this is
+   * what makes "the code pane is showing v1" true rather than hopeful.
+   */
+  ruleSource: (code: string, version?: number | null) =>
+    request<any>(`/api/rules/${code}/source${version ? `?version=${version}` : ""}`),
 
   ruleVersions: (code: string) => request<any>(`/api/rules/${code}/versions`),
 
@@ -599,13 +672,60 @@ export const api = {
     }),
 
   rollbackRule: (code: string, version: number) =>
-    request<any>(`/api/rules/${code}/rollback/${version}`, { method: "POST" }),
+    request<{ rule: any; validation: any; activated: boolean }>(
+      `/api/rules/${code}/rollback/${version}`,
+      { method: "POST" },
+    ),
 
   validateRule: (code: string) =>
     request<any>(`/api/rules/${code}/validate`, { method: "POST" }),
 
-  validationReport: (code: string) =>
-    request<any>(`/api/rules/${code}/validate-report`),
+  validationReport: (code: string, version?: number | null) =>
+    request<any>(
+      `/api/rules/${code}/validate-report${version ? `?version=${version}` : ""}`,
+    ),
+
+  /**
+   * What this control does, in plain English.
+   *
+   * The structure comes from the rule's own source on every call, so a page
+   * that has been open since before an edit cannot describe code that is no
+   * longer there. Reading costs nothing - a GET never calls a model.
+   */
+  explanation: (code: string, version?: number | null) =>
+    request<RuleExplanation>(
+      `/api/rules/${code}/explain${version ? `?version=${version}` : ""}`,
+    ),
+
+  /** Write (or rewrite) the description. Costs a model call; stored on the rule. */
+  generateExplanation: (code: string, version?: number | null) =>
+    request<RuleExplanation>(
+      `/api/rules/${code}/explain${version ? `?version=${version}` : ""}`,
+      { method: "POST" },
+    ),
+
+  /** A person's correction. The words are theirs from then on. */
+  editExplanation: (
+    code: string,
+    payload: { breach_condition: string; steps: { n: number; text: string }[] },
+    version?: number | null,
+  ) =>
+    request<RuleExplanation>(
+      `/api/rules/${code}/explain${version ? `?version=${version}` : ""}`,
+      { method: "PUT", body: JSON.stringify(payload) },
+    ),
+
+  /** Sign the description off, or withdraw the sign-off. */
+  reviewExplanation: (
+    code: string,
+    approved: boolean,
+    note = "",
+    version?: number | null,
+  ) =>
+    request<RuleExplanation>(
+      `/api/rules/${code}/explain/review${version ? `?version=${version}` : ""}`,
+      { method: "POST", body: JSON.stringify({ approved, note }) },
+    ),
 
   rerun: (id: number | string) => request<any>(`/api/runs/${id}/rerun`, { method: "POST" }),
 

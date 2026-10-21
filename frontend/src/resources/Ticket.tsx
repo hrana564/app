@@ -17,6 +17,7 @@ import { api } from "../dataProvider";
 import { DotLabel, RowsTable } from "../components/ui";
 import { severityColor, statusColor, SEVERITIES, FONT } from "../theme";
 import { useEntityScope } from "../entityScope";
+import { ruleShowPath } from "../rulePaths";
 import { can, usePermissions } from "../permissions";
 
 const STATUS_OPTIONS = ["open", "acknowledged", "dismissed"] as const;
@@ -929,7 +930,7 @@ const TicketDetails = () => {
               value={
                 <Box
                   component="span"
-                  onClick={() => navigate(`/rules/${encodeURIComponent(record.rule_code)}/show`)}
+                  onClick={() => navigate(ruleShowPath(record.rule_code))}
                   sx={{ cursor: "pointer", color: "primary.main", "&:hover": { textDecoration: "underline" } }}
                 >
                   {record.rule_code}

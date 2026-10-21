@@ -85,6 +85,10 @@ const ROUTES = (
   <CustomRoutes>
     <Route path="/settings" element={<SettingsPage />} />
     <Route path="/users" element={<Navigate to="/settings" replace />} />
+    {/* A rule page is a page about one VERSION row, and the address says
+        which. `:id` rather than `:code` because react-admin's show controller
+        reads the id from that segment; the version is ours. */}
+    <Route path="/rules/:id/show/:version" element={<RuleShow />} />
   </CustomRoutes>
 );
 

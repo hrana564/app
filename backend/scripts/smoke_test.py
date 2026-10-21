@@ -14,6 +14,7 @@ Usage:  python scripts/smoke_test.py [base_url]
 
 from __future__ import annotations
 
+import hashlib
 import re
 import sys
 from datetime import date, datetime
@@ -39,6 +40,9 @@ MOUNT_DIR = Path(__file__).resolve().parent.parent.parent / "mount"
 ADMIN = ("admin_user", "Admin@2026")
 MANAGER = ("manager_user", "Manager@2026")
 AUDITOR = ("audit_user", "Audit@2026")
+# The seeded demo viewer, asked for by name because the whole point of the
+# check is the capability a viewer does NOT hold.
+DEMO_VIEWER = ("viewer_user", "Viewer@2026")
 
 # The demo estate is two layouts. Which client gets which one is the
 # deployment's decision - the order of CLIENT_ENTITIES in the .env - so the
@@ -231,23 +235,26 @@ def main() -> int:
         EXPECTED_CAPABILITIES = {
             "admin": {
                 "rules.read", "rules.test", "rules.write", "rules.activate",
-                "rules.delete", "rules.generate", "schedules.read",
-                "schedules.write", "runs.read", "runs.rerun", "tickets.read",
-                "tickets.acknowledge", "datasources.read", "datasources.write",
-                "assurance.read", "users.read", "users.write",
+                "rules.delete", "rules.generate", "rules.explain_review",
+                "schedules.read", "schedules.write", "runs.read", "runs.rerun",
+                "tickets.read", "tickets.acknowledge", "datasources.read",
+                "datasources.write", "assurance.read", "users.read",
+                "users.write",
             },
             # Everything about the estate, nothing about the people.
             "manager": {
                 "rules.read", "rules.test", "rules.write", "rules.activate",
-                "rules.delete", "rules.generate", "schedules.read",
-                "schedules.write", "runs.read", "runs.rerun", "tickets.read",
-                "tickets.acknowledge", "datasources.read", "datasources.write",
-                "assurance.read",
+                "rules.delete", "rules.generate", "rules.explain_review",
+                "schedules.read", "schedules.write", "runs.read", "runs.rerun",
+                "tickets.read", "tickets.acknowledge", "datasources.read",
+                "datasources.write", "assurance.read",
             },
+            # Reads the estate, runs controls, and signs off what a control says
+            # it does - without being able to change the control.
             "auditor": {
-                "rules.read", "rules.test", "schedules.read", "runs.read",
-                "runs.rerun", "tickets.read", "tickets.acknowledge",
-                "datasources.read", "assurance.read",
+                "rules.read", "rules.test", "rules.explain_review",
+                "schedules.read", "runs.read", "runs.rerun", "tickets.read",
+                "tickets.acknowledge", "datasources.read", "assurance.read",
             },
             "viewer": {
                 "rules.read", "rules.test", "schedules.read", "runs.read",
@@ -381,6 +388,8 @@ def main() -> int:
             ("rules.generate", "POST", "/api/rules/generate",
              {"prompt": "flag anything odd", "entity": FIRST,
               "datasources": ["__not_registered__"]}),
+            ("rules.explain_review", "POST", "/api/rules/NOPE-99/explain/review",
+             {"approved": True}),
             ("schedules.write", "POST", "/api/rule-schedules",
              {"rule_code": "NOPE-99", "kind": "DAILY", "config": {"hour": 6, "minute": 30}}),
             ("runs.rerun", "POST", "/api/rule-runs/99999999/rerun", None),
@@ -901,6 +910,47 @@ def main() -> int:
             check("exactly one head after the bump",
                   sum(1 for x in hist if x["is_version_active"]) == 1)
 
+            # A rule page is a page about ONE version row, and the address says
+            # which. Every read can be pointed at one version, and the answers
+            # have to differ - otherwise the URL names a version the page is not
+            # showing, which is worse than no version in the URL at all.
+            section("reading one version")
+            head_row = c.get(f"/api/rules/{VCODE}", headers=ud).json()
+            old_row = c.get(f"/api/rules/{VCODE}", headers=ud,
+                            params={"version": v0}).json()
+            check("no version asked for means the head",
+                  head_row["version"] == v0 + 1 and head_row["is_version_active"],
+                  f"v{head_row.get('version')} active={head_row.get('is_version_active')}")
+            check("a version asked for is that row, and not the head",
+                  old_row["version"] == v0 and old_row["is_version_active"] is False,
+                  f"v{old_row.get('version')} active={old_row.get('is_version_active')}")
+            check("a version that does not exist is a 404",
+                  c.get(f"/api/rules/{VCODE}", headers=ud,
+                        params={"version": 999}).status_code == 404)
+            check("and so is its source",
+                  c.get(f"/api/rules/{VCODE}/source", headers=ud,
+                        params={"version": 999}).status_code == 404)
+
+            old_src = c.get(f"/api/rules/{VCODE}/source", headers=ud,
+                            params={"version": v0}).json()
+            check("one version's source is that version's own file",
+                  old_src["source_file"] == f"{VCODE}_v{v0}.py",
+                  old_src["source_file"])
+            check("and the code in it is what that version ran",
+                  old_src["source_code"] == vsrc, old_src["source_code"][:80])
+
+            old_ex = c.get(f"/api/rules/{VCODE}/explain", headers=ud,
+                           params={"version": v0})
+            check("a version explains itself", old_ex.status_code == 200,
+                  f"{old_ex.status_code} {old_ex.text[:120]}")
+            if old_ex.status_code == 200:
+                body = old_ex.json()
+                check("the description is of that version's file",
+                      body["version"] == v0
+                      and body["source_sha256"] == hashlib.sha256(
+                          vsrc.encode("utf-8")).hexdigest(),
+                      f"v{body['version']} {body['source_sha256'][:12]}")
+
             a = c.put(f"/api/rules/{VCODE}/status", headers=ah, json={"status": "active"})
             check("cannot activate before validating", a.status_code == 409,
                   f"got {a.status_code}")
@@ -917,21 +967,35 @@ def main() -> int:
                   f"{before_pause} -> {after_pause}")
             c.put(f"/api/rules/{VCODE}/status", headers=ah, json={"status": "active"})
 
-            # Rollback appends forward rather than rewinding.
+            # Restoring an old version appends forward rather than rewinding, and
+            # it validates the copy before it goes live: the estate may have moved
+            # since v1 ran, and "restored" must not mean "switched the live
+            # control to code that can no longer read its data".
             v_now = c.get(f"/api/rules/{VCODE}", headers=ud).json()["version"]
             rb = c.post(f"/api/rules/{VCODE}/rollback/1", headers=ah)
-            check("rollback publishes the next version, not an old one",
-                  rb.status_code == 200 and rb.json()["version"] == v_now + 1,
+            restored = rb.json() if rb.status_code == 200 else {}
+            check("restore publishes the next version, not an old one",
+                  rb.status_code == 200
+                  and restored.get("rule", {}).get("version") == v_now + 1,
                   f"{rb.status_code} {rb.text[:140]}")
+            check("restore validates the copy",
+                  restored.get("validation", {}).get("status") == "valid",
+                  str(restored.get("validation"))[:120])
+            check("restore puts the copy live, because it validated",
+                  restored.get("activated") is True
+                  and restored.get("rule", {}).get("status") == "active",
+                  f"activated={restored.get('activated')} "
+                  f"status={restored.get('rule', {}).get('status')}")
+            check("restoring the version that is already current is refused",
+                  c.post(f"/api/rules/{VCODE}/rollback/{v_now + 1}",
+                         headers=ah).status_code == 409)
+
             hist = c.get(f"/api/rules/{VCODE}/versions", headers=ud).json()
-            check("rollback keeps full history", len(hist) == 3, f"{len(hist)} rows")
-            check("rollback records its origin",
+            check("restore keeps full history", len(hist) == 3, f"{len(hist)} rows")
+            check("restore says what it restored",
                   "v1" in hist[0]["change_note"].lower(), hist[0]["change_note"])
-            check("rolled-back version carries v1's source",
-                  "# smoke-edit" not in hist[0]["source_code"],
-                  "rollback still has the edit")
-            c.post(f"/api/rules/{VCODE}/validate", headers=ah)
-            c.put(f"/api/rules/{VCODE}/status", headers=ah, json={"status": "active"})
+            check("the restored version carries v1's source exactly",
+                  hist[0]["source_code"] == vsrc, hist[0]["source_code"][:80])
 
             # Schedules are keyed by rule_code, so publishing a new version
             # must NOT orphan them.
@@ -1559,6 +1623,103 @@ def main() -> int:
               f"{folders_before} -> {_run_folder_count()}")
         check("the trial left no scratch folder behind",
               _trial_folder_count() == 0, str(_trial_folder_count()))
+
+        section("the plain-English description")
+        # What a head of audit reads before the code. The structure is derived
+        # from the file on every request, so it is asserted with no model in the
+        # loop: the reading must be true even when generation is unavailable,
+        # switched off, or has just failed for the third time.
+        from app.engine.explain import source_hash
+
+        code = filed_code("CA-03")
+        source = rule_source("CA-03").read_text(encoding="utf-8")
+        lines = source.splitlines()
+
+        e = c.get(f"/api/rules/{code}/explain", headers=ah)
+        check("a rule describes itself", e.status_code == 200, e.text[:160])
+        got = e.json() if e.status_code == 200 else {}
+        steps = got.get("steps") or []
+        check("with steps to read", len(steps) >= 4, str(len(steps)))
+        check("and one thing that raises an exception",
+              bool((got.get("breach_condition") or "").strip()),
+              str(got.get("breach_condition")))
+        # A step whose range is wrong is worse than a step with no range: the
+        # reader is invited to check the words against the code and lands on
+        # somebody else's logic.
+        spans = [(s["lines"][0], s["lines"][1]) for s in steps]
+        check("every step points inside the file",
+              all(1 <= a <= b <= len(lines) for a, b in spans), str(spans))
+        check("and the steps run down the file, never back up",
+              all(spans[i][0] <= spans[i + 1][0] for i in range(len(spans) - 1)),
+              str(spans))
+        check("every step has words",
+              all((s.get("text") or "").strip() for s in steps))
+        check("the description is pinned to the code it describes",
+              got.get("source_sha256") == source_hash(source),
+              f"{got.get('source_sha256')} != {source_hash(source)}")
+        check("nothing is called stale while it still matches",
+              got.get("stale") is False, str(got.get("stale")))
+
+        # Reading costs nothing and must not write. A GET that quietly stored
+        # its own answer would make the page's provenance line a fiction.
+        again = c.get(f"/api/rules/{code}/explain", headers=ah).json()
+        check("reading the description does not rewrite it",
+              (again.get("origin"), again.get("generated_at"))
+              == (got.get("origin"), got.get("generated_at")),
+              f"{got.get('origin')} -> {again.get('origin')}")
+
+        # An edit is checked against the derivation before it is stored, and a
+        # refused edit writes nothing. Both halves matter: a check that runs
+        # after the write would already have published the words.
+        before = got.get("breach_condition")
+        invented = c.put(f"/api/rules/{code}/explain", headers=ah, json={
+            "breach_condition": "Something nobody's code does.",
+            "steps": [{"n": 999, "text": "A step that is not in the file."}],
+        })
+        check("a step that is not in the file is refused",
+              invented.status_code == 422, f"{invented.status_code} {invented.text[:120]}")
+        partial = c.put(f"/api/rules/{code}/explain", headers=ah, json={
+            "breach_condition": "Something nobody's code does.",
+            "steps": [{"n": steps[0]["n"], "text": steps[0]["text"]}] if steps else [],
+        })
+        check("and dropping the rest of the steps is refused too",
+              partial.status_code == 422, f"{partial.status_code} {partial.text[:120]}")
+        after = c.get(f"/api/rules/{code}/explain", headers=ah).json()
+        check("a refused edit changed nothing",
+              after.get("breach_condition") == before,
+              f"{before!r} -> {after.get('breach_condition')!r}")
+
+        # The person who signs the control off is not always the person who
+        # wrote it, so the capability is its own. A viewer reads the estate but
+        # answers for nothing in it.
+        v = c.post("/api/auth/login",
+                   json={"username": DEMO_VIEWER[0], "password": DEMO_VIEWER[1]})
+        check("the demo viewer can sign in", v.status_code == 200, v.text[:140])
+        if v.status_code == 200:
+            vh = {"Authorization": f"Bearer {v.json()['access_token']}"}
+            check("a viewer may read the description",
+                  c.get(f"/api/rules/{code}/explain", headers=vh).status_code == 200)
+            check("but may not sign it off",
+                  c.post(f"/api/rules/{code}/explain/review", headers=vh,
+                         json={"approved": True}).status_code == 403)
+
+        # Sign off, then withdraw: a rejection that cannot be recorded leaves
+        # the page claiming a review that did not happen.
+        signed = c.post(f"/api/rules/{code}/explain/review", headers=ah,
+                        json={"approved": True})
+        check("an auditor can sign the words off", signed.status_code == 200,
+              f"{signed.status_code} {signed.text[:120]}")
+        if signed.status_code == 200:
+            check("the sign-off names who made it",
+                  signed.json().get("reviewed_by") == ADMIN[0],
+                  str(signed.json().get("reviewed_by")))
+            check("and records when", bool(signed.json().get("reviewed_at")),
+                  str(signed.json().get("reviewed_at")))
+        withdrawn = c.post(f"/api/rules/{code}/explain/review", headers=ah,
+                           json={"approved": False})
+        check("and withdraw it again", withdrawn.status_code == 200
+              and not withdrawn.json().get("reviewed_by"),
+              f"{withdrawn.status_code} {withdrawn.text[:120]}")
 
     print("\n" + "=" * 72)
     print(f"RESULT: {passes} passed, {failures} failed")

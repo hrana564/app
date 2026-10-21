@@ -1,6 +1,7 @@
 import {
   Chip, Box, IconButton, Stack, Tooltip, Typography, useTheme,
 } from "@mui/material";
+import { useMemo } from "react";
 import { Link } from "react-router";
 import { useRecordContext } from "react-admin";
 import { useEntityScope } from "../entityScope";
@@ -274,6 +275,133 @@ export const CodeBlock = ({ code }: { code: string }) => (
     {code || "# no source available"}
   </Box>
 );
+
+/* ---------------------------------------------------------------------------
+ * Python, with line numbers
+ * ------------------------------------------------------------------------ */
+
+// One pass over the whole file, so a triple-quoted docstring is recognised as
+// one string rather than three broken lines. Order matters: comment, string,
+// number, word, whitespace, anything else.
+const PY_TOKEN =
+  /(#[^\n]*)|("""[\s\S]*?"""|'''[\s\S]*?'''|"(?:\\.|[^"\\\n])*"|'(?:\\.|[^'\\\n])*')|(\b\d+(?:\.\d+)?\b)|([A-Za-z_][A-Za-z0-9_]*)|(\s+)|([\s\S])/g;
+
+const PY_KEYWORDS = new Set(
+  ("def class return if elif else for while in not and or import from as with try " +
+    "except finally raise lambda pass continue break global None True False is " +
+    "yield assert del async await").split(" "),
+);
+
+type PyKind = "comment" | "string" | "number" | "keyword" | "builtin" | "text";
+
+const PY_COLOURS: Record<PyKind, string> = {
+  comment: "#7d8fa9",
+  string: "#a5d6a7",
+  number: "#ffcc80",
+  keyword: "#82aaff",
+  builtin: "#c792ea",
+  text: "#e6edf3",
+};
+
+/**
+ * Split source into coloured tokens, then into lines.
+ *
+ * A syntax highlighter would be a dependency, and this file needs six colours
+ * and no error recovery: the worst it can do to a wrong guess is colour one
+ * word strangely. Splitting on newlines *after* tokenising is what keeps a
+ * multi-line docstring - which is where a rule explains itself - in one piece.
+ */
+const pyLines = (code: string): { text: string; kind: PyKind }[][] => {
+  const lines: { text: string; kind: PyKind }[][] = [[]];
+  PY_TOKEN.lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = PY_TOKEN.exec(code)) !== null) {
+    const [raw, comment, str, num, word] = match;
+    let kind: PyKind = "text";
+    if (comment) kind = "comment";
+    else if (str) kind = "string";
+    else if (num) kind = "number";
+    else if (word) {
+      kind = PY_KEYWORDS.has(word) ? "keyword" : "text";
+    }
+    raw.split("\n").forEach((part, i) => {
+      if (i > 0) lines.push([]);
+      if (part) lines[lines.length - 1].push({ text: part, kind });
+    });
+  }
+  return lines;
+};
+
+/**
+ * A rule's source, numbered, with one range lit up.
+ *
+ * The line numbers are not decoration: every step of the plain-English
+ * description points at a range, and a reader checking the description against
+ * the code needs to find line 73 quickly. `highlight` is that range, set by
+ * whichever step the reader is looking at.
+ */
+export const PythonBlock = ({
+  code,
+  highlight,
+  maxHeight = 620,
+}: {
+  code: string;
+  highlight?: [number, number] | null;
+  maxHeight?: number;
+}) => {
+  const lines = useMemo(() => pyLines(code || ""), [code]);
+  const [from, to] = highlight ?? [0, 0];
+
+  return (
+    <Box
+      sx={{
+        bgcolor: "#0d1b2a",
+        borderRadius: 2,
+        overflow: "auto",
+        maxHeight,
+        py: 1,
+        fontFamily: '"JetBrains Mono", "Fira Code", Consolas, "Courier New", monospace',
+        fontSize: FONT.bodyAlt,
+        lineHeight: 1.65,
+      }}
+    >
+      {lines.map((tokens, i) => {
+        const n = i + 1;
+        const lit = n >= from && n <= to;
+        return (
+          <Box
+            key={n}
+            data-line={n}
+            sx={{
+              display: "grid",
+              gridTemplateColumns: "3.25rem 1fr",
+              columnGap: 1.5,
+              bgcolor: lit ? "rgba(130,170,255,0.16)" : "transparent",
+              boxShadow: lit ? "inset 2px 0 0 #82aaff" : "none",
+            }}
+          >
+            <Box
+              component="span"
+              sx={{
+                textAlign: "right",
+                color: lit ? "#82aaff" : "#4a5b73",
+                userSelect: "none",
+                pr: 0.5,
+              }}
+            >
+              {n}
+            </Box>
+            <Box component="span" sx={{ whiteSpace: "pre", pr: 2 }}>
+              {tokens.length === 0 ? " " : tokens.map((t, j) => (
+                <span key={j} style={{ color: PY_COLOURS[t.kind] }}>{t.text}</span>
+              ))}
+            </Box>
+          </Box>
+        );
+      })}
+    </Box>
+  );
+};
 
 /** Tabular viewer for the Exception lines attached to a ticket or run. */
 /**

@@ -14,6 +14,7 @@ import {
 } from "../components/ui";
 import { runOutcomeColor, runStatusColor, FONT } from "../theme";
 import { useEntityScope } from "../entityScope";
+import { ruleShowPath } from "../rulePaths";
 import { can, usePermissions } from "../permissions";
 
 /**
@@ -523,7 +524,7 @@ const ScheduleOverview = () => {
                   </Typography>
                 </Box>
                 {rule && (
-                  <Button size="small" onClick={() => { window.location.hash = `#/rules/${rule.id}/show`; }}>
+                  <Button size="small" onClick={() => { window.location.hash = `#${ruleShowPath(rule.code ?? rule.id, rule.version)}`; }}>
                     Open rule
                   </Button>
                 )}

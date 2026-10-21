@@ -261,3 +261,59 @@ class Ticket(Base):
     )
 
 
+# ---------------------------------------------------------------------------
+# Explanations (what a rule does, for somebody who does not read Python)
+# ---------------------------------------------------------------------------
+class RuleExplanation(Base, TimestampMixin):
+    """One description of one version of a rule.
+
+    Keyed by `rule_id` rather than by code, because a description is about a
+    piece of source and each version has its own. A new version therefore gets
+    its own row, and the previous one keeps describing the code it was written
+    for.
+
+    `source_sha256` is the authority: a row whose hash no longer matches the
+    file on disk is withheld rather than shown, because a stale sentence about a
+    control is worse than no sentence at all.
+
+    `origin` says who wrote the words - "derived" (from the source alone),
+    "ai" (a model, after passing the gates) or "edited" (a person corrected it).
+    A person may correct a model; a model may not silently replace a person.
+    """
+
+    __tablename__ = "rule_explanations"
+    __table_args__ = (
+        UniqueConstraint("rule_id", name="uq_rule_explanations_rule"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    rule_id: Mapped[int] = mapped_column(
+        ForeignKey("rules_master.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    rule_code: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    source_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+
+    breach_condition: Mapped[str] = mapped_column(Text, default="")
+    steps: Mapped[list[Any]] = mapped_column(JSONB, default=list, nullable=False)
+    limits: Mapped[list[Any]] = mapped_column(JSONB, default=list, nullable=False)
+    cannot_explain: Mapped[list[Any]] = mapped_column(JSONB, default=list, nullable=False)
+    outputs: Mapped[list[Any]] = mapped_column(JSONB, default=list, nullable=False)
+    cap: Mapped[int | None] = mapped_column(Integer)
+    numbers: Mapped[list[Any]] = mapped_column(JSONB, default=list, nullable=False)
+
+    # --- who wrote it, and what checked it --------------------------------
+    origin: Mapped[str] = mapped_column(String(16), default="derived", nullable=False)
+    model: Mapped[str] = mapped_column(String(128), default="")
+    prompt_version: Mapped[str] = mapped_column(String(16), default="")
+    generated_by: Mapped[str] = mapped_column(String(64), default="")
+    gates: Mapped[list[Any]] = mapped_column(JSONB, default=list, nullable=False)
+    probe: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+
+    # --- and who has read it ---------------------------------------------
+    # The page says which of three things a reader is looking at. A model swap
+    # clears this, because approval was given to a machine, not to a vendor.
+    reviewed_by: Mapped[str | None] = mapped_column(String(64))
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+

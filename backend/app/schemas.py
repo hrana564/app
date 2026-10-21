@@ -357,6 +357,20 @@ class RuleVersionOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class RollbackOut(BaseModel):
+    """What restoring an old version did.
+
+    `activated` is separate from the report because the two answers differ: the
+    copy can be created and validated and still not go live, and a client that
+    assumed otherwise would tell the operator a control is running when it is
+    not.
+    """
+
+    rule: RuleOut
+    validation: ValidationReport
+    activated: bool
+
+
 class RuleStatusUpdate(BaseModel):
     """Lifecycle only. Never creates a version - pausing is not a logic change."""
 
@@ -579,3 +593,79 @@ class BulkAck(BaseModel):
     entity: str | None = None
 
 
+
+
+# ---------------------------------------------------------------------------
+# Plain-English explanation of a rule
+# ---------------------------------------------------------------------------
+class ExplanationStepOut(BaseModel):
+    """One step, and the lines of the file it came from.
+
+    `lines` is always the derivation's, never the model's - a description that
+    points a reviewer at the wrong code is worse than one with no reference at
+    all, because it looks checkable.
+    """
+
+    n: int
+    text: str
+    lines: list[int]
+    kind: str = ""
+    explainable: bool = True
+
+
+class ExplanationLimitOut(BaseModel):
+    label: str
+    constant: str
+    value: float
+
+
+class GateOut(BaseModel):
+    """One check the words had to pass before they were shown."""
+
+    name: str
+    ok: bool
+    detail: str = ""
+
+
+class ExplanationOut(BaseModel):
+    code: str
+    version: int
+    source_sha256: str
+
+    # derived | ai | edited. What a reader is looking at decides what they are
+    # entitled to assume about it.
+    origin: str
+    stored: bool
+    # True when a stored description no longer matches the file on disk. The
+    # words are withheld rather than shown, and the page says why.
+    stale: bool
+    llm_configured: bool
+
+    purpose: str
+    breach_condition: str
+    steps: list[ExplanationStepOut]
+    limits: list[ExplanationLimitOut]
+    outputs: list[str]
+    cap: int | None = None
+    cannot_explain: list[dict[str, Any]]
+    gates: list[GateOut]
+    probe: dict[str, Any] | None = None
+
+    generated_by: str = ""
+    model: str = ""
+    prompt_version: str = ""
+    generated_at: datetime | None = None
+    reviewed_by: str | None = None
+    reviewed_at: datetime | None = None
+
+
+class ExplanationEdit(BaseModel):
+    """A person correcting the words. Sets origin=edited and clears the sign-off."""
+
+    breach_condition: str = Field(min_length=1, max_length=2000)
+    steps: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class ExplanationReview(BaseModel):
+    approved: bool = True
+    note: str = Field(default="", max_length=2000)

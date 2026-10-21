@@ -9,6 +9,7 @@ import WarningAmberIcon from "@mui/icons-material/WarningAmber";
 import { api } from "../dataProvider";
 import { severityColor, FONT } from "../theme";
 import { useEntityScope } from "../entityScope";
+import { ruleShowPath } from "../rulePaths";
 
 /* ================================================================== */
 /* The payload                                                         */
@@ -574,7 +575,7 @@ export const Dashboard = () => {
                           <Sev level={o.severity} />
                           <Box sx={{ minWidth: 0 }}>
                             <Typography
-                              component={Link} to={`/rules/${o.code}`}
+                              component={Link} to={ruleShowPath(o.code)}
                               variant="body2"
                               sx={{ fontWeight: 600, color: "primary.main", textDecoration: "none", fontFamily: "monospace" }}
                             >

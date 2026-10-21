@@ -319,6 +319,8 @@ work per client and re-picking it on every reload is noise.
 | One `scoped()` for every query that filters by client | `backend/app/api/scope.py` | Runs and tickets have no entity column; they inherit the rule's. Five endpoints joining for it themselves is how the dashboard counts a different client than the list beside it. See §2. |
 | One `summarise_day()` for the assurance grid | `backend/app/api/assurance.py` | `passed + breached + errored + unchecked == assured` has to close, or the landing page reports incomplete assurance as complete. See §2. |
 | One `useEntityScope()` for every screen | `frontend/src/entityScope.tsx` | The app bar owns the client. A screen with its own dropdown can disagree with the header above it, and a "Clear" button can drop the scope silently. See §2. |
+| One `row_for()` for every read of one version | `backend/app/api/rules.py` | A rule is a chain of rows, and a page is about one of them. Six endpoints resolving "which row is v2" themselves is six chances for the page and the source beside it to describe different rows. See §4b. |
+| One `ruleShowPath()` for every rule link | `frontend/src/rulePaths.ts` | react-admin's link helpers append the list's filter, page and sort, so a rule page arrived carrying another screen's query string. One builder is also one place that remembers `encodeURIComponent`. See §4b. |
 | One `scan_source()` for every gate | `backend/app/engine/validation.py` | The static gate that decides a rule may run. The validator and the trial both call it, so a candidate cannot be stricter when it is tested than when it is activated. |
 | One `invoke_rule()` for every execution | `backend/app/engine/ctx.py` | Builds the context and calls `run(ctx)`. The runner and the trial both call it, because a trial that tests a different path from production is not a trial. |
 | The trial touches nothing | `backend/app/engine/trial.py` | No `rule_runs` row, no ticket, no run folder. A trial that raised a ticket would put a finding in the estate that nobody asked for. See §2. |
@@ -331,6 +333,9 @@ work per client and re-picking it on every reload is noise.
 | Rules may only `import` from the allow-list | `app/engine/validation.py` | Enforced by AST scan, not convention. |
 | The catalogue lives in the `datasources` table, not in `app/` | see §3a | A module under `app/` that also answered "what tables exist" would be a second source of truth, and the two would drift the first time an admin registered something. |
 | Consumers take a `Catalog`, never a storage mechanism | `app/engine/catalog.py` | Keeps the ETL, the catalogue, the rules and the runner decoupled. See §3a. |
+| One `derive()` for the plain-English reading | `backend/app/engine/explain.py` | The outline is the substrate: the model rewrites it, the gates judge against it, the page falls back to it. Derive the reading a second time and the fallback describes a different rule from the one on screen. See §4a. |
+| A stored description is withheld when the file moves on | `backend/app/engine/explain.py`, `GET /explain` | The words are pinned to `source_sha256`. A description of the previous version, shown under the current code, is worse than none: it looks checkable. See §4a. |
+| One `check()` for the words, model-written or derived | `backend/app/engine/explain.py` | The fallback has to pass the same gates as the model, or "we fell back to something safe" is a claim nobody tested. `read_explanations.py --check` runs every demo rule through it. |
 
 ### 3a. The pipeline, and why each stage is decoupled
 
@@ -580,6 +585,119 @@ either.
 When the constant cannot be parsed, the picker refuses to write rather than
 guessing, and says what the code actually reads.
 
+### 4a. A rule explains itself, and the reading is derived first
+
+```
+app/engine/explain.py       derive()        the code, in plain English - AST only
+app/engine/explain_llm.py   write()         the same sentences, said better
+app/api/rules.py            GET /explain    what the page shows
+```
+
+`derive()` turns the file into a purpose, a list of steps with the lines each
+came from, the condition that raises an exception, the limits it applies and the
+things it cannot explain. It is **pure text**: no database, no model, no run. So
+the page can always say something true and free about the code on disk right
+now, and a deployment with no model configured is not a rule page with no
+description.
+
+The model only rewrites those sentences. It is given, for each step, both the
+line range **and the derived sentence**, and is told to rewrite that step and
+never to add, merge, drop or renumber one. A skeleton of bare line numbers
+invites the model to invent a plausible sequence and attach it to whatever
+numbers are left — which passes a coverage check while pointing the reader at
+code that says something else. That failure is invisible on screen: the words are
+fluent and the highlight lights up the wrong line.
+
+The words are gated before anybody sees them (`coverage`, `numbers`,
+`identifiers`, `anchors`, `readability`). A failure gets one retry that quotes
+what failed; a second failure stores the derived wording and marks it `derived`.
+**Unverified prose is never shown**, and the gates are stored with it so the page
+can say why the machine-written attempt was not used.
+
+### The stored description is pinned to the file it describes
+
+`rule_explanations.source_sha256` is the hash of the rule's source at the moment
+the words were written. Every read compares it with the file:
+
+| Match | What the page shows |
+|---|---|
+| yes | the stored words, with their provenance and sign-off |
+| no | the code has changed: the stored words are **withheld**, and the derived reading of the new code is shown instead |
+
+A description of last week's version displayed under this week's code is worse
+than no description, because it looks checkable — the reader is invited to
+verify it and lands on logic the words never described. `stale` is reported so
+the page can say so, and signing off is refused while it is true.
+
+The line ranges are always the derivation's, never the model's, and an edit
+(`PUT`) keeps them: a link that does not land where it says is worse than no
+link.
+
+### Signing off is its own capability
+
+`rules.explain_review` (admin, manager, auditor — not viewer) is separate from
+`rules.write` on purpose. The person answerable for a control is usually not the
+person who wrote it, and requiring write access would mean handing an auditor the
+power to change the control in order to describe it.
+
+A new or edited description clears `reviewed_by`, so a review never transfers to
+words nobody read. The page names all three states — *written by a model, not yet
+reviewed* / *written by a model, reviewed by X on date* / *written by a person* —
+because "AI generated" on its own tells an auditor nothing about whether anybody
+looked.
+
+A `GET` never generates: a page view must not spend money at a model, and it must
+not overwrite what a person wrote.
+
+### 4b. A rule page is a page about one version, and the address says which
+
+`rules_master` is a chain of rows per `code`, and exactly one carries
+`is_version_active` — the head, the version the scheduler runs. So "the rule"
+stops being one thing the moment there is a second version, and the page used to
+keep that quiet: `/rules/LAD-CA-03/show` showed the head and nothing said so.
+
+```
+#/rules/LAD-CA-03/show/v2
+```
+
+`row_for(session, code, version)` in `app/api/rules.py` is the only lookup. Every
+read that can be pointed at a version takes `?version=` — `GET /{code}`,
+`/source`, `/explain`, `/validate-report`, and the explain writes. A version that
+does not exist is a 404 that names the ones that do, because "not found" leaves
+the reader wondering whether they mistyped. `RuleExplanation.rule_id` already
+points at a version row, so a historical version explains itself from its own
+`source_file` with no special case: the words, the hash that pins them and the
+stale check all follow from the row.
+
+Bare `/show` still works, and that is on purpose: it is a **doorway**. It loads
+the head and then *replaces* the URL with `/show/v<head>`, so a link written
+before versions were in the address — a ticket, a run, a bookmark — still works
+and ends up canonical. Every in-app link goes straight to the version.
+
+**`ruleShowPath()` in `frontend/src/rulePaths.ts` builds all of them.**
+react-admin's own link helpers append whatever query string the list was
+showing, so a rule page reached from the runs list arrived as
+`/show?filter=%7B%7D&page=2&sort=started_at` — a rule page carrying another
+screen's sort order. One builder is also one place that remembers
+`encodeURIComponent`.
+
+**An old version is a record.** No Validate, no Run now, no Pause/Activate, no
+Rewrite, no Sign off, no schedule editing: the code on screen is not the code
+the scheduler would run, so those buttons would either fail or, worse, succeed
+against the wrong row. Its one action is *Restore* — `POST
+/{code}/rollback/{version}` — which copies the source forward into the next
+version, **validates the copy**, and activates it only if validation passes. A
+copy that fails validation stays a draft and says so, because the estate may have
+moved since that version ran (a table it read may have been retired), and
+"restored" must not mean "switched the live control to code that cannot read its
+data". Restoring the version that is already current is a 409.
+
+History is never rewritten, so a restored copy is a **new row**: it does not
+inherit the old version's model-written prose or its sign-off, and its page shows
+the derived reading until somebody writes one. That is the honest outcome — those
+words described that file, and the copy is a different row with a different
+author and date.
+
 ---
 
 ## 5. Running it
@@ -622,12 +740,21 @@ A change is not done until all of these pass:
 cd backend
 .\.venv\Scripts\python.exe scripts\smoke_test.py     # must be 0 failed
 .\.venv\Scripts\python.exe scripts\check_licenses.py # must exit 0
+.\.venv\Scripts\python.exe scripts\read_explanations.py --check  # 0 files with problems
 
 cd ../frontend
 npx tsc --noEmit
 npm run build
 npx tsx src/components/ruleSource.check.ts           # must report 0 failures
 ```
+
+`read_explanations.py` is two things. Without `--check` it is a reading: it
+prints what `derive()` makes of every rule, so a human can judge whether the
+sentences are worth showing to a head of audit. With `--check` the same readings
+become assertions across every file in `backend/rules/` — including that the
+*derived* wording survives the gates that judge the model's. If the fallback
+cannot pass its own gates it is not a fallback, and the failure would otherwise
+show up as a rule page that says nothing rather than as a red test.
 
 `ruleSource.check.ts` is the exception to the pattern: a plain script, not a
 test suite, because this project has no frontend test runner and adding one for

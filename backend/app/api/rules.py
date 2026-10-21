@@ -26,24 +26,34 @@ from sqlalchemy.exc import IntegrityError
 from starlette.concurrency import run_in_threadpool
 
 from app.api.deps import SessionDep, require
+from app.engine import explain_llm
 from app.engine.catalog import database_catalog
 from app.engine.datasources import default_entity
+from app.engine.explain import check, derive, derived_prose, source_hash
 from app.engine.loader import read_source, write_source
 from app.engine.rule_generator import is_configured, preview_context
 from app.engine.rules import CodeError, scoped_code, validate_code, versioned_filename
 from app.engine.runner import execute_rule
 from app.engine.validation import RuleValidator, declared_tables, now
-from app.models import Rule, RuleSchedule, Run, Ticket, User
+from app.models import Rule, RuleExplanation, RuleSchedule, Run, Ticket, User
 from app.permissions import (
     RULES_ACTIVATE,
     RULES_DELETE,
+    RULES_EXPLAIN_REVIEW,
     RULES_GENERATE,
     RULES_READ,
     RULES_TEST,
     RULES_WRITE,
 )
 from app.schemas import (
+    ExplanationEdit,
+    ExplanationLimitOut,
+    ExplanationOut,
+    ExplanationReview,
+    ExplanationStepOut,
+    GateOut,
     GenerationAttempt,
+    RollbackOut,
     RuleCreate,
     RuleGenerateRequest,
     RuleGenerateResponse,
@@ -70,6 +80,7 @@ RulesWriter = Annotated[User, Depends(require(RULES_WRITE))]
 RulesActivator = Annotated[User, Depends(require(RULES_ACTIVATE))]
 RulesDeleter = Annotated[User, Depends(require(RULES_DELETE))]
 RulesGenerator = Annotated[User, Depends(require(RULES_GENERATE))]
+ExplanationReviewer = Annotated[User, Depends(require(RULES_EXPLAIN_REVIEW))]
 
 # Fields copied forward when a new version is created.
 CARRIED_FIELDS = (
@@ -94,6 +105,33 @@ async def require_head(session, code: str) -> Rule:
     if rule is None:
         raise HTTPException(status_code=404, detail=f"No rule with code {code!r}")
     return rule
+
+
+async def row_for(session, code: str, version: int | None = None) -> Rule:
+    """The version asked for, or the head when none is asked for.
+
+    Every read that can be pointed at one version goes through here, so the
+    page showing v1 and the endpoints serving it cannot disagree about which
+    row that is. A version row carries its own source file, so the source, the
+    explanation and the hash that pins them all follow from this one lookup.
+    """
+    if version is None:
+        return await require_head(session, code)
+
+    row = (
+        await session.execute(
+            select(Rule).where(Rule.code == code, Rule.version == version)
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        latest = await max_version(session, code)
+        if not latest:
+            raise HTTPException(status_code=404, detail=f"No rule with code {code!r}")
+        raise HTTPException(
+            status_code=404,
+            detail=f"{code} has no version {version}; it has v1 to v{latest}.",
+        )
+    return row
 
 
 async def max_version(session, code: str) -> int:
@@ -340,13 +378,22 @@ async def _next_generated_code(session, entity: str) -> str:
 
 
 @router.get("/{code}")
-async def get_rule(code: str, session: SessionDep, _user: RulesReader) -> RuleOut:
-    return RuleOut.model_validate(await require_head(session, code))
+async def get_rule(
+    code: str, session: SessionDep, _user: RulesReader, version: int | None = None
+) -> RuleOut:
+    """One version row, or the head.
+
+    The page asks for a version by number, because a rule is a chain of rows and
+    "the rule" is whichever of them you are reading.
+    """
+    return RuleOut.model_validate(await row_for(session, code, version))
 
 
 @router.get("/{code}/source")
-async def get_source(code: str, session: SessionDep, _user: RulesReader) -> dict:
-    rule = await require_head(session, code)
+async def get_source(
+    code: str, session: SessionDep, _user: RulesReader, version: int | None = None
+) -> dict:
+    rule = await row_for(session, code, version)
     try:
         source = read_source(rule.source_file, settings.rules_dir)
     except FileNotFoundError as exc:
@@ -395,6 +442,306 @@ async def list_versions(
             )
         )
     return out
+
+
+# ---------------------------------------------------------------------------
+# the plain-English explanation
+# ---------------------------------------------------------------------------
+def _step_out(step: dict[str, Any], derived: dict[int, Any]) -> ExplanationStepOut:
+    n = int(step.get("n", 0))
+    source = derived.get(n)
+    return ExplanationStepOut(
+        n=n,
+        text=str(step.get("text") or ""),
+        lines=list(step.get("lines") or (source.lines if source else [])),
+        kind=source.kind if source else "",
+        explainable=source.explainable if source else True,
+    )
+
+
+async def _stored(session, rule: Rule) -> RuleExplanation | None:
+    return (
+        await session.execute(
+            select(RuleExplanation).where(RuleExplanation.rule_id == rule.id)
+        )
+    ).scalar_one_or_none()
+
+
+def _explanation_out(
+    rule: Rule,
+    outline,
+    source: str,
+    row: RuleExplanation | None,
+    *,
+    stale: bool,
+) -> ExplanationOut:
+    """What the page is shown: always something true, and never stale words.
+
+    The derivation runs on every read, so the steps and their line ranges are
+    current even when the stored prose is not. Stale prose is dropped rather
+    than shown - a description of the previous version sitting under this
+    version's code is the failure this whole design exists to prevent.
+    """
+    from app.engine.explain import derived_prose
+
+    prose = derived_prose(outline)
+    origin = "derived"
+    gates: list[GateOut] = []
+    probe = None
+    meta = {
+        "generated_by": "",
+        "model": "",
+        "prompt_version": "",
+        "generated_at": None,
+        "reviewed_by": None,
+        "reviewed_at": None,
+    }
+
+    if row is not None and not stale:
+        prose = {
+            "breach_condition": row.breach_condition,
+            "steps": row.steps,
+            "limits": row.limits,
+            "cannot_explain": row.cannot_explain,
+            "outputs": row.outputs,
+            "cap": row.cap,
+        }
+        origin = row.origin
+        gates = [GateOut(**g) for g in (row.gates or [])]
+        probe = row.probe
+        meta = {
+            "generated_by": row.generated_by,
+            "model": row.model,
+            "prompt_version": row.prompt_version,
+            "generated_at": row.created_at,
+            "reviewed_by": row.reviewed_by,
+            "reviewed_at": row.reviewed_at,
+        }
+
+    derived = {s.n: s for s in outline.steps}
+    return ExplanationOut(
+        code=rule.code,
+        version=rule.version,
+        source_sha256=source_hash(source),
+        origin=origin,
+        stored=row is not None and not stale,
+        stale=stale,
+        llm_configured=is_configured(),
+        purpose=outline.purpose,
+        breach_condition=prose.get("breach_condition") or outline.purpose,
+        steps=[_step_out(s, derived) for s in prose.get("steps") or []],
+        limits=[ExplanationLimitOut(**l) for l in prose.get("limits") or []],
+        outputs=list(prose.get("outputs") or []),
+        cap=prose.get("cap"),
+        cannot_explain=list(prose.get("cannot_explain") or []),
+        gates=gates,
+        probe=probe,
+        **meta,
+    )
+
+
+@router.get("/{code}/explain", response_model=ExplanationOut)
+async def get_explanation(
+    code: str, session: SessionDep, _user: RulesReader, version: int | None = None
+) -> ExplanationOut:
+    """What this version does, in plain English.
+
+    Cheap and safe to call: the structure is derived from the version's own file
+    on every request, so the page never shows a description of code that has
+    moved on. Nothing is generated here - a GET does not spend money at a model.
+    """
+    rule = await row_for(session, code, version)
+    source = _source_or_409(rule)
+    outline = derive(source)
+    row = await _stored(session, rule)
+    stale = row is not None and row.source_sha256 != source_hash(source)
+    return _explanation_out(rule, outline, source, row, stale=stale)
+
+
+@router.post("/{code}/explain", response_model=ExplanationOut)
+async def generate_explanation(
+    code: str, session: SessionDep, user: RulesWriter, version: int | None = None
+) -> ExplanationOut:
+    """Write (or rewrite) the description with the model, and store it.
+
+    Every answer is gated before it is stored, and a model that fails twice is
+    not stored at all - the derived wording is, marked as such. With no model
+    configured this endpoint still works: it stores the derived description,
+    which is the whole point of the derivation being the substrate.
+    """
+    rule = await row_for(session, code, version)
+    source = _source_or_409(rule)
+    outline = derive(source)
+    digest = source_hash(source)
+
+    prose, gates, model = await run_in_threadpool(
+        explain_llm.write,
+        outline,
+        source,
+        {"code": rule.code, "name": rule.name, "severity": rule.severity,
+         "lookback_days": rule.lookback_days},
+    )
+
+    probe_result = None
+    if prose is None:
+        prose = derived_prose(outline)
+        origin = "derived"
+    else:
+        origin = "ai"
+        if outline.breach:
+            probe_result = await run_in_threadpool(
+                explain_llm.probe, outline, source, prose
+            )
+
+    values: dict[str, Any] = {
+        "rule_code": rule.code,
+        "version": rule.version,
+        "source_sha256": digest,
+        "breach_condition": prose.get("breach_condition") or "",
+        "steps": prose.get("steps") or [],
+        "limits": prose.get("limits") or outline.limits,
+        "cannot_explain": prose.get("cannot_explain") or outline.cannot_explain,
+        "outputs": prose.get("outputs") or outline.outputs,
+        "cap": prose.get("cap"),
+        "numbers": outline.numbers,
+        "origin": origin,
+        "model": model,
+        "prompt_version": explain_llm.PROMPT_VERSION if origin == "ai" else "",
+        "generated_by": user.username,
+        "gates": [g.as_dict() for g in gates],
+        "probe": probe_result if origin == "ai" else None,
+        # A new description has not been signed off, whatever the old one had.
+        "reviewed_by": None,
+        "reviewed_at": None,
+    }
+    row = await _upsert(session, rule, values)
+    return _explanation_out(rule, outline, source, row, stale=False)
+
+
+@router.put("/{code}/explain", response_model=ExplanationOut)
+async def edit_explanation(
+    code: str, payload: ExplanationEdit, session: SessionDep, user: RulesWriter,
+    version: int | None = None,
+) -> ExplanationOut:
+    """A person correcting the words.
+
+    The text is theirs: it is stored as written and marked `edited`, because a
+    description a human has changed is a different kind of evidence from one a
+    model wrote. The line ranges are still the derivation's - those are links
+    into the file, and a link that does not land where it says is worse than no
+    link.
+    """
+    rule = await row_for(session, code, version)
+    source = _source_or_409(rule)
+    outline = derive(source)
+    spans = {s.n: list(s.lines) for s in outline.steps}
+
+    steps: list[dict[str, Any]] = []
+    for step in payload.steps:
+        try:
+            n = int(step.get("n", 0))
+        except (TypeError, ValueError):
+            continue
+        if n not in spans:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Step {n} is not in this rule's source; it has "
+                       f"{len(spans)} steps.",
+            )
+        steps.append({"n": n, "text": str(step.get("text") or "").strip(), "lines": spans[n]})
+
+    missing = sorted(set(spans) - {s["n"] for s in steps})
+    if missing:
+        raise HTTPException(
+            status_code=422,
+            detail="Every step needs words: " + ", ".join(str(n) for n in missing),
+        )
+
+    prose = {"breach_condition": payload.breach_condition, "steps": steps}
+    gates = check(outline, prose, len(source.splitlines()))
+
+    values: dict[str, Any] = {
+        "rule_code": rule.code,
+        "version": rule.version,
+        "source_sha256": source_hash(source),
+        "breach_condition": payload.breach_condition,
+        "steps": steps,
+        "limits": outline.limits,
+        "cannot_explain": outline.cannot_explain,
+        "outputs": outline.outputs,
+        "cap": outline.cap,
+        "numbers": outline.numbers,
+        "origin": "edited",
+        "model": "",
+        "prompt_version": "",
+        "generated_by": user.username,
+        "gates": [g.as_dict() for g in gates],
+        "probe": None,
+        "reviewed_by": None,
+        "reviewed_at": None,
+    }
+    row = await _upsert(session, rule, values)
+    return _explanation_out(rule, outline, source, row, stale=False)
+
+
+@router.post("/{code}/explain/review", response_model=ExplanationOut)
+async def review_explanation(
+    code: str, payload: ExplanationReview, session: SessionDep,
+    user: ExplanationReviewer, version: int | None = None,
+) -> ExplanationOut:
+    """Sign the description off, or withdraw the sign-off.
+
+    A distinct capability from editing the rule: the reviewer is the person
+    answerable for the control, and they are usually not the person who wrote
+    it. Withdrawing is the same call with `approved: false`, because a
+    rejection that cannot be recorded leaves the page claiming a review that
+    did not happen.
+    """
+    rule = await row_for(session, code, version)
+    source = _source_or_409(rule)
+    outline = derive(source)
+    row = await _stored(session, rule)
+    if row is None:
+        raise HTTPException(
+            status_code=404,
+            detail="This rule has no description to sign off yet.",
+        )
+    if row.source_sha256 != source_hash(source):
+        raise HTTPException(
+            status_code=409,
+            detail="The description is older than the code. Regenerate it, then "
+                   "sign it off.",
+        )
+
+    row.reviewed_by = user.username if payload.approved else None
+    row.reviewed_at = now() if payload.approved else None
+    await session.commit()
+    await session.refresh(row)
+    return _explanation_out(rule, outline, source, row, stale=False)
+
+
+async def _upsert(
+    session, rule: Rule, values: dict[str, Any]
+) -> RuleExplanation:
+    row = await _stored(session, rule)
+    if row is None:
+        row = RuleExplanation(rule_id=rule.id, rule_code=rule.code, version=rule.version)
+        session.add(row)
+    for key, value in values.items():
+        setattr(row, key, value)
+    await session.commit()
+    await session.refresh(row)
+    return row
+
+
+def _source_or_409(rule: Rule) -> str:
+    try:
+        return read_source(rule.source_file, settings.rules_dir)
+    except FileNotFoundError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Source file {rule.source_file} is missing on disk",
+        ) from exc
 
 
 # ---------------------------------------------------------------------------
@@ -544,9 +891,9 @@ async def validate_rule(
 
 @router.get("/{code}/validate-report", response_model=ValidationReport)
 async def validation_report(
-    code: str, session: SessionDep, _user: RulesReader
+    code: str, session: SessionDep, _user: RulesReader, version: int | None = None
 ) -> ValidationReport:
-    rule = await require_head(session, code)
+    rule = await row_for(session, code, version)
     return ValidationReport(
         status=rule.validation_status,
         errors=[
@@ -596,17 +943,27 @@ async def _validate_and_store(session, rule: Rule, *, username: str | None) -> V
 # ---------------------------------------------------------------------------
 # rollback / delete / test
 # ---------------------------------------------------------------------------
-@router.post("/{code}/rollback/{version}", response_model=RuleOut)
+@router.post("/{code}/rollback/{version}", response_model=RollbackOut)
 async def rollback(
     code: str, version: int, session: SessionDep, admin: RulesActivator
-) -> RuleOut:
-    """
-    Roll back by publishing an OLD version's source as a NEW head.
+) -> RollbackOut:
+    """Restore an old version: copy it forward, validate it, put it live.
 
-    History is never rewritten: this reads like "v3 restored v1's logic", and
-    the version number only moves forward.
+    History is never rewritten. Restoring v1 publishes v5 with v1's source, so
+    the version history reads "restored from v1" and the number only moves
+    forward.
+
+    The copy is validated before it is activated, because the estate may have
+    moved since v1 ran - a table it read may have been removed. "Restored" must
+    not mean "switched the live control to code that cannot read its data", so a
+    copy that fails validation stays a draft and nothing goes live.
     """
     current = await require_head(session, code)
+    if current.version == version:
+        raise HTTPException(
+            status_code=409,
+            detail=f"{code} v{version} is already the current version.",
+        )
 
     target = (
         await session.execute(
@@ -623,7 +980,7 @@ async def rollback(
     except FileNotFoundError as exc:
         raise HTTPException(
             status_code=409,
-            detail=f"Cannot roll back: {target.source_file} is missing on disk",
+            detail=f"Cannot restore: {target.source_file} is missing on disk",
         ) from exc
 
     nxt = await publish_version(
@@ -631,12 +988,32 @@ async def rollback(
         source=current,
         code=code,
         new_source=source,
-        change_note=f"rollback to v{version}",
+        change_note=f"restored from v{version}",
         author=admin.username,
+        origin=target.origin,
     )
+    await session.flush()
+
+    report = await _validate_and_store(session, nxt, username=admin.username)
+    activated = report.status == "valid"
+    if activated:
+        nxt.status = "active"
     await session.commit()
     await session.refresh(nxt)
-    return RuleOut.model_validate(nxt)
+
+    if activated:
+        # Schedules follow the rule: activating registers them.
+        from app.api.schedules import sync_schedules_for_code
+
+        await sync_schedules_for_code(session, code)
+        await session.commit()
+        await session.refresh(nxt)
+
+    return RollbackOut(
+        rule=RuleOut.model_validate(nxt),
+        validation=report,
+        activated=activated,
+    )
 
 
 @router.delete("/{code}", status_code=204)

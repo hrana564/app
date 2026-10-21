@@ -12,7 +12,8 @@ import { api } from "../dataProvider";
 import {
   IdField, JsonBlock, RowsTable, ActionIcon,
 } from "../components/ui";
-import { runOutcomeColor, runStatusColor, FONT } from "../theme";
+import { TextLike, listTableSx } from "../components/listTable";
+import { runOutcomeColor, runStatusColor } from "../theme";
 import { useEntityScope } from "../entityScope";
 import { can, usePermissions } from "../permissions";
 
@@ -177,63 +178,15 @@ const RunSummary = ({ source }: { source: string; label?: string }) => {
   );
 };
 
-const cellSx = {
-  py: 0.65,
-  px: 1.25,
-  borderColor: "#eef1f6",
-  overflow: "hidden",
-  lineHeight: 1.5,
-};
-
-/**
- * A one-line text cell. `mono` for identifiers, `secondary` for the values that
- * should recede beside the finding, `render` to format on the way out.
- */
-const TextLike = ({
-  source, mono, secondary, render, label,
-}: {
-  source: string;
-  label?: string;
-  mono?: boolean;
-  secondary?: boolean;
-  render?: (value: any) => string;
-}) => {
-  const record = useRecordContext<any>();
-  const raw = record?.[source];
-  return (
-    <Typography
-      variant="body2"
-      noWrap
-      sx={{
-        fontFamily: mono ? "monospace" : undefined,
-        fontWeight: mono ? 700 : undefined,
-        color: secondary ? "text.secondary" : "text.primary",
-      }}
-    >
-      {render ? render(raw) : (raw ?? "—")}
-    </Typography>
-  );
-};
-
 /**
  * Fixed widths for the columns around the finding, so the finding absorbs
  * whatever width is left instead of the browser redistributing against the
- * longest cell in the row. Column 5 is deliberately absent - that is the one
+ * longest cell in the row. Column 6 is deliberately absent - that is the one
  * that takes the remainder.
  */
-const columnWidth = (i: number, w: number) => ({
-  [`& .RaDatagrid-headerCell:nth-of-type(${i}), & .RaDatagrid-rowCell:nth-of-type(${i})`]:
-    { width: w },
-});
-
 const FIXED_WIDTHS: Array<[number, number]> = [
   [1, 58], [2, 112], [3, 98], [4, 82], [5, 82], [7, 70], [8, 82], [9, 124], [10, 50],
 ];
-
-const widthSx = FIXED_WIDTHS.reduce<Record<string, { width: number }>>(
-  (acc, [i, w]) => Object.assign(acc, columnWidth(i, w)),
-  {},
-);
 
 export const RunList = () => {
   const { entity } = useEntityScope();
@@ -249,27 +202,7 @@ export const RunList = () => {
         rowClick="show"
         bulkActionButtons={false}
         size="small"
-        sx={{
-          // Fixed layout is what makes "one row, one line" enforceable: columns
-          // take their declared width and the summary absorbs the remainder
-          // instead of the browser redistributing it against the longest cell.
-          "& .RaDatagrid-table": { tableLayout: "fixed" },
-          "& .RaDatagrid-headerCell": {
-            py: 0.75,
-            px: 1.25,
-            fontSize: FONT.label,
-            fontWeight: 700,
-            textTransform: "uppercase",
-            letterSpacing: 0.5,
-            color: "#5b6b82",
-            backgroundColor: "#fafbfe",
-            whiteSpace: "nowrap",
-            overflow: "hidden",
-          },
-          "& .RaDatagrid-rowCell": cellSx,
-          "& .RaDatagrid-headerRow:hover": { backgroundColor: "#f3f6fb" },
-          ...widthSx,
-        }}
+        sx={listTableSx(FIXED_WIDTHS)}
       >
         <IdField source="id" label="#" />
         <TextLike source="rule_code" label="Rule" mono />

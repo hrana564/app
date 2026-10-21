@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 import {
   Datagrid, Edit, List, Pagination, ShowBase, TextField, TopToolbar,
   useListContext, useNotify, useRecordContext, useRefresh, useRequireAccess,
@@ -9,8 +9,8 @@ import {
   Alert, Autocomplete, Box, Button, ButtonBase, Card, CardContent, Chip,
   CircularProgress, Collapse,
   Dialog, DialogActions, DialogContent, DialogTitle, Divider, IconButton,
-  Menu, MenuItem, Stack, Table, TableBody, TableCell, TableContainer, TableHead,
-  TableRow, TextField as MuiTextField, Tooltip, Typography,
+  Menu, MenuItem, Stack,
+  TextField as MuiTextField, Tooltip, Typography,
 } from "@mui/material";
 import AutoAwesomeIcon from "@mui/icons-material/AutoAwesome";
 import PlayArrowIcon from "@mui/icons-material/PlayArrow";
@@ -19,12 +19,7 @@ import FactCheckIcon from "@mui/icons-material/FactCheck";
 import AddIcon from "@mui/icons-material/Add";
 import DeleteOutlinedIcon from "@mui/icons-material/DeleteOutlined";
 import EditIcon from "@mui/icons-material/Edit";
-import VisibilityIcon from "@mui/icons-material/Visibility";
 import HistoryIcon from "@mui/icons-material/History";
-import ChevronRightIcon from "@mui/icons-material/ChevronRight";
-import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
-import ArrowUpwardIcon from "@mui/icons-material/ArrowUpward";
-import ArrowDownwardIcon from "@mui/icons-material/ArrowDownward";
 import KeyboardArrowDownIcon from "@mui/icons-material/KeyboardArrowDown";
 import KeyboardArrowRightIcon from "@mui/icons-material/KeyboardArrowRight";
 import ScheduleIcon from "@mui/icons-material/Schedule";
@@ -38,9 +33,10 @@ import { RuleExplainer } from "../components/RuleExplainer";
 import { TEMPLATES, templatePrompt } from "../components/rulePrompts";
 import { RunOutcomeCell, RunStatusCell } from "./Run";
 import {
-  ActionIcon, CodeBlock, DotLabel, EntityField, IdField, JsonBlock, RowsTable,
-  RuleStateCell, SeverityChipField, StatusChipField, RowCountField,
+  ActionIcon, CodeBlock, DotLabel, EntityField, fieldFromRecord, IdField, JsonBlock,
+  RowsTable, SeverityChipField, StatusChipField, RowCountField,
 } from "../components/ui";
+import { TextLike, LIST_HEADER_SX, listTableSx } from "../components/listTable";
 import { severityColor, statusColor, SEVERITIES_ASC, FONT } from "../theme";
 import { can, usePermissions } from "../permissions";
 import { useEntityScope } from "../entityScope";
@@ -54,20 +50,6 @@ const STATUS_OPTIONS = ["draft", "active", "paused", "retired"] as const;
 // dropdown should start at the least alarming option, because that is the
 // starting position, not the interesting one.
 const SEVERITY_OPTIONS = SEVERITIES_ASC;
-
-/** One row of a rule's history. RuleOut, minus the fields the table ignores. */
-interface VersionRow {
-  code: string;
-  version: number;
-  is_version_active: boolean;
-  status: string;
-  validation_status: string;
-  severity: string;
-  change_note: string;
-  created_by: string;
-  created_at: string;
-  source_file: string;
-}
 
 /* ================================================================== */
 /* Rule toolbar: search + prompt-to-rule                               */
@@ -628,39 +610,14 @@ const RuleToolbar = () => {
 };
 
 /* ================================================================== */
-/* Shared indexes                                                      */
+/* Shared index                                                        */
 /* ================================================================== */
 /**
- * Every version of every rule, in ONE request.
+ * Every rule's schedules, in ONE request, read synchronously per row.
  *
- * The old screen fetched a rule's schedules inside each row, so ten rows meant
- * ten round trips. Both indexes are now fetched once and read synchronously.
+ * The alternative is a request inside each row, so ten rows mean ten round
+ * trips.
  */
-const useVersionIndex = () => {
-  const [index, setIndex] = useState<Record<string, VersionRow[]>>({});
-  const [loading, setLoading] = useState(true);
-
-  const load = useCallback(() => {
-    setLoading(true);
-    api.allRuleVersions()
-      .then((r) => {
-        const byCode: Record<string, VersionRow[]> = {};
-        for (const row of (r.data ?? []) as VersionRow[]) {
-          (byCode[row.code] ??= []).push(row);
-        }
-        for (const code of Object.keys(byCode)) {
-          byCode[code].sort((a, b) => b.version - a.version);
-        }
-        setIndex(byCode);
-      })
-      .catch(() => setIndex({}))
-      .finally(() => setLoading(false));
-  }, []);
-
-  useEffect(load, [load]);
-  return { index, loading, reload: load };
-};
-
 const useScheduleIndex = () => {
   const [index, setIndex] = useState<Record<string, any[]>>({});
   const [loading, setLoading] = useState(true);
@@ -679,7 +636,14 @@ const useScheduleIndex = () => {
   return { index, loading };
 };
 
-/** Plain-English schedule summary, or "manual only" when there is none. */
+/**
+ * The rule's cadence, on one line.
+ *
+ * A rule can carry several schedules - a daily run and an hourly one - and
+ * this used to stack them, which made that one row twice the height of every
+ * other and cost the table its rhythm. The list names the first and counts the
+ * rest; the rule page lists them all.
+ */
 const ScheduleSummary = ({ schedules }: { schedules: any[] }) => {
   if (!schedules?.length) {
     return (
@@ -689,18 +653,23 @@ const ScheduleSummary = ({ schedules }: { schedules: any[] }) => {
     );
   }
   return (
-    <Stack spacing={0.15} sx={{ minWidth: 0 }}>
-      {schedules.slice(0, 2).map((s) => (
-        <Typography key={s.id} variant="body2" noWrap title={s.cron}>
-          {s.cadence_label}
-        </Typography>
-      ))}
-      {schedules.length > 2 && (
-        <Typography variant="caption" sx={{ color: "text.secondary" }}>
-          +{schedules.length - 2} more
-        </Typography>
-      )}
-    </Stack>
+    <Tooltip
+      // The friendly cadences only. `frequency.py` is the only thing that knows
+      // a cron expression, and users never see one - which is why the tooltip
+      // says "Daily at 06:30 · Every 6 hours" and not the expression behind it.
+      title={schedules.map((s) => s.cadence_label).join(" · ")}
+      placement="top-start"
+      slotProps={{ tooltip: { sx: { maxWidth: 420, whiteSpace: "normal" } } }}
+    >
+      <Typography variant="body2" noWrap>
+        {schedules[0].cadence_label}
+        {schedules.length > 1 && (
+          <Typography component="span" variant="caption" sx={{ color: "text.secondary" }}>
+            {" "}+{schedules.length - 1}
+          </Typography>
+        )}
+      </Typography>
+    </Tooltip>
   );
 };
 
@@ -1705,15 +1674,13 @@ const RuleActivity = ({ ruleCode }: { ruleCode: string }) => {
             >
               <Datagrid bulkActionButtons={false} rowClick="show" size="small"
                 sx={{
-                  // Deliberately NOT tableLayout:fixed. Pinning the columns
-                  // leaves FINDING a fixed box, which truncates the longest
+                  // The header is the list chrome, shared with every other
+                  // list. The rows are not: this table deliberately does NOT
+                  // use tableLayout:fixed, because pinning the columns leaves
+                  // OBSERVATION a fixed box, which truncates the longest
                   // findings - and the finding is the reason anyone reads this
                   // table. Short rows leave a gap instead, which costs nothing.
-                  "& .RaDatagrid-headerCell": {
-                    py: 0.75, px: 1.25, fontSize: FONT.label, fontWeight: 700,
-                    textTransform: "uppercase", letterSpacing: 0.5,
-                    color: "#5b6b82", backgroundColor: "#fafbfe", whiteSpace: "nowrap",
-                  },
+                  "& .RaDatagrid-headerCell": LIST_HEADER_SX,
                   "& .RaDatagrid-rowCell": {
                     py: 0.75, px: 1.25, fontSize: FONT.body,
                     whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
@@ -1831,315 +1798,156 @@ export const RuleShow = () => {
 };
 
 /* ================================================================== */
-/* The rules table - one row per rule, versions nested beneath          */
+/* The rules table - one row per rule; its versions are on its page     */
 /* ================================================================== */
-const SortableHeader = ({
-  field, label, sort, setSort, sx,
-}: {
-  field: string;
-  label: string;
-  sort: { field: string; order: string };
-  setSort: (s: any) => void;
-  sx?: any;
-}) => {
-  const active = sort.field === field;
-  const ascending = sort.order !== "DESC";
-  return (
-    <TableCell
-      onClick={() => setSort({ field, order: active && !ascending ? "DESC" : "ASC" })}
-      sx={{ cursor: "pointer", userSelect: "none", ...sx }}
-    >
-      {/* A flex Stack INSIDE the cell. Setting display:flex on a td would drop
-          it out of the table layout and break column alignment. */}
-      <Stack direction="row" spacing={0.25} sx={{ width: "fit-content", alignItems: "center" }}>
-        <span>{label}</span>
-        <Box component="span" sx={{ display: "inline-flex", opacity: active ? 0.85 : 0.25 }}>
-          {ascending ? (
-            <ArrowUpwardIcon sx={{ fontSize: 14 }} />
-          ) : (
-            <ArrowDownwardIcon sx={{ fontSize: 14 }} />
-          )}
-        </Box>
-      </Stack>
-    </TableCell>
-  );
+/**
+ * Widths for the columns either side of the rule's name, which is the one
+ * left unpinned so it absorbs whatever the window has left. The pinned widths
+ * are the same on every list, because a column that resizes with the window is
+ * a column the eye has to find again.
+ */
+const RULE_WIDTHS: Array<[number, number]> = [
+  [1, 150], // the rule's code
+  [3, 110], // severity
+  [4, 110], // state
+  [5, 130], // validation
+  [6, 170], // schedule
+  [7, 110], // actions
+];
+
+/**
+ * What a rule row needs that is not on the rule.
+ *
+ * A `<Datagrid>` takes elements as children rather than a render function, so
+ * a cell cannot be handed a prop by the component that holds the data. Two
+ * things a row needs live outside it: the schedules, which arrive as one index
+ * for the whole page rather than a request per row, and the two dialogs the
+ * action buttons open, which belong to the table rather than to a row.
+ */
+const RuleRowContext = createContext<{
+  schedules: Record<string, any[]>;
+  run: (rule: any) => void;
+  remove: (rule: any) => void;
+}>({ schedules: {}, run: () => {}, remove: () => {} });
+
+/** Severity, as the accent dot every other screen draws it with. */
+const SeverityCell = fieldFromRecord(
+  (value) => <DotLabel value={value} tone={severityColor[value] ?? "default"} />,
+);
+
+/** Did the rule run, and did it find anything? State answers the first. */
+const StateCell = fieldFromRecord(
+  (value) => <DotLabel value={value} tone={statusColor[value] ?? "default"} />,
+);
+
+/**
+ * May this rule run at all? A second column because it is a second question:
+ * an active rule that failed validation is a live control reading code the
+ * validator refused, which one column reading "active" would hide.
+ */
+const validationLabel = (v?: string) =>
+  v === "valid" ? "validated" : v === "invalid" ? "validation failed" : "not validated";
+
+const validationTone = (v?: string) =>
+  v === "valid" ? "success" : v === "invalid" ? "error" : "default";
+
+const ValidationCell = fieldFromRecord((value) => (
+  <DotLabel value={validationLabel(value)} tone={validationTone(value)} />
+));
+
+/**
+ * The rule's schedules, read from the page's index rather than fetched per row.
+ *
+ * `label` is declared and ignored: the Datagrid titles the column from the
+ * child element's props, not from anything the child renders.
+ */
+const ScheduleCell = ({ label }: { label?: string }) => {
+  void label;
+  const record = useRecordContext<any>();
+  const { schedules } = useContext(RuleRowContext);
+  return <ScheduleSummary schedules={schedules[record?.code] ?? []} />;
 };
 
-const headCellSx = {
-  fontWeight: 700,
-  fontSize: FONT.label,
-  textTransform: "uppercase" as const,
-  letterSpacing: 0.5,
-  color: "#5b6b82",
-  backgroundColor: "#fafbfe",
-  py: 1.25,
-  whiteSpace: "nowrap" as const,
-};
-
-const RuleTable = () => {
-  const { data, isPending, sort, setSort } = useListContext<any>();
-  const { index: versionIndex, loading: versionsLoading } = useVersionIndex();
-
-  /**
-   * react-admin keeps sort as the string "field ORDER". Read it once, here,
-   * instead of assuming an object - the same normalising the dataProvider does
-   * on the way out, because the shape has been seen both ways.
-   */
-  const currentSort = useMemo(() => {
-    const s: any = sort;
-    if (typeof s === "string") {
-      const [field, order] = s.split(" ");
-      return { field: field ?? "", order: order ?? "ASC" };
-    }
-    return { field: s?.field ?? "", order: s?.order ?? "ASC" };
-  }, [sort]);
-  const { index: scheduleIndex } = useScheduleIndex();
-  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
-  const [paged, setPaged] = useState<Record<string, VersionRow[]>>({});
-  const [runFor, setRunFor] = useState<any>(null);
-  const [deleteFor, setDeleteFor] = useState<any>(null);
-  const navigate = useNavigate();
-  const refresh = useRefresh();
+/**
+ * Run, edit, delete. The click is stopped here so pressing an icon does not
+ * also open the rule's page underneath it.
+ */
+const RuleActionsCell = ({ label }: { label?: string }) => {
+  void label;
+  const record = useRecordContext<any>();
   const perms = usePermissions();
+  const { run, remove } = useContext(RuleRowContext);
+  const navigate = useNavigate();
   const mayWrite = can(perms, "rules.write");
   const mayDelete = can(perms, "rules.delete");
 
-  const rules: any[] = useMemo(() => data ?? [], [data]);
+  return (
+    <Stack
+      direction="row"
+      spacing={0}
+      sx={{ justifyContent: "flex-end" }}
+      onClick={(e) => e.stopPropagation()}
+    >
+      <ActionIcon
+        title="Run this rule now"
+        color="primary"
+        icon={<PlayArrowIcon fontSize="small" />}
+        onClick={() => run(record)}
+      />
+      <ActionIcon
+        title={mayWrite ? "Edit rule" : "Editing needs the rules.write capability"}
+        icon={<EditIcon fontSize="small" />}
+        disabled={!mayWrite}
+        onClick={() => navigate(ruleEditPath(record.code))}
+      />
+      <ActionIcon
+        title={mayDelete ? "Delete rule" : "Deleting needs the rules.delete capability"}
+        icon={<DeleteOutlinedIcon fontSize="small" />}
+        color="error"
+        disabled={!mayDelete}
+        onClick={() => remove(record)}
+      />
+    </Stack>
+  );
+};
 
-  /**
-   * The shared index is capped at 500 rows. A rule whose history came back
-   * shorter than its own version number was truncated, so fetch it properly -
-   * a partial history must never render as a complete one.
-   */
-  useEffect(() => {
-    if (versionsLoading) return;
-    const missing = rules.filter(
-      (r) => r.code && !paged[r.code] && (versionIndex[r.code]?.length ?? 0) < (r.version ?? 0),
-    );
-    if (!missing.length) return;
-    let cancelled = false;
-    Promise.all(
-      missing.map((r) =>
-        api
-          .ruleVersions(r.code)
-          .then((list: any[]) => [r.code, list] as const)
-          .catch(() => [r.code, versionIndex[r.code] ?? []] as const),
-      ),
-    ).then((pairs) => {
-      if (!cancelled) setPaged((prev) => ({ ...prev, ...Object.fromEntries(pairs) }));
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [rules, versionIndex, versionsLoading, paged]);
-
-  const historyFor = (rule: any): VersionRow[] => {
-    const fromIndex = (versionIndex[rule.code] ?? []).filter((v) => !v.is_version_active);
-    const fetched = paged[rule.code];
-    if (!fetched?.length) return fromIndex;
-    // /versions omits `code` and `severity`; backfill them from the index so a
-    // repaired history is not missing values the index already knew.
-    return fetched
-      .filter((v) => !v.is_version_active)
-      .map((v) => ({
-        ...v,
-        code: v.code ?? rule.code,
-        severity:
-          v.severity ?? fromIndex.find((i) => i.version === v.version)?.severity ?? "",
-      }));
-  };
-
-  const toggle = (code: string) =>
-    setExpanded((prev) => ({ ...prev, [code]: !prev[code] }));
-
-  if (isPending) {
-    return (
-      <Box sx={{ p: 4, textAlign: "center" }}>
-        <CircularProgress size={26} />
-      </Box>
-    );
-  }
-
-  if (!rules.length) {
-    return (
-      <Box sx={{ p: 6, textAlign: "center" }}>
-        <Typography variant="body1" sx={{ color: "text.secondary" }}>
-          No rules match these filters.
-        </Typography>
-      </Box>
-    );
-  }
-
-  const openShow = (code: string, version?: number) =>
-    navigate(ruleShowPath(code, version));
-  const openEdit = (code: string) => navigate(ruleEditPath(code));
+const RuleTable = () => {
+  const { index: schedules } = useScheduleIndex();
+  const [runFor, setRunFor] = useState<any>(null);
+  const [deleteFor, setDeleteFor] = useState<any>(null);
+  const refresh = useRefresh();
 
   return (
     <>
-      <TableContainer>
-        <Table size="small" sx={{ "& td, & th": { borderColor: "#eef1f6" } }}>
-          <TableHead>
-            <TableRow>
-              <SortableHeader field="code" label="Rule" sort={currentSort} setSort={setSort} sx={headCellSx} />
-              <SortableHeader field="severity" label="Severity" sort={currentSort} setSort={setSort}
-                sx={{ ...headCellSx, width: 110 }} />
-              <SortableHeader field="status" label="State" sort={currentSort} setSort={setSort}
-                sx={{ ...headCellSx, width: 140 }} />
-              <TableCell sx={{ ...headCellSx, width: 170 }}>Schedule</TableCell>
-              <TableCell align="right" sx={{ ...headCellSx, width: 130 }}>
-                Actions
-              </TableCell>
-            </TableRow>
-          </TableHead>
-
-          <TableBody>
-            {rules.map((rule) => {
-              const history = historyFor(rule);
-              const open = Boolean(expanded[rule.code]);
-              const totalVersions = history.length + 1;
-
-              return [
-                <TableRow
-                  key={rule.code}
-                  hover
-                  onClick={() => openShow(rule.code, rule.version)}
-                  sx={{ cursor: "pointer", "& td": { py: 1.5 } }}
-                >
-                  {/* Rule */}
-                  <TableCell sx={{ width: "38%" }}>
-                    <Stack direction="row" spacing={0} sx={{ alignItems: "flex-start" }}>
-                      <Box
-                        onClick={(e) => { e.stopPropagation(); toggle(rule.code); }}
-                        role="button"
-                        aria-label={open ? "Hide versions" : "Show versions"}
-                        sx={{
-                          width: 26, height: 26, mr: 0.5, display: "flex",
-                          alignItems: "center", justifyContent: "center",
-                          borderRadius: 1, cursor: "pointer", color: "text.secondary",
-                          "&:hover": { bgcolor: "action.hover" },
-                        }}
-                      >
-                        {open ? (
-                          <ExpandMoreIcon fontSize="small" />
-                        ) : (
-                          <ChevronRightIcon fontSize="small" />
-                        )}
-                      </Box>
-
-                      <Box sx={{ minWidth: 0 }}>
-                        <Stack direction="row" spacing={0.75} sx={{ alignItems: "baseline" }}>
-                          <Typography
-                            variant="body2"
-                            sx={{ fontFamily: "monospace", fontWeight: 700 }}
-                          >
-                            {rule.code}
-                          </Typography>
-                          <Typography variant="caption" sx={{ color: "text.secondary" }}>
-                            {rule.entity}
-                          </Typography>
-                          {totalVersions > 1 && (
-                            <Typography variant="caption" sx={{ color: "text.secondary" }}>
-                              · {totalVersions} versions
-                            </Typography>
-                          )}
-                        </Stack>
-                        <Typography variant="body2" noWrap sx={{ color: "text.secondary" }}>
-                          {rule.name}
-                        </Typography>
-                      </Box>
-                    </Stack>
-                  </TableCell>
-
-                  {/* Severity */}
-                  <TableCell>
-                    <DotLabel value={rule.severity} tone={severityColor[rule.severity] ?? "default"} />
-                  </TableCell>
-
-                  {/* State */}
-                  <TableCell>
-                    <RuleStateCell record={rule} />
-                  </TableCell>
-
-                  {/* Schedule */}
-                  <TableCell>
-                    <ScheduleSummary schedules={scheduleIndex[rule.code] ?? []} />
-                  </TableCell>
-
-                  {/* Actions */}
-                  <TableCell align="right" onClick={(e) => e.stopPropagation()}>
-                    <Stack direction="row" spacing={0} sx={{ justifyContent: "flex-end" }}>
-                      <ActionIcon
-                        title="Run this rule now"
-                        color="primary"
-                        icon={<PlayArrowIcon fontSize="small" />}
-                        onClick={() => setRunFor(rule)}
-                      />
-                      <ActionIcon
-                        title={mayWrite ? "Edit rule" : "Editing needs the rules.write capability"}
-                        icon={<EditIcon fontSize="small" />}
-                        disabled={!mayWrite}
-                        onClick={() => openEdit(rule.code)}
-                      />
-                      <ActionIcon
-                        title={mayDelete ? "Delete rule" : "Deleting needs the rules.delete capability"}
-                        icon={<DeleteOutlinedIcon fontSize="small" />}
-                        color="error"
-                        disabled={!mayDelete}
-                        onClick={() => setDeleteFor(rule)}
-                      />
-                    </Stack>
-                  </TableCell>
-                </TableRow>,
-
-                ...(open
-                  ? history.map((v) => (
-                      <TableRow
-                        key={`${rule.code}-v${v.version}`}
-                        hover
-                        onClick={() => openShow(rule.code, v.version)}
-                        sx={{ cursor: "pointer", bgcolor: "#fafbfe", "&:hover": { bgcolor: "#f4f7fc" } }}
-                      >
-                        <TableCell sx={{ pl: 6, py: 1 }}>
-                          <Stack direction="row" spacing={1} sx={{ alignItems: "baseline" }}>
-                            <Typography
-                              variant="body2"
-                              sx={{ fontFamily: "monospace", fontWeight: 700, color: "text.secondary" }}
-                            >
-                              v{v.version}
-                            </Typography>
-                            <Typography variant="body2" noWrap>
-                              {v.change_note || "(no note)"}
-                            </Typography>
-                            <Typography variant="caption" noWrap sx={{ color: "text.secondary" }}>
-                              · {v.created_by} · {new Date(v.created_at).toLocaleDateString()}
-                            </Typography>
-                          </Stack>
-                        </TableCell>
-                        <TableCell>
-                          <DotLabel value={v.severity}
-                            tone={severityColor[v.severity] ?? "default"} />
-                        </TableCell>
-                        <TableCell>
-                          <RuleStateCell record={v} />
-                        </TableCell>
-                        <TableCell />
-                        <TableCell align="right">
-                          <Stack direction="row" spacing={0} sx={{ justifyContent: "flex-end" }}>
-                            <ActionIcon
-                              title="Open this version"
-                              icon={<VisibilityIcon fontSize="small" />}
-                              onClick={() => openShow(rule.code, v.version)}
-                            />
-                          </Stack>
-                        </TableCell>
-                      </TableRow>
-                    ))
-                  : []),
-              ];
-            })}
-          </TableBody>
-        </Table>
-      </TableContainer>
+      <RuleRowContext.Provider
+        value={{ schedules, run: setRunFor, remove: setDeleteFor }}
+      >
+        <Datagrid
+          // A rule page is addressed by code and version. Building the path
+          // here is what keeps the list's own filter, page and sort out of it.
+          rowClick={(_id, _resource, record) =>
+            ruleShowPath(record.code, record.version)
+          }
+          bulkActionButtons={false}
+          size="small"
+          sx={listTableSx(RULE_WIDTHS)}
+          empty={
+            <Box sx={{ p: 6, textAlign: "center" }}>
+              <Typography variant="body1" sx={{ color: "text.secondary" }}>
+                No rules match these filters.
+              </Typography>
+            </Box>
+          }
+        >
+          <TextLike source="code" label="Rule" mono />
+          <TextLike source="name" label="Name" secondary />
+          <SeverityCell source="severity" label="Severity" />
+          <StateCell source="status" label="State" />
+          <ValidationCell source="validation_status" label="Validation" />
+          <ScheduleCell label="Schedule" />
+          <RuleActionsCell label="Actions" />
+        </Datagrid>
+      </RuleRowContext.Provider>
 
       <RunRuleDialog rule={runFor} onClose={() => setRunFor(null)} onDone={refresh} />
       <DeleteRuleDialog
@@ -2161,8 +1969,7 @@ export const RuleList = () => {
       // cannot quietly drop it and leave the list showing both clients.
       filter={{ entity }}
       sort={{ field: "code", order: "ASC" }}
-      perPage={10}
-      pagination={<Pagination rowsPerPageOptions={[10, 25, 50]} />}
+      pagination={<Pagination rowsPerPageOptions={[10, 25, 50, 100]} />}
     >
       <RuleTable />
     </List>

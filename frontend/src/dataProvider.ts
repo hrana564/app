@@ -637,19 +637,6 @@ export const api = {
 
   ruleVersions: (code: string) => request<any>(`/api/rules/${code}/versions`),
 
-  /**
-   * Every version of every rule, metadata only.
-   *
-   * The list endpoint is used deliberately rather than /versions: RuleOut
-   * omits `source_code`, while RuleVersionOut embeds the full source of every
-   * version in the tree. One call therefore gives the rules screen its whole
-   * drill-down history without downloading every rule's code.
-   */
-  allRuleVersions: () =>
-    request<{ data: any[]; total: number }>(
-      "/api/rules?all_versions=true&perPage=500&sort=code&order=ASC",
-    ),
-
   testRule: (code: string, data_date: string | null) =>
     request<any>(`/api/rules/${code}/test`, {
       method: "POST",

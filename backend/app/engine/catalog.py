@@ -87,9 +87,6 @@ class DatabaseCatalog:
     def entries_for(self, entity: str) -> Sequence[CatalogEntry]:
         return tuple(self._by_entity.get(entity.upper(), ()))
 
-    def all_entries(self) -> Sequence[CatalogEntry]:
-        return tuple(e for rows in self._by_entity.values() for e in rows)
-
 
 class SnapshotCatalog:
     """What one frozen run was given, read from its manifest.

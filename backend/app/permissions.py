@@ -139,10 +139,6 @@ def capabilities_for_user(user: "User") -> frozenset[str]:
     return capabilities_for(user.role)
 
 
-def has_capability(user: "User", capability: str) -> bool:
-    return capability in capabilities_for_user(user)
-
-
 def permissions_list(role: str) -> list[str]:
     """The capabilities a role holds, sorted, for the wire.
 

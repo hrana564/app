@@ -518,7 +518,6 @@ export interface RuleExplanation {
   cap: number | null;
   cannot_explain: { n: number; reason: string }[];
   gates: ExplanationGate[];
-  probe: { matches?: boolean; why?: string; model?: string } | null;
   generated_by: string;
   model: string;
   prompt_version: string;
@@ -560,8 +559,6 @@ export const api = {
    */
   dashboard: (entity?: string, windowDays?: number) =>
     request<any>(`/api/dashboard${qs({ entity, window: windowDays })}`),
-
-  health: () => request<any>("/health"),
 
   /**
    * Flat ticket list, for the ungrouped inbox view.
@@ -727,11 +724,10 @@ export const api = {
       { method: "POST", body: JSON.stringify({ approved, note }) },
     ),
 
-  rerun: (id: number | string) => request<any>(`/api/runs/${id}/rerun`, { method: "POST" }),
+  rerun: (id: number | string) =>
+    request<any>(`/api/rule-runs/${id}/rerun`, { method: "POST" }),
 
   generateStatus: () => request<any>("/api/rules/generate/status"),
-  generateContext: (entity: string) =>
-    request<any>(`/api/rules/generate/context?entity=${entity}`),
 
   /**
    * Ask for a rule, and get back one that has been run.
@@ -863,7 +859,6 @@ export const api = {
     }),
   deleteSchedule: (id: number) =>
     request<void>(`/api/rule-schedules/${id}`, { method: "DELETE" }),
-  schedulerJobs: () => request<any>("/api/rule-schedules/cron/jobs"),
 
   // --- users ---------------------------------------------------------------
   // The accounts, and the roles that decide what they may do. The list comes

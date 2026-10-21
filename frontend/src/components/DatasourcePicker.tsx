@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   Alert, Autocomplete, Box, Chip, CircularProgress, Stack, TextField,
-  Tooltip, Typography,
+  Typography,
 } from "@mui/material";
 import { api, type DatasourceRow } from "../dataProvider";
 import {

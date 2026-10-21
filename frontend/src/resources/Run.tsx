@@ -1,20 +1,19 @@
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import {
   Datagrid, List, Pagination, ShowBase,
   useNotify, useRecordContext,
 } from "react-admin";
 import {
-  Alert, Box, Button, Card, CardContent, Chip, CircularProgress, Stack,
+  Alert, Box, Card, CardContent, Chip, Stack,
   Tooltip, Typography, useTheme,
 } from "@mui/material";
 import ReplayIcon from "@mui/icons-material/Replay";
 import { api } from "../dataProvider";
 import {
-  IdField, JsonBlock, RowsTable, StatusField, ActionIcon,
+  IdField, JsonBlock, RowsTable, ActionIcon,
 } from "../components/ui";
 import { runOutcomeColor, runStatusColor, FONT } from "../theme";
 import { useEntityScope } from "../entityScope";
-import { ruleShowPath } from "../rulePaths";
 import { can, usePermissions } from "../permissions";
 
 /**
@@ -30,7 +29,7 @@ import { can, usePermissions } from "../permissions";
  * word boundary as a last resort. The full text stays on the tooltip and on
  * the run page.
  */
-export const shortenSummary = (text?: string | null, cap = 120): string => {
+const shortenSummary = (text?: string | null, cap = 120): string => {
   if (!text) return "";
   let s = text.split(/\.\s+/)[0];
   const lead = s.split(/\s+[-–—]\s+/)[0];
@@ -425,114 +424,3 @@ export const RunShow = () => (
   </ShowBase>
 );
 
-/* ================= Schedules (read-only overview across all rules) ========= */
-export const ScheduleList = () => (
-  <ScheduleOverview />
-);
-
-/**
- * A flat view of every schedule in the system, grouped by cadence label.
- * Editing happens on the rule page, where the cadence editor lives.
- */
-const ScheduleOverview = () => {
-  const [rows, setRows] = useState<any[] | null>(null);
-  const [jobs, setJobs] = useState<string[]>([]);
-  const [rules, setRules] = useState<Record<number, any>>({});
-  const notify = useNotify();
-
-  useEffect(() => {
-    let live = true;
-    api.listSchedules()
-      .then((d) => live && setRows(d.data ?? []))
-      .catch(() => live && setRows([]));
-    api.listRules()
-      .then((d) => {
-        if (!live) return;
-        const map: Record<number, any> = {};
-        d.data.forEach((x: any) => (map[x.id] = x));
-        setRules(map);
-      })
-      .catch(() => {});
-    api.schedulerJobs()
-      .then((j) => live && setJobs((j.jobs ?? []).map((x: any) => x.id)))
-      .catch(() => live && setJobs([]));
-    return () => { live = false; };
-  }, []);
-
-  if (!rows) return <CircularProgress size={24} />;
-
-  if (rows.length === 0) {
-    return (
-      <Alert severity="info">
-        No schedules configured. Open a rule and add a schedule to have it run
-        automatically.
-      </Alert>
-    );
-  }
-
-  return (
-    <Stack spacing={1.5}>
-      <Typography variant="body2" sx={{ color: "text.secondary" }}>
-        {rows.length} schedule{rows.length === 1 ? "" : "s"} across{" "}
-        {new Set(rows.map((r) => r.rule_code)).size} rule(s). A schedule only fires
-        while its rule is <strong>active</strong>.
-      </Typography>
-      {rows.map((s) => {
-        const rule = rules[s.rule_code];
-        const live = jobs.includes(`rule_schedule_${s.id}`);
-        return (
-          <Card key={s.id}>
-            <CardContent>
-              <Stack
-                direction="row"
-                sx={{ justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 1 }}
-              >
-                <Box>
-                  <Stack
-                    direction="row"
-                    spacing={1}
-                    sx={{ alignItems: "center", flexWrap: "wrap", gap: 1 }}
-                  >
-                    <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>
-                      {s.cadence_label}
-                    </Typography>
-                    {rule && (
-                      <Chip size="small" variant="outlined" label={rule.code} />
-                    )}
-                    {rule && (
-                      <Chip
-                        size="small"
-                        label={rule.status.toUpperCase()}
-                        color={rule.status === "active" ? "success" : "default"}
-                      />
-                    )}
-                    <Chip size="small" variant="outlined" label={s.timezone} />
-                    <Chip size="small" variant="outlined"
-                      label={s.data_lag_days === 1 ? "yesterday" : `${s.data_lag_days}d lag`} />
-                    <Chip
-                      size="small"
-                      label={live ? "REGISTERED" : "NOT SCHEDULED"}
-                      color={live ? "success" : "warning"}
-                    />
-                  </Stack>
-                  <Typography variant="caption" sx={{ color: "text.secondary" }}>
-                    next {s.next_run_relative ?? "unknown"}
-                    {s.last_run_at && ` · last ran ${new Date(s.last_run_at).toLocaleString()}`}
-                  </Typography>
-                  <Typography variant="caption" sx={{ display: "block", color: "#8d99ae", fontFamily: "monospace" }}>
-                    cron: {s.cron}
-                  </Typography>
-                </Box>
-                {rule && (
-                  <Button size="small" onClick={() => { window.location.hash = `#${ruleShowPath(rule.code ?? rule.id, rule.version)}`; }}>
-                    Open rule
-                  </Button>
-                )}
-              </Stack>
-            </CardContent>
-          </Card>
-        );
-      })}
-    </Stack>
-  );
-};

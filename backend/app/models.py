@@ -300,7 +300,6 @@ class RuleExplanation(Base, TimestampMixin):
     cannot_explain: Mapped[list[Any]] = mapped_column(JSONB, default=list, nullable=False)
     outputs: Mapped[list[Any]] = mapped_column(JSONB, default=list, nullable=False)
     cap: Mapped[int | None] = mapped_column(Integer)
-    numbers: Mapped[list[Any]] = mapped_column(JSONB, default=list, nullable=False)
 
     # --- who wrote it, and what checked it --------------------------------
     origin: Mapped[str] = mapped_column(String(16), default="derived", nullable=False)
@@ -308,7 +307,6 @@ class RuleExplanation(Base, TimestampMixin):
     prompt_version: Mapped[str] = mapped_column(String(16), default="")
     generated_by: Mapped[str] = mapped_column(String(64), default="")
     gates: Mapped[list[Any]] = mapped_column(JSONB, default=list, nullable=False)
-    probe: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
 
     # --- and who has read it ---------------------------------------------
     # The page says which of three things a reader is looking at. A model swap

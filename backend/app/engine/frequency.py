@@ -285,20 +285,6 @@ def describe(cadence: Cadence) -> str:
     return cadence.kind
 
 
-def validate(cadence: Cadence, timezone: str = DEFAULT_TIMEZONE) -> list[str]:
-    """Return human-readable problems. Empty list means usable."""
-    problems: list[str] = []
-    try:
-        to_cron(cadence)
-    except CadenceError as exc:
-        problems.append(str(exc))
-    try:
-        ZoneInfo(timezone)
-    except (ZoneInfoNotFoundError, ValueError, KeyError):
-        problems.append(f"unknown timezone {timezone!r}")
-    return problems
-
-
 def next_runs(
     cadence: Cadence,
     timezone: str = DEFAULT_TIMEZONE,

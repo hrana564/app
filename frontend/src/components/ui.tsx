@@ -52,11 +52,9 @@ export const EntityChip = ({ value }: { value?: string }) => {
 export const DotLabel = ({
   value,
   tone = "default",
-  hint,
 }: {
   value?: string | null;
   tone?: string;
-  hint?: string;
 }) => {
   const theme = useTheme();
   const palette = theme.palette as unknown as Record<string, { main?: string } | undefined>;
@@ -84,7 +82,7 @@ export const DotLabel = ({
       <Typography
         variant="body2"
         noWrap
-        title={hint ?? value}
+        title={value}
         sx={{ textTransform: "capitalize" }}
       >
         {value}
@@ -147,16 +145,11 @@ const chipsFor =
     return render({ value: (record ?? contextRecord)?.[source] });
   };
 
-export const SeverityField = fieldFromRecord((v) => <SeverityChip value={v} />);
 export const SeverityChipField = chipsFor((p) => <SeverityChip {...p} />);
-export const StatusField = fieldFromRecord((v) => <StatusChip value={v} />);
 export const StatusChipField = chipsFor((p) => <StatusChip {...p} />);
 export const EntityField = fieldFromRecord((v) => <EntityChip value={v} />);
 export const RowCountField = fieldFromRecord((v) => <RowCount value={v?.length} />);
 export const IdField = fieldFromRecord((v) => <RowCount value={v} />);
-export const BooleanDotField = fieldFromRecord((v) => (
-  <Chip size="small" label={v ? "ENABLED" : "DISABLED"} color={v ? "success" : "default"} />
-));
 
 /**
  * An icon action with a tooltip. Disabled actions stay in place and say why,

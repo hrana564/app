@@ -90,7 +90,7 @@ interface VersionRow {
  * be correct, or it may be too loose to catch anything. The screen says which
  * it cannot tell.
  */
-export const GenerateRuleDialog = () => {
+const GenerateRuleDialog = () => {
   const perms = usePermissions();
   const mayGenerate = can(perms, "rules.generate");
   const [open, setOpen] = useState(false);
@@ -707,7 +707,7 @@ const ScheduleSummary = ({ schedules }: { schedules: any[] }) => {
 /* ================================================================== */
 /* Run - asks first, then shows what happened                          */
 /* ================================================================== */
-export const RunRuleDialog = ({
+const RunRuleDialog = ({
   rule, onClose, onDone,
 }: {
   rule: any | null;
@@ -840,7 +840,7 @@ export const RunRuleDialog = ({
 /* ================================================================== */
 /* Delete - typed confirmation, and a way out when the API refuses     */
 /* ================================================================== */
-export const DeleteRuleDialog = ({
+const DeleteRuleDialog = ({
   rule, onClose, onDone,
 }: {
   rule: any | null;
@@ -1113,7 +1113,6 @@ const RuleDetails = ({ asked }: { asked?: number }) => {
   const [source, setSource] = useState("");
   const [versions, setVersions] = useState<any[]>([]);
   const [report, setReport] = useState<any>(null);
-  const [loading, setLoading] = useState(true);
   const [validating, setValidating] = useState(false);
   const [runOpen, setRunOpen] = useState(false);
   const [restoreOpen, setRestoreOpen] = useState(false);
@@ -1138,7 +1137,6 @@ const RuleDetails = ({ asked }: { asked?: number }) => {
 
   const load = () => {
     if (!record?.id) return;
-    setLoading(true);
     Promise.all([
       api.ruleSource(record.code, record.version),
       api.ruleVersions(record.code),
@@ -1149,8 +1147,7 @@ const RuleDetails = ({ asked }: { asked?: number }) => {
         setVersions(v ?? []);
         setReport(r);
       })
-      .catch(() => {})
-      .finally(() => setLoading(false));
+      .catch(() => {});
   };
 
   useEffect(load, [record?.code, record?.version, record?.validation_status]);
@@ -1700,6 +1697,11 @@ const RuleActivity = ({ ruleCode }: { ruleCode: string }) => {
               perPage={10}
               filterDefaultValues={{ rule_code: ruleCode }}
               pagination={<Pagination rowsPerPageOptions={[10, 25]} />}
+              // The address is about this rule, and it names the version. A
+              // list that syncs its filter, page and sort into the same address
+              // overwrites that with another screen's state, so a tab inside a
+              // page keeps its own.
+              disableSyncWithLocation
             >
               <Datagrid bulkActionButtons={false} rowClick="show" size="small"
                 sx={{

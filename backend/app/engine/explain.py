@@ -415,6 +415,19 @@ def _value_phrase(node: ast.AST, constants: dict[str, Any]) -> str:
     return "a value"
 
 
+def _is_place(node: ast.AST, constants: dict[str, Any]) -> bool:
+    """Something a row carries - a column, or a name holding one.
+
+    Not a literal and not a module constant. "the status is the same as the
+    exited" is what a value mistaken for a place sounds like.
+    """
+    if isinstance(node, ast.Name):
+        return node.id not in constants
+    if isinstance(node, (ast.Subscript, ast.Attribute)):
+        return True
+    return isinstance(node, ast.Call) and _call_name(node) == "col"
+
+
 def _predicate(node: ast.AST, constants: dict[str, Any]) -> str | None:
     """Translate a filter or test, or None when it is beyond this pass.
 
@@ -482,6 +495,14 @@ def _predicate(node: ast.AST, constants: dict[str, Any]) -> str | None:
                 # value already picked out of an earlier step, and naming the
                 # column twice says nothing. Say what it means instead.
                 return f"the {subject} is the one already found"
+
+            # Two columns compared for equality: `vendor_iban == employee_iban`.
+            # "the vendor iban is employee iban" is not a sentence, and plain
+            # "is" reads as a definition rather than a match.
+            if isinstance(node.ops[0], ast.Eq) and _is_place(left, constants) \
+                    and _is_place(right, constants):
+                other = value if value.startswith(("the ", "a ", "an ")) else f"the {value}"
+                return f"the {subject} is the same as {other}"
             return f"the {subject} {verb} {value}"
 
     # A bare column used as a flag: pl.col("is_void"), which polars treats as
@@ -868,6 +889,8 @@ def derive(source: str) -> Outline:
         outline.breach = _breach_sentence(_decision_phrase(decision, values))
     if outline.breach is None:
         outline.breach = _breach_sentence(_threshold_filter(run, values))
+    if outline.breach is None:
+        outline.breach = _breach_sentence(_guard_phrase(run, values))
 
     _collect_limits(tree, constants, numeric, outline)
     _collect_numbers(run, aliases, outline)
@@ -961,6 +984,35 @@ def _threshold_filter(run: ast.FunctionDef, values: dict[str, Any]) -> str | Non
         phrase = _predicate(subject, values)
         if phrase:
             return phrase
+    return None
+
+
+def _guard_phrase(run: ast.FunctionDef, values: dict[str, Any]) -> str | None:
+    """The condition stated by the guard in front of the accumulator.
+
+    A control that is an exact match has no tunable number to hang the verdict
+    on. `if the keys differ: continue` is the whole of it, and the complement of
+    that guard is the sentence - so the guard is read the same way a threshold
+    is, with `_decision_phrase` doing the turning.
+
+    Tried last: a number the author chose says what a breach is more directly
+    than a guard that skips.
+    """
+    for loop in (n for n in ast.walk(run) if isinstance(n, (ast.For, ast.While))):
+        appends = any(
+            isinstance(c, ast.Call) and _call_name(c) == "append"
+            for c in ast.walk(loop)
+        )
+        if not appends:
+            continue
+        for statement in loop.body:
+            if not isinstance(statement, ast.If) or not statement.body:
+                continue
+            if not isinstance(statement.body[-1], (ast.Continue, ast.Return)):
+                continue
+            phrase = _decision_phrase(statement, values)
+            if phrase:
+                return phrase
     return None
 
 

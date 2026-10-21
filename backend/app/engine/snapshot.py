@@ -133,9 +133,6 @@ class Snapshot:
         """Absolute paths of the files staged for one table."""
         return [self.root / f.rel for f in self.tables.get(table, [])]
 
-    def has_table(self, table: str) -> bool:
-        return bool(self.tables.get(table))
-
     @property
     def anchor_day_present(self) -> bool:
         return str(self.data_date) not in self.missing_days
@@ -348,12 +345,3 @@ def capture(
         f" [BLOCKED: {snap.blocking_problem()}]" if snap.blocking_problem() else "",
     )
     return snap
-
-
-def open_run(runs_dir: Path, run_id: int) -> Snapshot:
-    """Reopen a previously captured run folder for replay."""
-    return Snapshot(
-        run_id=run_id, root=Path(runs_dir) / f"{run_id:06d}",
-        entity="", data_date=date.today(), lookback_days=1,
-        rule_code="", rule_version=0, rule_source_file="",
-    ).reload()

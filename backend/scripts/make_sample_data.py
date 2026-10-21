@@ -482,9 +482,9 @@ def b_vendors(rng: random.Random, shared_ibans: list[str],
         vendor_id = f"VND-A{i:04d}"
         fake = _faker_for(f"VND-{vendor_id}")
         # The first three vendors are held in the bank accounts of the first
-        # three employees: that is the CA-22 / CA-23 control breach,
-        # and it is planted on BOTH the IBAN and the account holder name so
-        # either detection path finds it.
+        # three employees: that is the CA-22 / CA-23 control breach. The account
+        # holder name is the employee's too, because that is what a diverted
+        # payment instruction looks like; the control itself decides on the IBAN.
         breach = i <= len(shared_ibans)
         iban = shared_ibans[i - 1] if breach else _iban(rng, f"AE5{i:05d}")
         account_name = (

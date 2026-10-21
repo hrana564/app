@@ -86,12 +86,3 @@ def write_source(source_file: str, code: str, rules_dir: Path | None = None) -> 
         raise ValueError("Refusing to write outside the rules directory")
     path.write_text(code, encoding="utf-8")
     return path
-
-
-def describe_module(module: Any) -> dict[str, Any]:
-    """Optional metadata a rule file may declare."""
-    return {
-        "name": getattr(module, "NAME", None),
-        "description": getattr(module, "DESCRIPTION", None),
-        "datasources": list(getattr(module, "DATASOURCES", []) or []),
-    }

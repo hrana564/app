@@ -487,7 +487,6 @@ def _explanation_out(
     prose = derived_prose(outline)
     origin = "derived"
     gates: list[GateOut] = []
-    probe = None
     meta = {
         "generated_by": "",
         "model": "",
@@ -508,7 +507,6 @@ def _explanation_out(
         }
         origin = row.origin
         gates = [GateOut(**g) for g in (row.gates or [])]
-        probe = row.probe
         meta = {
             "generated_by": row.generated_by,
             "model": row.model,
@@ -535,7 +533,6 @@ def _explanation_out(
         cap=prose.get("cap"),
         cannot_explain=list(prose.get("cannot_explain") or []),
         gates=gates,
-        probe=probe,
         **meta,
     )
 
@@ -582,16 +579,11 @@ async def generate_explanation(
          "lookback_days": rule.lookback_days},
     )
 
-    probe_result = None
     if prose is None:
         prose = derived_prose(outline)
         origin = "derived"
     else:
         origin = "ai"
-        if outline.breach:
-            probe_result = await run_in_threadpool(
-                explain_llm.probe, outline, source, prose
-            )
 
     values: dict[str, Any] = {
         "rule_code": rule.code,
@@ -603,13 +595,11 @@ async def generate_explanation(
         "cannot_explain": prose.get("cannot_explain") or outline.cannot_explain,
         "outputs": prose.get("outputs") or outline.outputs,
         "cap": prose.get("cap"),
-        "numbers": outline.numbers,
         "origin": origin,
         "model": model,
         "prompt_version": explain_llm.PROMPT_VERSION if origin == "ai" else "",
         "generated_by": user.username,
         "gates": [g.as_dict() for g in gates],
-        "probe": probe_result if origin == "ai" else None,
         # A new description has not been signed off, whatever the old one had.
         "reviewed_by": None,
         "reviewed_at": None,
@@ -670,13 +660,11 @@ async def edit_explanation(
         "cannot_explain": outline.cannot_explain,
         "outputs": outline.outputs,
         "cap": outline.cap,
-        "numbers": outline.numbers,
         "origin": "edited",
         "model": "",
         "prompt_version": "",
         "generated_by": user.username,
         "gates": [g.as_dict() for g in gates],
-        "probe": None,
         "reviewed_by": None,
         "reviewed_at": None,
     }

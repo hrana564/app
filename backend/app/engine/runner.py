@@ -151,7 +151,6 @@ async def execute_rule(
                 module,
                 data_date=data_date,
                 lookback_days=rule.lookback_days,
-                rule_name=rule.name,
                 registered=allowed,
                 snapshot=snap,
             )

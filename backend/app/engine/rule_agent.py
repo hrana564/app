@@ -304,7 +304,6 @@ def run_generation(
             traceback=trial_raw["traceback"],
             duration_ms=trial_raw["duration_ms"],
             referenced=trial_raw["referenced"],
-            declared=trial_raw["declared"],
             name=trial_raw["name"],
             description=trial_raw["description"],
         )

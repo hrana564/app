@@ -59,7 +59,7 @@ from typing import Any
 from app.engine.ctx import invoke_rule
 from app.engine.loader import load_rule_at
 from app.engine.snapshot import capture
-from app.engine.validation import declared_names, referenced_tables, scan_source
+from app.engine.validation import referenced_tables, scan_source
 from app.schemas import RuleResult
 from app.settings import settings
 
@@ -91,7 +91,6 @@ class TrialResult:
     traceback: str | None = None
     duration_ms: int = 0
     referenced: list[str] = field(default_factory=list)
-    declared: list[str] = field(default_factory=list)
     name: str | None = None
     description: str | None = None
 
@@ -111,7 +110,6 @@ class TrialResult:
             "traceback": self.traceback,
             "duration_ms": self.duration_ms,
             "referenced": self.referenced,
-            "declared": self.declared,
             "name": self.name,
             "description": self.description,
         }
@@ -140,7 +138,6 @@ def _run_within(module, *, data_date, lookback_days, registered, snapshot, timeo
         module,
         data_date=data_date,
         lookback_days=lookback_days,
-        rule_name="",
         registered=registered,
         snapshot=snapshot,
     )
@@ -175,7 +172,6 @@ def run_trial(
         return int((time.perf_counter() - started) * 1000)
 
     referenced = referenced_tables(source)
-    declared = declared_names(source)
 
     def fail(status: str, error: str, tb: str | None = None) -> TrialResult:
         return TrialResult(
@@ -185,7 +181,6 @@ def run_trial(
             traceback=tb,
             duration_ms=elapsed_ms(),
             referenced=referenced,
-            declared=declared,
         )
 
     # --- the gate, before anything is executed --------------------------
@@ -304,7 +299,6 @@ def run_trial(
                 ),
                 duration_ms=elapsed_ms(),
                 referenced=referenced,
-                declared=declared,
             )
 
         rows = result.rows[: settings.max_rows_in_ticket]
@@ -321,7 +315,6 @@ def run_trial(
             metrics=result.metrics,
             duration_ms=elapsed_ms(),
             referenced=referenced,
-            declared=declared,
             name=getattr(module, "NAME", None),
             description=getattr(module, "DESCRIPTION", None),
         )

@@ -135,7 +135,6 @@ def replay(folder: Path, *, save_to: str | None = None) -> int:
         ctx = RuleContext(
             data_date=snap.data_date,
             lookback_days=snap.lookback_days,
-            rule_name=snap.rule_code,
             registered=sorted(frozen.names_for(snap.entity)),
             snapshot=snap,
         )

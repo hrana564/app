@@ -272,18 +272,6 @@ async def overview(
     )
 
 
-@router.get("/discovered")
-async def discovered(
-    _user: DatasourceReader, entity: str | None = None, data_date: str | None = None
-) -> list[Any]:
-    """Only what is on disk, for the register picker."""
-    code = (entity or default_entity()).upper()
-    day = data_date or latest_date(code)
-    if not day:
-        return []
-    return discover(code, day)
-
-
 # ---------------------------------------------------------------------------
 # Writing - the admin's actual job
 # ---------------------------------------------------------------------------

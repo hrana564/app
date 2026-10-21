@@ -38,7 +38,6 @@ from app.schemas import (
     CadenceOption,
     CadencePreviewRequest,
     CadencePreviewResponse,
-    RuleStatus,
     ScheduleCreate,
     ScheduleOut,
     ScheduleUpdate,
@@ -83,7 +82,6 @@ async def cadence_options(_user: ScheduleReader) -> dict:
         "weekday_names": WEEKDAY_NAMES,
         "hourly_intervals": VALID_HOURLY_INTERVALS,
         "max_day_of_month": MAX_DAY_OF_MONTH,
-        "rule_statuses": ["draft", "active", "paused", "retired"],
     }
 
 

@@ -428,11 +428,9 @@ def main() -> int:
                      "/api/rule-schedules", "/api/datasources"):
             check(f"a viewer may read {path}", c.get(path, headers=vh).status_code == 200)
 
-        # The two datasource reads that took no dependency at all.
+        # The datasource read that took no dependency at all.
         check("available-dates needs a session",
               c.get("/api/datasources/available-dates").status_code == 401)
-        check("discovered needs a session",
-              c.get("/api/datasources/discovered").status_code == 401)
 
         section("user management")
 
@@ -598,7 +596,7 @@ def main() -> int:
         landed = {d["name"] for d in ov["discovered"]}
         registered = {d["name"]: d for d in ov["registered"]}
         check("every landed file is classified",
-              all(d["state"] in ("new", "registered", "retired") for d in ov["discovered"]))
+              all(d["state"] in ("new", "registered") for d in ov["discovered"]))
         check("landing status is reported per table",
               all(d["landing"] in ("landed", "absent") for d in ov["registered"]))
         check("a landed registered table reports its row count",
@@ -1660,6 +1658,16 @@ def main() -> int:
         check("nothing is called stale while it still matches",
               got.get("stale") is False, str(got.get("stale")))
 
+        # A control whose verdict is an exact match has no threshold to hang a
+        # sentence on, so the condition has to come from the comparison itself.
+        # This rule's page read "the score is at least 92" once — a number and a
+        # variable, naming neither of the two things being compared.
+        joined = c.get(f"/api/rules/{filed_code('CA-22')}/explain", headers=ah)
+        condition = (joined.json().get("breach_condition") or ""
+                     if joined.status_code == 200 else "")
+        check("an exact-match control says what it matches on",
+              bool(condition.strip()) and "iban" in condition.lower(), condition)
+
         # Reading costs nothing and must not write. A GET that quietly stored
         # its own answer would make the page's provenance line a fiction.
         again = c.get(f"/api/rules/{code}/explain", headers=ah).json()
@@ -1688,6 +1696,17 @@ def main() -> int:
         check("a refused edit changed nothing",
               after.get("breach_condition") == before,
               f"{before!r} -> {after.get('breach_condition')!r}")
+
+        # An edit that keeps every step, in the derivation's own words, is
+        # stored - and it is what the sign-off below signs. A database built by
+        # the reset recipe holds no description until somebody writes one, and
+        # until then the review has nothing to approve.
+        kept = c.put(f"/api/rules/{code}/explain", headers=ah, json={
+            "breach_condition": before,
+            "steps": [{"n": s["n"], "text": s["text"]} for s in steps],
+        })
+        check("an edit that keeps every step is stored", kept.status_code == 200,
+              f"{kept.status_code} {kept.text[:160]}")
 
         # The person who signs the control off is not always the person who
         # wrote it, so the capability is its own. A viewer reads the estate but

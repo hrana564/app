@@ -60,7 +60,7 @@ const type = (t: string) => (t ?? "").toUpperCase();
 const VALUE_WORDS =
   /value|amount|total|sum|qty|quantity|price|cost|salary|balance|turnover|revenue/i;
 
-export const valueColumn = (t: PromptTable): string | undefined => {
+const valueColumn = (t: PromptTable): string | undefined => {
   const numeric = Object.entries(t.columns ?? {}).filter(([, ty]) =>
     NUMERIC.has(type(ty)),
   );
@@ -72,7 +72,7 @@ export const valueColumn = (t: PromptTable): string | undefined => {
 };
 
 /** "one row per invoice" -> "invoice". Used to phrase a finding's grain. */
-export const grainNoun = (g: string): string => {
+const grainNoun = (g: string): string => {
   const m = /one row per (.+)$/i.exec((g ?? "").trim());
   return m ? m[1].trim() : (g || "record");
 };
@@ -154,7 +154,7 @@ export const TEMPLATES: ProgrammeTemplate[] = [
   },
 ];
 
-export const templateById = (id: TemplateId): ProgrammeTemplate =>
+const templateById = (id: TemplateId): ProgrammeTemplate =>
   TEMPLATES.find((t) => t.id === id) ?? TEMPLATES[0];
 
 /**

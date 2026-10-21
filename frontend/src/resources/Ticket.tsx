@@ -526,7 +526,7 @@ const GroupedInbox = ({
 };
 
 /* ------------------------------------------------------------------ */
-const FlatInbox = ({ tickets, total }: { tickets: any[]; total: number }) => {
+const FlatInbox = ({ tickets }: { tickets: any[] }) => {
   const navigate = useNavigate();
   return (
     <>
@@ -835,7 +835,7 @@ export const TicketList = () => {
                   totalTickets={data?.total_tickets ?? 0} expanded={expanded}
                   onToggle={onToggle} onToggleAll={onToggleAll} onBulk={onBulk} />
               ) : (
-                <FlatInbox tickets={tickets} total={data?.total ?? 0} />
+                <FlatInbox tickets={tickets} />
               )}
             </Table>
           </TableContainer>

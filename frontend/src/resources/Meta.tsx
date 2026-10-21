@@ -5,14 +5,13 @@ import {
   Stack, Table, TableBody, TableCell, TableContainer, TableHead, TableRow,
   TextField, ToggleButton, ToggleButtonGroup, Tooltip, Typography,
 } from "@mui/material";
-import BlockOutlinedIcon from "@mui/icons-material/BlockOutlined";
 import CheckCircleOutlinedIcon from "@mui/icons-material/CheckCircleOutlined";
 import DeleteOutlinedIcon from "@mui/icons-material/DeleteOutlined";
 import ErrorOutlinedIcon from "@mui/icons-material/ErrorOutlined";
 import LockOutlinedIcon from "@mui/icons-material/LockOutlined";
 import StorageIcon from "@mui/icons-material/Storage";
 import { useNotify } from "react-admin";
-import { EntityChip, RowsTable } from "../components/ui";
+import { RowsTable } from "../components/ui";
 import {
   api,
   type DatasourceOverview,

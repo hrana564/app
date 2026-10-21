@@ -891,7 +891,6 @@ rule that produced them, so those endpoints join to reach it — that join lives
 | GET | `/api/datasources` | `datasources.read` | Registered tables (+ `?entity=`) |
 | GET | `/api/datasources/entities` | `datasources.read` | The two entities and their systems |
 | GET | `/api/datasources/overview?entity=&data_date=` | `datasources.read` | **One call** — registered tables, what the ETL delivered, and which rules read each |
-| GET | `/api/datasources/discovered?entity=&data_date=` | `datasources.read` | Just what is on disk, read from the CSV headers |
 | GET | `/api/datasources/preview?entity=&name=&data_date=&limit=10` | `datasources.read` | First rows of one landed file, plus the file's true row count |
 | GET | `/api/datasources/available-dates?entity=CLIENT-A` | `datasources.read` | Day folders present, plus the latest |
 | POST | `/api/datasources` | `datasources.write` | Register a table. Columns default to the file's header |

@@ -49,28 +49,6 @@ export type Permission =
  */
 export type Role = "admin" | "manager" | "auditor" | "viewer";
 
-/** The full vocabulary, in the order the server sends it. */
-export const PERMISSIONS: Permission[] = [
-  "rules.read",
-  "rules.test",
-  "rules.write",
-  "rules.activate",
-  "rules.delete",
-  "rules.generate",
-  "rules.explain_review",
-  "schedules.read",
-  "schedules.write",
-  "runs.read",
-  "runs.rerun",
-  "tickets.read",
-  "tickets.acknowledge",
-  "datasources.read",
-  "datasources.write",
-  "assurance.read",
-  "users.read",
-  "users.write",
-];
-
 /**
  * The capabilities the signed-in user holds.
  *
@@ -87,7 +65,7 @@ export const heldPermissions = (): Permission[] => {
 };
 
 /** The cached account, or null when nobody is signed in. */
-export const heldUser = (): UserRow | null => {
+const heldUser = (): UserRow | null => {
   const cached = getStoredUser();
   return cached && cached.id ? (cached as UserRow) : null;
 };
@@ -165,7 +143,7 @@ const RESOURCE_ACTIONS: Record<string, Partial<Record<string, Permission>>> = {
 };
 
 /** The capability that guards one action on one resource, if any does. */
-export const permissionFor = (
+const permissionFor = (
   action: string,
   resource: string,
 ): Permission | undefined => RESOURCE_ACTIONS[resource]?.[action];

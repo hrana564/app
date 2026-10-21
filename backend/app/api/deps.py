@@ -81,20 +81,6 @@ def require(*capabilities: str):
     return _dependency
 
 
-def list_filters(params: dict[str, list[str] | None] | dict) -> dict:
-    """Flatten FastAPI query params, dropping None and list wrappers."""
-    out: dict = {}
-    for key, value in params.items():
-        if value is None:
-            continue
-        if isinstance(value, list):
-            if not value:
-                continue
-            value = value[0]
-        out[key] = value
-    return out
-
-
 async def user_by_username(session: AsyncSession, username: str) -> User | None:
     return (
         await session.execute(select(User).where(User.username == username))
@@ -106,7 +92,6 @@ __all__ = [
     "CurrentUser",
     "get_current_user",
     "require",
-    "list_filters",
     "user_by_username",
     "UserOut",
 ]

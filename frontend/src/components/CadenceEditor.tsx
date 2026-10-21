@@ -9,9 +9,8 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   Alert, Box, Button, Checkbox, CircularProgress, FormControlLabel, Grid,
-  ListItemText, MenuItem, Stack, TextField, Typography, Divider, Chip,
+  MenuItem, Stack, TextField, Typography, Divider, Chip,
 } from "@mui/material";
-import RefreshIcon from "@mui/icons-material/Refresh";
 import { api } from "../dataProvider";
 
 export interface CadenceConfig {

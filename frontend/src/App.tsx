@@ -1,7 +1,6 @@
 import { Admin, CustomRoutes, Resource } from "react-admin";
 import { Navigate, Route } from "react-router";
 import RuleIcon from "@mui/icons-material/Rule";
-import ScheduleIcon from "@mui/icons-material/Schedule";
 import PlayCircleIcon from "@mui/icons-material/PlayCircle";
 import ReportProblemIcon from "@mui/icons-material/ReportProblem";
 import StorageIcon from "@mui/icons-material/Storage";

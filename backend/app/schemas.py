@@ -258,7 +258,7 @@ class DatasourceDiscovered(BaseModel):
     row_count: int
     size_bytes: int
     modified_at: datetime
-    state: str                        # new | registered | retired
+    state: str                        # new | registered
 
 
 class DatasourceOverview(BaseModel):
@@ -649,7 +649,6 @@ class ExplanationOut(BaseModel):
     cap: int | None = None
     cannot_explain: list[dict[str, Any]]
     gates: list[GateOut]
-    probe: dict[str, Any] | None = None
 
     generated_by: str = ""
     model: str = ""

@@ -51,14 +51,12 @@ class RuleContext:
         *,
         data_date: date,
         lookback_days: int = 1,
-        rule_name: str = "",
         registered: list[str] | None = None,
         snapshot: Any = None,
     ):
         self.date = data_date
         # How far back from `date` this rule reads: 1 = that day, 5 = T-5 to T.
         self.lookback_days = lookback_days
-        self.rule_name = rule_name
         self._registered = registered or []
         self._logs: list[str] = []
         self._snapshot = snapshot
@@ -126,7 +124,6 @@ def invoke_rule(
     *,
     data_date: date,
     lookback_days: int,
-    rule_name: str = "",
     registered: list[str] | None = None,
     snapshot: Any = None,
 ) -> tuple[dict[str, Any], list[str]]:
@@ -140,7 +137,6 @@ def invoke_rule(
     ctx = RuleContext(
         data_date=data_date,
         lookback_days=lookback_days,
-        rule_name=rule_name,
         registered=registered,
         snapshot=snapshot,
     )

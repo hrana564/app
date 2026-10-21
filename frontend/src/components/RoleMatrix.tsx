@@ -95,113 +95,105 @@ export const RoleMatrix = ({ matrix }: { matrix: RoleMatrixData }) => {
         </Typography>
       </Stack>
 
-      <TableContainerForThisTable>
-        <Table size="small" sx={{ tableLayout: "fixed" }}>
-          <TableHead>
-            <TableRow>
-              <TableCell sx={{ width: "46%", whiteSpace: "normal" }}>
-                What may be done
-              </TableCell>
-              {matrix.roles.map((role) => (
-                <TableCell
-                  key={role.name}
-                  align="center"
-                  sx={{
-                    width: `${54 / matrix.roles.length}%`,
-                    whiteSpace: "normal",
-                    verticalAlign: "bottom",
-                    // The column you are standing in, so your own row of ticks
-                    // can be found without counting across from the left.
-                    bgcolor: role.name === mine ? "#eef4fd" : undefined,
-                  }}
-                >
-                  <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>
-                    {role.label}
-                    {role.name === mine && (
-                      <Typography
-                        component="span"
-                        variant="caption"
-                        sx={{ display: "block", color: "primary.main", fontWeight: 700 }}
-                      >
-                        you
-                      </Typography>
-                    )}
-                  </Typography>
-                  <Typography
-                    variant="caption"
-                    sx={{ display: "block", color: "text.secondary", fontWeight: 400 }}
-                  >
-                    {role.capabilities.length} of {matrix.capabilities.length}
-                  </Typography>
+      {/* The scroll shell: a five-column table fits a laptop, but the
+          capability column carries two lines of label and the role columns
+          need room for their counts, so it scrolls sideways rather than
+          wrapping its cells into ragged heights. */}
+      <Card sx={{ overflow: "hidden" }}>
+        <Box sx={{ overflow: "auto" }}>
+          <Table size="small" sx={{ tableLayout: "fixed" }}>
+            <TableHead>
+              <TableRow>
+                <TableCell sx={{ width: "46%", whiteSpace: "normal" }}>
+                  What may be done
                 </TableCell>
-              ))}
-            </TableRow>
-          </TableHead>
-          <TableBody>
-            {blocks.map((block) => (
-              <Fragment key={block.label}>
-                <TableRow sx={{ bgcolor: "#f7f9fc" }}>
-                  <TableCell colSpan={matrix.roles.length + 1} sx={{ py: 0.75 }}>
+                {matrix.roles.map((role) => (
+                  <TableCell
+                    key={role.name}
+                    align="center"
+                    sx={{
+                      width: `${54 / matrix.roles.length}%`,
+                      whiteSpace: "normal",
+                      verticalAlign: "bottom",
+                      // The column you are standing in, so your own row of ticks
+                      // can be found without counting across from the left.
+                      bgcolor: role.name === mine ? "#eef4fd" : undefined,
+                    }}
+                  >
+                    <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>
+                      {role.label}
+                      {role.name === mine && (
+                        <Typography
+                          component="span"
+                          variant="caption"
+                          sx={{ display: "block", color: "primary.main", fontWeight: 700 }}
+                        >
+                          you
+                        </Typography>
+                      )}
+                    </Typography>
                     <Typography
-                      variant="overline"
-                      sx={{ color: "#5b6b82", fontWeight: 700, letterSpacing: 1 }}
+                      variant="caption"
+                      sx={{ display: "block", color: "text.secondary", fontWeight: 400 }}
                     >
-                      {block.label}
+                      {role.capabilities.length} of {matrix.capabilities.length}
                     </Typography>
                   </TableCell>
-                </TableRow>
-                {block.rows.map((capability) => (
-                  <TableRow key={capability.name} hover>
-                    <TableCell sx={{ verticalAlign: "middle" }}>
-                      <Typography variant="body2" sx={{ lineHeight: 1.35 }}>
-                        {capability.label}
-                      </Typography>
+                ))}
+              </TableRow>
+            </TableHead>
+            <TableBody>
+              {blocks.map((block) => (
+                <Fragment key={block.label}>
+                  <TableRow sx={{ bgcolor: "#f7f9fc" }}>
+                    <TableCell colSpan={matrix.roles.length + 1} sx={{ py: 0.75 }}>
                       <Typography
-                        variant="caption"
-                        sx={{
-                          display: "block",
-                          color: "text.secondary",
-                          fontFamily: "monospace",
-                          fontSize: FONT.label,
-                          lineHeight: 1.4,
-                        }}
+                        variant="overline"
+                        sx={{ color: "#5b6b82", fontWeight: 700, letterSpacing: 1 }}
                       >
-                        {capability.name}
+                        {block.label}
                       </Typography>
                     </TableCell>
-                    {matrix.roles.map((role) => (
-                      <TableCell
-                        key={role.name}
-                        align="center"
-                        sx={{
-                          bgcolor: role.name === mine ? "#eef4fd" : undefined,
-                          "&:hover": { bgcolor: role.name === mine ? "#e6effc" : "#f7faff" },
-                        }}
-                      >
-                        <HoldMark holds={role.capabilities.includes(capability.name)} />
-                      </TableCell>
-                    ))}
                   </TableRow>
-                ))}
-              </Fragment>
-            ))}
-          </TableBody>
-        </Table>
-      </TableContainerForThisTable>
+                  {block.rows.map((capability) => (
+                    <TableRow key={capability.name} hover>
+                      <TableCell sx={{ verticalAlign: "middle" }}>
+                        <Typography variant="body2" sx={{ lineHeight: 1.35 }}>
+                          {capability.label}
+                        </Typography>
+                        <Typography
+                          variant="caption"
+                          sx={{
+                            display: "block",
+                            color: "text.secondary",
+                            fontFamily: "monospace",
+                            fontSize: FONT.label,
+                            lineHeight: 1.4,
+                          }}
+                        >
+                          {capability.name}
+                        </Typography>
+                      </TableCell>
+                      {matrix.roles.map((role) => (
+                        <TableCell
+                          key={role.name}
+                          align="center"
+                          sx={{
+                            bgcolor: role.name === mine ? "#eef4fd" : undefined,
+                            "&:hover": { bgcolor: role.name === mine ? "#e6effc" : "#f7faff" },
+                          }}
+                        >
+                          <HoldMark holds={role.capabilities.includes(capability.name)} />
+                        </TableCell>
+                      ))}
+                    </TableRow>
+                  ))}
+                </Fragment>
+              ))}
+            </TableBody>
+          </Table>
+        </Box>
+      </Card>
     </Box>
   );
 };
-
-/**
- * The scroll shell.
- *
- * A five-column table fits a laptop, but the capability column carries two
- * lines of label and the role columns need room for their counts - so it is
- * allowed to scroll sideways rather than wrapping its cells into ragged
- * heights.
- */
-const TableContainerForThisTable = ({ children }: { children: React.ReactNode }) => (
-  <Card sx={{ overflow: "hidden" }}>
-    <Box sx={{ overflow: "auto" }}>{children}</Box>
-  </Card>
-);

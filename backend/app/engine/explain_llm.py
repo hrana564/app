@@ -32,7 +32,6 @@ import logging
 import re
 from typing import Any
 
-from app.engine.catalog import Catalog
 from app.engine.explain import Gate, Outline, check, passed
 from app.engine.rule_generator import complete, is_configured
 from app.settings import settings

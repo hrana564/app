@@ -111,15 +111,6 @@ class Step:
     lines: tuple[int, int]
     explainable: bool = True
 
-    def as_dict(self) -> dict[str, Any]:
-        return {
-            "n": self.n,
-            "kind": self.kind,
-            "text": self.text,
-            "lines": list(self.lines),
-            "explainable": self.explainable,
-        }
-
 
 @dataclass
 class Outline:
@@ -143,19 +134,6 @@ class Outline:
             for s in self.steps
             if not s.explainable
         ]
-
-    def as_dict(self) -> dict[str, Any]:
-        return {
-            "title": self.title,
-            "purpose": self.purpose,
-            "tables": self.tables,
-            "steps": [s.as_dict() for s in self.steps],
-            "limits": self.limits,
-            "outputs": self.outputs,
-            "cap": self.cap,
-            "breach": self.breach,
-            "cannot_explain": self.cannot_explain,
-        }
 
 
 # ---------------------------------------------------------------------------
@@ -1253,8 +1231,6 @@ def derived_prose(outline: Outline) -> dict[str, Any]:
             {"n": s.n, "text": s.text, "lines": list(s.lines)}
             for s in outline.steps
         ],
-        "limits": outline.limits,
         "cannot_explain": outline.cannot_explain,
         "outputs": outline.outputs,
-        "cap": outline.cap,
     }

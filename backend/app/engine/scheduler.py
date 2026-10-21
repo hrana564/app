@@ -24,7 +24,6 @@ from apscheduler.jobstores.base import JobLookupError
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from sqlalchemy import select
-from sqlalchemy.orm import selectinload
 
 from app.db import SessionLocal
 from app.engine.frequency import Cadence, CadenceError, to_cron

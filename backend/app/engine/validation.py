@@ -227,16 +227,18 @@ class RuleValidator:
             "description": getattr(module, "DESCRIPTION", None),
             "entity": getattr(module, "ENTITY", None),
         }
-        # One derivation, shared with the write path, so what is validated
-        # and what is recorded can never disagree.
+        # One derivation, shared with the write path, so what is validated and
+        # what is recorded can never disagree - and one read of the file, since
+        # the declaration, the static scan and the tables it reads are three
+        # answers about one piece of text.
         try:
-            text = read_source(self.source_file, self.rules_dir)
+            text: str | None = read_source(self.source_file, self.rules_dir)
         except FileNotFoundError:
-            text = ""
-        result.declared_datasources = declared_tables(text)
+            text = None
+        result.declared_datasources = declared_tables(text or "")
 
         # --- 3: static scan of the source ----------------------------------
-        scan_errors, read_by_rule = self._scan_source()
+        scan_errors, read_by_rule = self._scan_source(text)
         result.errors.extend(scan_errors)
 
         # --- 4: datasources must exist for this entity --------------------
@@ -250,7 +252,7 @@ class RuleValidator:
         # every ctx.table() in the SQL, so this one list is the whole surface.
         # Checking only DATASOURCES would let a rule smuggle in a cross-entity
         # reference that otherwise fails only at run time.
-        if read_by_rule and not declared_names(text):
+        if read_by_rule and not declared_names(text or ""):
             result.warnings.append(
                 "rule uses ctx.table("
                 + ", ".join(f'"{t}"' for t in read_by_rule)
@@ -278,7 +280,7 @@ class RuleValidator:
             result.status = "invalid"
         return result
 
-    def _scan_source(self) -> tuple[list[str], list[str]]:
+    def _scan_source(self, source: str | None) -> tuple[list[str], list[str]]:
         """AST scan for banned imports/calls, and collect ctx.table("x") refs.
 
         Returns only what the scan is uniquely for - the problems. The table
@@ -287,9 +289,7 @@ class RuleValidator:
         from `scan_source()` so there is one implementation of what is allowed
         to run.
         """
-        try:
-            source = read_source(self.source_file, self.rules_dir)
-        except FileNotFoundError:
+        if source is None:
             return [f"source file {self.source_file} does not exist"], []
 
         return scan_source(source), referenced_tables(source)

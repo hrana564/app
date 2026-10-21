@@ -59,7 +59,7 @@ const isTrue = (label: string, value: boolean) => eq(label, value, true);
 
 // --- the real files ---------------------------------------------------------
 const template = readFileSync(resolve(RULES, "_template.py"), "utf8");
-const rule04 = readFileSync(resolve(RULES, ruleFile("CA-04", 4)), "utf8");
+const rule04 = readFileSync(resolve(RULES, ruleFile("CA-04", 1)), "utf8");
 
 console.log("=== reading the shipped rules ===");
 eq("template declares ipos_sales", readDeclaredDatasources(template), ["ipos_sales"]);

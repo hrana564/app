@@ -36,9 +36,6 @@ from app.engine.loader import load_rule_at
 from app.engine.snapshot import RULE_COPY_NAME, Snapshot
 from app.engine.ticketing import run_outcome_for, run_status_for
 
-_RULE_MARKER = '"""'
-
-
 def _resolve_folder(argument: str) -> Path:
     from app.settings import settings
 

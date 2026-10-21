@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import asyncio
 import argparse
-import json
 import shutil
 import sys
 from collections import defaultdict
@@ -31,7 +30,6 @@ if str(Path(__file__).resolve().parent) not in sys.path:
     sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from sqlalchemy import delete, func, select
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import SessionLocal, init_models
 from app.models import Run, Ticket

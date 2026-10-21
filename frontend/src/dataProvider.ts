@@ -481,12 +481,6 @@ export interface ExplanationStep {
   explainable: boolean;
 }
 
-export interface ExplanationLimit {
-  label: string;
-  constant: string;
-  value: number;
-}
-
 /** One check a description had to pass before it was shown. */
 export interface ExplanationGate {
   name: string;
@@ -513,9 +507,7 @@ export interface RuleExplanation {
   purpose: string;
   breach_condition: string;
   steps: ExplanationStep[];
-  limits: ExplanationLimit[];
   outputs: string[];
-  cap: number | null;
   cannot_explain: { n: number; reason: string }[];
   gates: ExplanationGate[];
   generated_by: string;

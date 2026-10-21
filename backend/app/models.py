@@ -296,10 +296,8 @@ class RuleExplanation(Base, TimestampMixin):
 
     breach_condition: Mapped[str] = mapped_column(Text, default="")
     steps: Mapped[list[Any]] = mapped_column(JSONB, default=list, nullable=False)
-    limits: Mapped[list[Any]] = mapped_column(JSONB, default=list, nullable=False)
     cannot_explain: Mapped[list[Any]] = mapped_column(JSONB, default=list, nullable=False)
     outputs: Mapped[list[Any]] = mapped_column(JSONB, default=list, nullable=False)
-    cap: Mapped[int | None] = mapped_column(Integer)
 
     # --- who wrote it, and what checked it --------------------------------
     origin: Mapped[str] = mapped_column(String(16), default="derived", nullable=False)

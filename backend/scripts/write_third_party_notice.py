@@ -37,8 +37,6 @@ from pathlib import Path
 # One source of truth. If the policy changes, it changes there and both scripts
 # follow.
 from check_licenses import (
-    BLOCKING,
-    PERMISSIVE,
     _license_from_classifier,
     classify,
 )

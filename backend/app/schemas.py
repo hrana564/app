@@ -613,12 +613,6 @@ class ExplanationStepOut(BaseModel):
     explainable: bool = True
 
 
-class ExplanationLimitOut(BaseModel):
-    label: str
-    constant: str
-    value: float
-
-
 class GateOut(BaseModel):
     """One check the words had to pass before they were shown."""
 
@@ -644,9 +638,7 @@ class ExplanationOut(BaseModel):
     purpose: str
     breach_condition: str
     steps: list[ExplanationStepOut]
-    limits: list[ExplanationLimitOut]
     outputs: list[str]
-    cap: int | None = None
     cannot_explain: list[dict[str, Any]]
     gates: list[GateOut]
 

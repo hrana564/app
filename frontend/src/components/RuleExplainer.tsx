@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert, Box, Button, ButtonBase, Card, CardContent, CircularProgress,
   Collapse, Dialog, DialogActions, DialogContent, DialogTitle, Divider,
-  LinearProgress, Stack, TextField, Tooltip, Typography,
+  LinearProgress, Stack, TextField, Typography,
 } from "@mui/material";
 import AutoAwesomeIcon from "@mui/icons-material/AutoAwesome";
 import CodeIcon from "@mui/icons-material/Code";
@@ -301,46 +301,10 @@ export const RuleExplainer = ({
               </Typography>
             </Box>
 
-            {/* The numbers the control is tuned with. The constant name is kept
-                as a caption rather than a label: the value is what a reader
-                decides on, and the identifier is what a maintainer edits. */}
-            {data.limits.length > 0 && (
-              <Box sx={{ mt: 2 }}>
-                <Typography
-                  variant="caption"
-                  sx={{
-                    display: "block", fontWeight: 700, letterSpacing: 0.6,
-                    textTransform: "uppercase", color: "text.secondary", mb: 0.75,
-                  }}
-                >
-                  The limits it applies
-                </Typography>
-                <Stack direction="row" sx={{ flexWrap: "wrap", gap: 1 }}>
-                  {data.limits.map((limit) => (
-                    <Tooltip key={limit.constant} title={`Set by ${limit.constant} in the rule file`}>
-                      <Box
-                        sx={{
-                          px: 1.25, py: 0.75, borderRadius: 1.25,
-                          bgcolor: "#f7f9fc", border: "1px solid #e9edf4",
-                        }}
-                      >
-                        <Typography sx={{ fontSize: "1rem", fontWeight: 700, lineHeight: 1.2 }}>
-                          {limit.label}
-                        </Typography>
-                        <Typography variant="caption" sx={{ color: "text.secondary" }}>
-                          {limit.constant}
-                        </Typography>
-                      </Box>
-                    </Tooltip>
-                  ))}
-                </Stack>
-              </Box>
-            )}
           </Box>
 
           {/* ---------------------------------------------------------- */}
           {/* The code, only when it has been asked for                   */}
-          {/* ---------------------------------------------------------- */}
           <Collapse in={showCode} timeout="auto" unmountOnExit sx={{ gridColumn: { xs: "auto", md: "2" } }}>
             <Box ref={codeRef} data-pane="code">
               {source ? (

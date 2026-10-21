@@ -29,6 +29,7 @@ from app.api.deps import SessionDep, require
 from app.engine import explain_llm
 from app.engine.catalog import database_catalog
 from app.engine.datasources import default_entity
+from app.engine.discovery import latest_date
 from app.engine.explain import check, derive, derived_prose, source_hash
 from app.engine.loader import read_source, write_source
 from app.engine.rule_generator import is_configured, preview_context
@@ -47,7 +48,6 @@ from app.permissions import (
 )
 from app.schemas import (
     ExplanationEdit,
-    ExplanationLimitOut,
     ExplanationOut,
     ExplanationReview,
     ExplanationStepOut,
@@ -474,6 +474,7 @@ def _explanation_out(
     row: RuleExplanation | None,
     *,
     stale: bool,
+    digest: str | None = None,
 ) -> ExplanationOut:
     """What the page is shown: always something true, and never stale words.
 
@@ -500,10 +501,8 @@ def _explanation_out(
         prose = {
             "breach_condition": row.breach_condition,
             "steps": row.steps,
-            "limits": row.limits,
             "cannot_explain": row.cannot_explain,
             "outputs": row.outputs,
-            "cap": row.cap,
         }
         origin = row.origin
         gates = [GateOut(**g) for g in (row.gates or [])]
@@ -520,7 +519,7 @@ def _explanation_out(
     return ExplanationOut(
         code=rule.code,
         version=rule.version,
-        source_sha256=source_hash(source),
+        source_sha256=digest or source_hash(source),
         origin=origin,
         stored=row is not None and not stale,
         stale=stale,
@@ -528,9 +527,7 @@ def _explanation_out(
         purpose=outline.purpose,
         breach_condition=prose.get("breach_condition") or outline.purpose,
         steps=[_step_out(s, derived) for s in prose.get("steps") or []],
-        limits=[ExplanationLimitOut(**l) for l in prose.get("limits") or []],
         outputs=list(prose.get("outputs") or []),
-        cap=prose.get("cap"),
         cannot_explain=list(prose.get("cannot_explain") or []),
         gates=gates,
         **meta,
@@ -551,8 +548,9 @@ async def get_explanation(
     source = _source_or_409(rule)
     outline = derive(source)
     row = await _stored(session, rule)
-    stale = row is not None and row.source_sha256 != source_hash(source)
-    return _explanation_out(rule, outline, source, row, stale=stale)
+    digest = source_hash(source)
+    stale = row is not None and row.source_sha256 != digest
+    return _explanation_out(rule, outline, source, row, stale=stale, digest=digest)
 
 
 @router.post("/{code}/explain", response_model=ExplanationOut)
@@ -591,10 +589,8 @@ async def generate_explanation(
         "source_sha256": digest,
         "breach_condition": prose.get("breach_condition") or "",
         "steps": prose.get("steps") or [],
-        "limits": prose.get("limits") or outline.limits,
         "cannot_explain": prose.get("cannot_explain") or outline.cannot_explain,
         "outputs": prose.get("outputs") or outline.outputs,
-        "cap": prose.get("cap"),
         "origin": origin,
         "model": model,
         "prompt_version": explain_llm.PROMPT_VERSION if origin == "ai" else "",
@@ -605,7 +601,7 @@ async def generate_explanation(
         "reviewed_at": None,
     }
     row = await _upsert(session, rule, values)
-    return _explanation_out(rule, outline, source, row, stale=False)
+    return _explanation_out(rule, outline, source, row, stale=False, digest=digest)
 
 
 @router.put("/{code}/explain", response_model=ExplanationOut)
@@ -649,17 +645,16 @@ async def edit_explanation(
 
     prose = {"breach_condition": payload.breach_condition, "steps": steps}
     gates = check(outline, prose, len(source.splitlines()))
+    digest = source_hash(source)
 
     values: dict[str, Any] = {
         "rule_code": rule.code,
         "version": rule.version,
-        "source_sha256": source_hash(source),
+        "source_sha256": digest,
         "breach_condition": payload.breach_condition,
         "steps": steps,
-        "limits": outline.limits,
         "cannot_explain": outline.cannot_explain,
         "outputs": outline.outputs,
-        "cap": outline.cap,
         "origin": "edited",
         "model": "",
         "prompt_version": "",
@@ -669,7 +664,7 @@ async def edit_explanation(
         "reviewed_at": None,
     }
     row = await _upsert(session, rule, values)
-    return _explanation_out(rule, outline, source, row, stale=False)
+    return _explanation_out(rule, outline, source, row, stale=False, digest=digest)
 
 
 @router.post("/{code}/explain/review", response_model=ExplanationOut)
@@ -694,7 +689,8 @@ async def review_explanation(
             status_code=404,
             detail="This rule has no description to sign off yet.",
         )
-    if row.source_sha256 != source_hash(source):
+    digest = source_hash(source)
+    if row.source_sha256 != digest:
         raise HTTPException(
             status_code=409,
             detail="The description is older than the code. Regenerate it, then "
@@ -705,7 +701,7 @@ async def review_explanation(
     row.reviewed_at = now() if payload.approved else None
     await session.commit()
     await session.refresh(row)
-    return _explanation_out(rule, outline, source, row, stale=False)
+    return _explanation_out(rule, outline, source, row, stale=False, digest=digest)
 
 
 async def _upsert(
@@ -1088,11 +1084,11 @@ async def test_rule(
 
 
 def _latest_data_date(entity: str | None = None) -> date:
-    base = settings.sourcedata_dir / (entity or default_entity()).upper()
-    if base.exists():
-        for name in reversed(sorted(p.name for p in base.iterdir() if p.is_dir())):
-            try:
-                return date.fromisoformat(name)
-            except ValueError:
-                continue
-    return date.today()
+    """The newest day we hold for a client, or today when we hold none.
+
+    The scan itself lives in `discovery.available_dates()`. Two implementations
+    of "which days exist" is how an endpoint and the Data Sources screen come to
+    disagree about the day they are showing.
+    """
+    found = latest_date(entity or default_entity())
+    return date.fromisoformat(found) if found else date.today()

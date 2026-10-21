@@ -32,7 +32,6 @@ from typing import Any
 
 log = logging.getLogger("abm.runner")
 
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.engine.ctx import invoke_rule
@@ -40,7 +39,7 @@ from app.engine.catalog import database_catalog
 from app.engine.loader import load_rule
 from app.engine.snapshot import capture
 from app.engine.ticketing import raise_ticket, run_outcome_for, run_status_for
-from app.models import Rule, Run, Ticket
+from app.models import Rule, Run
 from app.schemas import RuleResult
 from app.settings import settings
 

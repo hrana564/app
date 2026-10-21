@@ -745,7 +745,7 @@ const RunRuleDialog = ({
 
             <Alert severity="warning">
               This executes the rule against real staged data and is recorded as
-              a run. <strong>If it raises an observation, a ticket is opened.</strong> It
+              a run. <strong>If it finds something, a finding is raised.</strong> It
               is not a dry run.
             </Alert>
 
@@ -1651,7 +1651,7 @@ const RuleActivity = ({ ruleCode }: { ruleCode: string }) => {
           {(["runs", "tickets"] as const).map((t) => (
             <Button key={t} size="small" variant={tab === t ? "contained" : "outlined"}
               onClick={() => setTab(t)} sx={{ textTransform: "capitalize" }}>
-              {t === "runs" ? "Runs" : "Alerts raised"}
+              {t === "runs" ? "Runs" : "Findings raised"}
             </Button>
           ))}
         </Stack>
@@ -1724,7 +1724,7 @@ const TicketsForRule = ({ ruleCode }: { ruleCode: string }) => {
 
   if (!tickets) return <CircularProgress size={22} />;
   if (!tickets.length) {
-    return <Typography variant="body2" sx={{ color: "text.secondary" }}>This rule has not raised any alerts.</Typography>;
+    return <Typography variant="body2" sx={{ color: "text.secondary" }}>This rule has not raised any findings.</Typography>;
   }
   return (
     <Stack spacing={1}>

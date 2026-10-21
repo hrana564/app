@@ -42,7 +42,7 @@ const RESOURCES = (
       list={TicketList}
       show={TicketShow}
       icon={ReportProblemIcon}
-      options={{ label: "Ticket Inbox" }}
+      options={{ label: "Findings" }}
     />
     <Resource
       name="rules"

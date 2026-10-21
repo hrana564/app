@@ -23,6 +23,12 @@ from pathlib import Path
 import httpx
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from app.api.assurance import (  # noqa: E402
+    AGE_BUCKETS,
+    SEVERITY_ORDER,
+    bucket_of,
+    verdict,
+)
 from app.engine.rules import scoped_code  # noqa: E402
 from app.settings import settings  # noqa: E402
 
@@ -1367,6 +1373,50 @@ def main() -> int:
               == c.get("/api/tickets", headers=ah, params={"entity": FIRST}).json()["total"],
               str(dash_first["open"]))
 
+        # --- the verdict, as a rule rather than a colour ---------------------
+        # The rating is the first thing on the landing page and the one thing a
+        # head of audit will be asked to justify, so it is asserted as a rule:
+        # for each combination of the five facts that feed it, which rating
+        # comes out. A rating decided by anything else is a colour nobody can
+        # defend, and a green reached through an unrun control is the false
+        # clean the whole read model exists to refuse.
+        section("assurance verdict")
+        check("nothing open and nothing late is green",
+              verdict(critical_open=0, open_findings=0, overdue=0,
+                      not_assured=0, errored_latest=0)["rating"] == "green", "")
+        check("an open finding is at least amber",
+              verdict(critical_open=0, open_findings=1, overdue=0,
+                      not_assured=0, errored_latest=0)["rating"] == "amber", "")
+        check("a critical finding is red",
+              verdict(critical_open=1, open_findings=1, overdue=0,
+                      not_assured=0, errored_latest=0)["rating"] == "red", "")
+        check("a missed scheduled control is red on its own",
+              verdict(critical_open=0, open_findings=0, overdue=1,
+                      not_assured=0, errored_latest=0)["rating"] == "red", "")
+        check("a control never switched on is not green",
+              verdict(critical_open=0, open_findings=0, overdue=0,
+                      not_assured=1, errored_latest=0)["rating"] == "amber", "")
+        check("a control that failed to run is not green",
+              verdict(critical_open=0, open_findings=0, overdue=0,
+                      not_assured=0, errored_latest=1)["rating"] == "amber", "")
+        check("the reason names the critical count",
+              "critical" in verdict(critical_open=2, open_findings=5, overdue=0,
+                                    not_assured=0, errored_latest=0)["reason"], "")
+        check("the reason does not count one finding twice",
+              verdict(critical_open=2, open_findings=5, overdue=0,
+                      not_assured=0, errored_latest=0)["reason"].count("5") == 1, "")
+
+        # Age bands, and the two edges. A finding exactly 30 days old is in the
+        # first band and one a day older is not - an off-by-one here silently
+        # moves findings between the bands a committee reads.
+        check("age 0 is in the first band", bucket_of(0) == "0-30", bucket_of(0))
+        check("age 30 is still in the first band", bucket_of(30) == "0-30", bucket_of(30))
+        check("age 31 starts the second", bucket_of(31) == "31-60", bucket_of(31))
+        check("age 90 is still in the third", bucket_of(90) == "61-90", bucket_of(90))
+        check("age 91 is in the open-ended band", bucket_of(91) == "90+", bucket_of(91))
+        check("no age falls outside the bands",
+              all(bucket_of(n) in [b[0] for b in AGE_BUCKETS] for n in range(0, 400)), "")
+
         # --- the assurance grid partitions the controls ----------------------
         # The assertion the whole read model rests on. A control that did not
         # run is UNCHECKED, so the four states must add back to the number of
@@ -1410,10 +1460,79 @@ def main() -> int:
                   sum(r["findings"] for r in d["open"]["by_severity"]) == d["open"]["findings"],
                   str(d["open"]["by_severity"]))
 
+            # --- the backlog, two ways of reading it -------------------------
+            # Age and status partition the same set of open findings. Either
+            # one dropping a finding is how a backlog reports itself smaller
+            # than it is, which is the one thing nobody downstream can catch.
+            check(f"{ent}: the age bands partition the open findings",
+                  sum(b["findings"] for b in d["open"]["aging"]) == d["open"]["findings"],
+                  str(d["open"]["aging"]))
+            check(f"{ent}: the age bands are the ones the screen names",
+                  [b["key"] for b in d["open"]["aging"]] == ["0-30", "31-60", "61-90", "90+"],
+                  str([b["key"] for b in d["open"]["aging"]]))
+            check(f"{ent}: the status split agrees with the open count",
+                  d["open"]["by_status"]["open"] == d["open"]["findings"],
+                  f"{d['open']['by_status']} vs {d['open']['findings']}")
+
+            # --- the verdict is a summary, not a number of its own -----------
+            v = d["verdict"]
+            check(f"{ent}: the verdict is one of the three ratings",
+                  v["rating"] in ("red", "amber", "green"), str(v))
+            check(f"{ent}: the verdict always carries its reason",
+                  bool(v["reason"]), str(v))
+            # The rating has to be recomputable from the payload it ships
+            # beside. A page that leads with a rating its own numbers do not
+            # support gives the reader no way to tell.
+            check(f"{ent}: the verdict follows from the numbers beside it",
+                  v == verdict(
+                      critical_open=next((r["findings"] for r in d["open"]["by_severity"]
+                                          if r["severity"] == "critical"), 0),
+                      open_findings=d["open"]["findings"],
+                      overdue=d["overdue_count"],
+                      not_assured=d["controls"]["not_assured_count"],
+                      errored_latest=d["days"][-1]["errored"] if d["days"] else 0,
+                  ),
+                  f"{v} != recomputed from {d['open']['findings']} open, "
+                  f"{d['overdue_count']} overdue")
+            # The lists are trimmed; the counts are not. A count below its own
+            # list would mean the verdict was decided on a partial number.
+            check(f"{ent}: the overdue count covers the trimmed list",
+                  d["overdue_count"] >= len(d["overdue"])
+                  and d["gaps_count"] >= d["overdue_count"],
+                  f"overdue_count={d['overdue_count']} vs {len(d['overdue'])}")
+            # Green is a claim that every control ran and nothing is open, so
+            # it can only be reached when all four of those hold. A green that
+            # survived an open finding or a missed day is the false clean this
+            # whole read model exists to refuse.
+            should_be_green = (
+                d["open"]["findings"] == 0
+                and not d["overdue"]
+                and d["controls"]["not_assured_count"] == 0
+                and (not d["days"] or d["days"][-1]["errored"] == 0)
+            )
+            check(f"{ent}: green means nothing is open and nothing is late",
+                  (v["rating"] == "green") == should_be_green,
+                  f"rating={v['rating']} findings={d['open']['findings']} "
+                  f"overdue={len(d['overdue'])} not_assured={d['controls']['not_assured_count']}")
+            # A critical finding is the one thing that must never read as
+            # anything but red, whatever else is true.
+            if any(r["severity"] == "critical" and r["findings"] for r in d["open"]["by_severity"]):
+                check(f"{ent}: a critical finding open is always red",
+                      v["rating"] == "red", str(v))
+
             # Grouping must neither invent nor lose a finding.
-            check(f"{ent}: grouped problems never exceed the open findings",
-                  sum(p["count"] for p in d["longest_open"]) <= d["open"]["findings"],
-                  str([(p["rule_code"], p["count"]) for p in d["longest_open"]]))
+            check(f"{ent}: grouped findings never exceed the open findings",
+                  sum(p["count"] for p in d["priority"]) <= d["open"]["findings"],
+                  str([(p["rule_code"], p["count"]) for p in d["priority"]]))
+            check(f"{ent}: a repeat is a group of more than one",
+                  all(p["repeat"] == (p["count"] > 1) for p in d["priority"]),
+                  str([(p["rule_code"], p["count"], p["repeat"]) for p in d["priority"]]))
+            check(f"{ent}: priority findings lead with the worst severity",
+                  [p["severity"] for p in d["priority"]]
+                  == sorted([p["severity"] for p in d["priority"]],
+                            key=lambda s: SEVERITY_ORDER.index(s)
+                            if s in SEVERITY_ORDER else len(SEVERITY_ORDER)),
+                  str([(p["severity"], p["rule_code"]) for p in d["priority"]]))
 
             # A control nobody scheduled cannot be overdue, or an on-demand
             # control is reported as a missed deadline every single day.

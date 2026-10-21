@@ -171,6 +171,8 @@ app/api/assurance.py:
 state_of(passed, breached, errored)  -> one control's state on one data date
 summarise_day(assured, seen)          -> the four counts for that date
 rank_controls(rows)                   -> worst first
+bucket_of(age)                        -> which age band an open finding is in
+verdict(...)                          -> the rating, and the reason for it
 ```
 
 These are pure functions, no database, and both the endpoint and the smoke test
@@ -202,6 +204,54 @@ settle:
 
 **Nothing here is stored.** The payload is derived on read precisely so there is
 no summary table to fall out of step with `rule_runs` and `tickets`.
+
+### The landing page leads with a verdict, and the verdict has one rule
+
+```
+red     a critical finding is open, or a scheduled control missed a data day
+amber   something is open, a control owes an opinion, or a control failed to run
+green   every control ran and nothing is open
+```
+
+`verdict()` is that rule, and it is the only place it is written. It is decided
+on the **full** counts, taken before the lists are trimmed for the screen — which
+is why `overdue_count` and `gaps_count` travel beside `overdue[]` and `gaps[]`.
+The payload is therefore checkable against itself: the smoke test recomputes the
+rating from the numbers on the page and asserts it matches, because a page whose
+headline contradicts the figures beneath it gives the reader no way to tell.
+
+Coverage drives the rating alongside risk on purpose. A day a scheduled control
+did not run is an unassured day, and a green that survived one would be the
+false clean this whole read model exists to refuse. A control with **no cadence**
+is never in it — the same `overdue` versus `gaps` distinction, kept.
+
+**Age bands use `age_in_days`.** `bucket_of()` bands a finding with the same
+whole-day age the headline prints beside it. Deriving the age in SQL as well
+would give the page two definitions of "how old", and the band a finding sat in
+could then contradict the age next to it while both looked plausible.
+
+### The landing page speaks audit, and the inbox speaks it too
+
+```
+control    the thing that runs                        CA-03
+finding    one control found something, one per day   LAD-CA-03-TKT-00042
+exception  one item inside a finding                  119 inside that finding
+```
+
+The engine's own words are rule, observation and exception line. Those belong on
+the screens that are about the code; the screens that are about the estate say
+control and finding. The two vocabularies met on one screen and drifted, which is
+how a dashboard read as an engineering report and an auditor could not tell what
+it was counting.
+
+**The routes, the resource names, the `api.*` methods and the capability names
+are not renamed with it.** `tickets.acknowledge`, `/tickets/{id}/show` and the
+`tickets` resource are the API's vocabulary, and the dataProvider and every link
+depend on them — only what a person reads changed.
+
+`ticket_no` still reads `-TKT-`. That is the identifier, generated in
+`app/engine/ticketing.py`, and the smoke test asserts on its shape. Renaming it is
+a change to the numbering, not to the vocabulary, and belongs with the number.
 
 ### A partial answer must say it is partial
 
@@ -318,6 +368,8 @@ work per client and re-picking it on every reload is noise.
 | One `declared_tables` for every caller | `app/engine/validation.py` | Validating a rule and writing one must answer "what does it read" identically, or the rule page and the catalogue disagree about it. See §2. |
 | One `scoped()` for every query that filters by client | `backend/app/api/scope.py` | Runs and tickets have no entity column; they inherit the rule's. Five endpoints joining for it themselves is how the dashboard counts a different client than the list beside it. See §2. |
 | One `summarise_day()` for the assurance grid | `backend/app/api/assurance.py` | `passed + breached + errored + unchecked == assured` has to close, or the landing page reports incomplete assurance as complete. See §2. |
+| One `verdict()` for the landing page's rating | `backend/app/api/assurance.py` | The rating is the first thing on the page and the one thing it will be asked to justify. Decided on the full counts, and recomputable from the payload beside it. See §2. |
+| One `age_in_days()` for how old a finding is | `backend/app/api/assurance.py` | `bucket_of()` bands a finding with the same whole-day age the headline prints. Derive the age twice and the band contradicts the age beside it. See §2. |
 | One `useEntityScope()` for every screen | `frontend/src/entityScope.tsx` | The app bar owns the client. A screen with its own dropdown can disagree with the header above it, and a "Clear" button can drop the scope silently. See §2. |
 | One `row_for()` for every read of one version | `backend/app/api/rules.py` | A rule is a chain of rows, and a page is about one of them. Six endpoints resolving "which row is v2" themselves is six chances for the page and the source beside it to describe different rows. See §4b. |
 | One `ruleShowPath()` for every rule link | `frontend/src/rulePaths.ts` | react-admin's link helpers append the list's filter, page and sort, so a rule page arrived carrying another screen's query string. One builder is also one place that remembers `encodeURIComponent`. See §4b. |

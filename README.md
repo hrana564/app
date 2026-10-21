@@ -768,7 +768,8 @@ app/
         ├── entityScope.tsx         THE ONLY place the client is chosen
         ├── dataProvider.ts         the ONLY module that talks to the API
         ├── authProvider.ts
-        ├── theme.ts
+        ├── theme.ts                the palette, and the one SEVERITIES list
+        ├── print.css               the landing page as a committee handout
         ├── components/ui.tsx       chips, JSON block, code block, rows table
         ├── components/RoleMatrix.tsx  the read-only roles table
         ├── pages/       Login.tsx  Dashboard.tsx  Settings.tsx
@@ -924,14 +925,34 @@ whole payload is derived on read, so it cannot drift from `rule_runs` and
 
 | Key | What it answers |
 |---|---|
+| `verdict` | The rating on the landing page — `red` / `amber` / `green` — and the sentence saying what put it there |
 | `as_at`, `as_at_age_days` | The date the newest control opinion is about, and how stale it is |
 | `controls.assured` / `.total` / `.not_assured` | Live validated controls, all controls, and those never switched on |
 | `days[]` | One line per data date: `passed`, `breach`, `errored`, `unchecked`, `exceptions` |
 | `offenders[]` | Controls ranked by **days breached**, with exceptions, open findings and missed days |
 | `overdue[]` / `gaps[]` | Scheduled controls that missed a day / any control that did not cover every day |
-| `open` | Live exposure: exception rows, finding count, oldest age, severity split |
-| `longest_open[]` | Open problems grouped by what they say, oldest first, with a repeat count |
-| `movement` | Findings and exceptions raised in the window, and how many were acknowledged |
+| `overdue_count` / `gaps_count` | The **true** totals behind those two trimmed lists |
+| `open` | Live exposure: finding count, exception rows, oldest age, severity split, **age bands** and **status split** |
+| `priority[]` | Open findings grouped by what they say, **worst severity first**, then oldest, with a `repeat` flag |
+| `movement` | Findings and exceptions raised in the window, how many were acknowledged, and whether there is a prior period |
+
+`verdict` is the only summary on the page, and it is decided by exactly one rule
+in `app/api/assurance.py`:
+
+```
+red     a critical finding is open, or a scheduled control missed a data day
+amber   something is open, a control owes an opinion, or a control failed to run
+green   every control ran and nothing is open
+```
+
+It is decided on the **full** counts, not the trimmed lists, so `overdue_count`
+travels beside `overdue[]` and a reader can recompute the rating from the numbers
+they are shown. A control with no cadence is never in it: it owes no opinion on a
+day nobody asked it for one, so its silence is a coverage note and not a fault.
+
+**Age bands use the same `age_in_days` the headline does.** There is one
+definition of how old a finding is, so the band it sits in cannot contradict the
+age printed beside it.
 
 `window` counts **data dates**, not calendar days, so a day the ETL never
 delivered cannot appear as a day the controls missed. Every figure inside it is
@@ -1234,9 +1255,12 @@ policy), **execution and outcome being independent** (a completed run always has
 run that did not execute has none, and `?status=` and `?outcome=` filter separately), the run
 ledger and the version each run was produced by, **the assurance grid** (the four
 states partition the assured controls on every data date for both clients, the grid
-ends on the date it reports to, exposure matches the inbox, the severity split adds
-back to the headline, grouped problems never exceed the open findings, and nothing
-without a cadence is ever called overdue), the dashboard being unreachable without a
+ends on the date it reports to, exposure matches the inbox, the severity split and
+the age bands each add back to the headline, the status split agrees with the open
+count, **the verdict follows from the numbers beside it** and is never green while
+something is open or a scheduled control is late, a critical finding is always red,
+repeated findings are groups of more than one and lead with the worst severity, and
+nothing without a cadence is ever called overdue), the dashboard being unreachable without a
 token, generation status, and **the client
 scope** (CLIENT-A + CLIENT-B must equal the whole on every list and summary, a scoped list carries only that
 client's rules, the scoped dashboard agrees with the scoped lists, and the bulk acknowledge reaches

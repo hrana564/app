@@ -12,6 +12,11 @@ This module answers exactly those, from the runs and tickets that already exist.
 Nothing is stored and nothing is denormalised into a summary table: the whole
 payload is derived on read, so it cannot drift from the ledger it describes.
 
+`verdict()` then collapses the answers into the one line that comes first on the
+page - a rating and the reason for it. It is a summary of the numbers beside it,
+never a number of its own, and it is decided on the FULL counts rather than the
+trimmed lists the screen shows.
+
 THE ONE RULE
 ------------
 A control that did not run has no opinion. It is counted as UNCHECKED - never as
@@ -45,7 +50,7 @@ from datetime import date, datetime, time, timezone
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 
 from app.api.deps import SessionDep, require
 from app.api.scope import scoped
@@ -64,6 +69,10 @@ UNCHECKED = "unchecked"
 PASSED = "passed"
 BREACH = "breach"
 ERRORED = "errored"
+
+RATING_RED = "red"
+RATING_AMBER = "amber"
+RATING_GREEN = "green"
 
 # The screen is a briefing, not a register: a head of audit wants the worst few,
 # and the inbox for the rest.
@@ -128,6 +137,89 @@ def rank_controls(rows: list[dict]) -> list[dict]:
         rows,
         key=lambda r: (-r["breached_days"], -r["exceptions"], -r["missing_days"], r["code"]),
     )
+
+
+# The bands open findings are reported in. The last is open-ended, so a finding
+# can never leave the backlog by getting older - which is the only direction a
+# finding's age actually moves.
+AGE_BUCKETS: tuple[tuple[str, str, int | None], ...] = (
+    ("0-30", "0\u201330 days", 30),
+    ("31-60", "31\u201360 days", 60),
+    ("61-90", "61\u201390 days", 90),
+    ("90+", "Over 90 days", None),
+)
+
+
+def bucket_of(age: int) -> str:
+    """Which age band a finding is in.
+
+    `age` is a whole-day age from `age_in_days`, deliberately: deriving the age
+    a second time in SQL would let the band a finding sits in contradict the age
+    printed beside it, and both numbers would look plausible.
+    """
+    for key, _, ceiling in AGE_BUCKETS:
+        if ceiling is None or age <= ceiling:
+            return key
+    return AGE_BUCKETS[-1][0]
+
+
+def _plural(n: int, word: str) -> str:
+    return word if n == 1 else f"{word}s"
+
+
+def verdict(
+    *,
+    critical_open: int,
+    open_findings: int,
+    overdue: int,
+    not_assured: int,
+    errored_latest: int,
+) -> dict[str, str]:
+    """The one rating a head of audit reads first, and the reason for it.
+
+        red     a critical finding is open, or a scheduled control missed a day
+        amber   something is open, a control owes an opinion, or a control
+                failed to run on the latest data day
+        green   every control ran and nothing is open
+
+    Coverage drives the rating alongside risk on purpose. A day a scheduled
+    control did not run is an unassured day, and a headline that stayed green
+    through it would be the one failure this page exists to prevent.
+
+    A control with no cadence is NOT in here. It owes no opinion on a day nobody
+    asked it for one, so its silence is a coverage note and never a fault - the
+    same `overdue` versus `gaps` distinction the rest of the payload keeps.
+    """
+    if critical_open or overdue:
+        rating = RATING_RED
+    elif open_findings or not_assured or errored_latest:
+        rating = RATING_AMBER
+    else:
+        rating = RATING_GREEN
+
+    if rating == RATING_GREEN:
+        return {"rating": rating, "reason": "every control ran and nothing is open"}
+
+    # One clause per distinct fact, in the order a reader would ask them. The
+    # critical count rides inside the open count rather than repeating it: a
+    # finding cannot be open twice, and two numbers for it would read as two
+    # problems.
+    reasons: list[str] = []
+    if open_findings:
+        clause = f"{open_findings} {_plural(open_findings, 'finding')} open"
+        if critical_open:
+            clause += f", {critical_open} critical"
+        reasons.append(clause)
+    if overdue:
+        reasons.append(f"{overdue} scheduled {_plural(overdue, 'control')} missed a data day")
+    if not_assured:
+        reasons.append(f"{not_assured} {_plural(not_assured, 'control')} not yet assuring")
+    if errored_latest:
+        reasons.append(
+            f"{errored_latest} {_plural(errored_latest, 'control')} failed to run on the "
+            "latest data day"
+        )
+    return {"rating": rating, "reason": " \u00b7 ".join(reasons)}
 
 
 # ---------------------------------------------------------------------------
@@ -320,6 +412,49 @@ async def dashboard(
         ).all()
     )
 
+    # --- how old the open findings are --------------------------------------
+    # The ages come back as timestamps and are banded with `age_in_days`, the
+    # same function the headline's "oldest" uses. Banding them in SQL as well
+    # would give the page two definitions of "how old" - and the band a finding
+    # sat in could then contradict the age printed beside it.
+    open_ages = (
+        await session.execute(
+            scoped(
+                select(Ticket.created_at, func.jsonb_array_length(Ticket.rows))
+                .where(Ticket.status == "open"),
+                Ticket,
+                entity,
+            )
+        )
+    ).all()
+
+    aging = [
+        {"key": key, "label": label, "findings": 0, "exceptions": 0}
+        for key, label, _ in AGE_BUCKETS
+    ]
+    by_key = {row["key"]: row for row in aging}
+    for created_at, exceptions in open_ages:
+        band = by_key[bucket_of(age_in_days(created_at, now))]
+        band["findings"] += 1
+        band["exceptions"] += int(exceptions or 0)
+
+    # --- the closure position ------------------------------------------------
+    # A different question from how old what is open happens to be: "how much
+    # of it has anybody looked at yet". Seeded with the three known statuses so
+    # a screen never has to guess at a zero, and an unrecognised one is added
+    # rather than silently dropped.
+    by_status = {"open": 0, "acknowledged": 0, "dismissed": 0}
+    for status, count in (
+        await session.execute(
+            scoped(
+                select(Ticket.status, func.count()).group_by(Ticket.status),
+                Ticket,
+                entity,
+            )
+        )
+    ).all():
+        by_status[status] = by_status.get(status, 0) + count
+
     oldest_at = (
         await session.execute(
             scoped(
@@ -330,13 +465,23 @@ async def dashboard(
         )
     ).scalar_one()
 
-    # --- the longest-waiting problems, one row each ---------------------------
+    # --- the findings that need a decision, one row each ----------------------
     # A control that breaches for a week opens a fresh ticket every day, and a
     # queue of eight near-identical rows tells a head of audit nothing they did
     # not already know. So this groups the open tickets by what they actually
     # say, and reports how many of them there are. The row links to the OLDEST
     # instance, because that is the one that has waited longest.
-    longest = (
+    #
+    # Worst first, then oldest: a briefing that ranked purely by age would put a
+    # three-month-old low-severity note above yesterday's critical one, which is
+    # the ranking a head of audit would have to redo by hand. The rank is done
+    # in SQL rather than in Python because the limit is applied here - sorting
+    # after the limit would drop the critical rows the limit cut off.
+    severity_rank = case(
+        *[(Ticket.severity == level, index) for index, level in enumerate(SEVERITY_ORDER)],
+        else_=len(SEVERITY_ORDER),
+    )
+    priority_rows = (
         await session.execute(
             scoped(
                 select(
@@ -352,7 +497,7 @@ async def dashboard(
                 .join(Run, Ticket.run_id == Run.id)
                 .where(Ticket.status == "open")
                 .group_by(Ticket.rule_code, Ticket.severity, Run.summary)
-                .order_by(func.min(Ticket.created_at))
+                .order_by(severity_rank, func.min(Ticket.created_at))
                 .limit(TOP_FINDINGS),
                 Ticket,
                 entity,
@@ -446,6 +591,26 @@ async def dashboard(
     overdue = [r for r in gaps if r["scheduled"]]
     as_at = dates[-1] if dates else None
 
+    open_findings = sum(r["findings"] for r in open_by_severity)
+    open_exceptions = sum(r["exceptions"] for r in open_by_severity)
+    critical_open = next(
+        (r["findings"] for r in open_by_severity if r["severity"] == "critical"), 0
+    )
+    # The counts the verdict is decided on are the FULL ones, taken before the
+    # lists are trimmed for the screen. A rating that said "8 overdue" because
+    # eight is the page size would be a number about the layout - and the true
+    # totals travel in the payload beside the lists so a reader, or a test, can
+    # recompute the rating from the numbers it is shown.
+    overdue_count = len(overdue)
+    gaps_count = len(gaps)
+    headline = verdict(
+        critical_open=critical_open,
+        open_findings=open_findings,
+        overdue=overdue_count,
+        not_assured=len(pending),
+        errored_latest=days[-1]["errored"] if days else 0,
+    )
+
     return {
         "entity": entity.upper() if entity else None,
         "requested_by": user.username,
@@ -459,6 +624,7 @@ async def dashboard(
             now,
         ),
         "window_days": len(dates),
+        "verdict": headline,
         "controls": {
             "total": len(controls),
             "assured": len(assured),
@@ -468,14 +634,18 @@ async def dashboard(
         "days": days,
         "offenders": ranked[:TOP_CONTROLS],
         "gaps": gaps[:TOP_CONTROLS],
+        "gaps_count": gaps_count,
         "overdue": overdue[:TOP_CONTROLS],
+        "overdue_count": overdue_count,
         "open": {
-            "findings": sum(r["findings"] for r in open_by_severity),
-            "exceptions": sum(r["exceptions"] for r in open_by_severity),
+            "findings": open_findings,
+            "exceptions": open_exceptions,
             "oldest_days": age_in_days(oldest_at, now),
             "by_severity": open_by_severity,
+            "aging": aging,
+            "by_status": by_status,
         },
-        "longest_open": [
+        "priority": [
             {
                 "id": ticket_id,
                 "rule_code": rule_code,
@@ -483,9 +653,14 @@ async def dashboard(
                 "summary": summary,
                 "count": count,
                 "exceptions": exceptions,
-                "oldest_at": oldest_at.isoformat(),
-                "newest_at": newest_at.isoformat(),
-                "age_days": age_in_days(oldest_at, now),
+                "oldest_at": first_at.isoformat(),
+                "newest_at": last_at.isoformat(),
+                "age_days": age_in_days(first_at, now),
+                # The same control breaching on consecutive days opens a fresh
+                # ticket each day. A repeat is a finding that has not been dealt
+                # with, which is a different fact from a new one - so it is
+                # flagged rather than left for the reader to infer from a count.
+                "repeat": count > 1,
             }
             for (
                 ticket_id,
@@ -493,10 +668,10 @@ async def dashboard(
                 severity,
                 summary,
                 count,
-                oldest_at,
-                newest_at,
+                first_at,
+                last_at,
                 exceptions,
-            ) in longest
+            ) in priority_rows
         ],
         "movement": {
             "raised_findings": raised_findings,
@@ -505,5 +680,9 @@ async def dashboard(
             "previous_raised_exceptions": prev_exceptions,
             "acknowledged_findings": int(throughput[0] or 0),
             "ack_days": round(float(throughput[1]), 1) if throughput[1] else None,
+            # Whether there is a period to compare against at all. Without it a
+            # client with two weeks of history reads as "rising" from zero,
+            # which is not movement - it is the absence of a baseline.
+            "has_previous": bool(previous),
         },
     }

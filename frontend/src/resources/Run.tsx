@@ -270,8 +270,8 @@ const RunDetails = () => {
                 {!record.outcome
                   ? "the rule never got an answer"
                   : record.outcome === "fail"
-                    ? "an observation was raised - a ticket was opened"
-                    : "no observations"}
+                    ? "a finding was raised"
+                    : "nothing found"}
               </Typography>
             </Box>
             <Box>
@@ -324,8 +324,8 @@ const RunDetails = () => {
                 {record.error_detail || "no detail recorded"}
               </Box>
               <Typography variant="caption" sx={{ mt: 1, display: "block" }}>
-                No ticket was opened: a rule that never ran has no observation to report.
-                This day is unchecked, not clean.
+                No finding was raised: a rule that never ran has no opinion to
+                report. This day is unchecked, not clean.
               </Typography>
             </Alert>
           )}

@@ -2,6 +2,7 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import { App } from "./App";
 import { getToken, goToLogin, rememberReturnTo } from "./dataProvider";
+import "./print.css";
 
 /**
  * No session, so the portal has nothing to show yet: put the app on the login

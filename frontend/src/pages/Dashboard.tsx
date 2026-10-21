@@ -1,13 +1,16 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Link } from "react-router";
 import {
   Alert, Box, Card, Chip, LinearProgress, Stack, Table, TableBody, TableCell,
-  TableHead, TableRow, Tooltip, Typography,
+  TableHead, TableRow, Tooltip, Typography, useTheme,
 } from "@mui/material";
 import TaskAltIcon from "@mui/icons-material/TaskAlt";
 import WarningAmberIcon from "@mui/icons-material/WarningAmber";
+import ArrowUpwardIcon from "@mui/icons-material/ArrowUpward";
+import ArrowDownwardIcon from "@mui/icons-material/ArrowDownward";
+import RemoveIcon from "@mui/icons-material/Remove";
 import { api } from "../dataProvider";
-import { severityColor, FONT } from "../theme";
+import { severityColor, SEVERITIES, FONT } from "../theme";
 import { useEntityScope } from "../entityScope";
 import { ruleShowPath } from "../rulePaths";
 
@@ -26,6 +29,13 @@ interface DayRow {
   findings: number;
 }
 
+interface AgeBand {
+  key: string;
+  label: string;
+  findings: number;
+  exceptions: number;
+}
+
 interface ControlRow {
   code: string;
   name: string;
@@ -41,7 +51,7 @@ interface ControlRow {
   missing_dates: string[];
 }
 
-interface Problem {
+interface Finding {
   id: number;
   rule_code: string;
   severity: string;
@@ -49,13 +59,19 @@ interface Problem {
   count: number;
   exceptions: number;
   age_days: number;
+  oldest_at: string;
+  newest_at: string;
+  repeat: boolean;
 }
+
+type Rating = "red" | "amber" | "green";
 
 interface Assurance {
   entity: string | null;
   as_at: string | null;
   as_at_age_days: number;
   window_days: number;
+  verdict: { rating: Rating; reason: string };
   controls: {
     total: number;
     assured: number;
@@ -65,33 +81,85 @@ interface Assurance {
   days: DayRow[];
   offenders: ControlRow[];
   gaps: ControlRow[];
+  gaps_count: number;
   overdue: ControlRow[];
+  overdue_count: number;
   open: {
     findings: number;
     exceptions: number;
     oldest_days: number;
     by_severity: { severity: string; findings: number; exceptions: number }[];
+    aging: AgeBand[];
+    by_status: Record<string, number>;
   };
-  longest_open: Problem[];
+  priority: Finding[];
   movement: {
     raised_findings: number;
     raised_exceptions: number;
+    previous_raised_findings: number;
+    previous_raised_exceptions: number;
     acknowledged_findings: number;
     ack_days: number | null;
+    has_previous: boolean;
   };
 }
 
 /* ================================================================== */
 /* Vocabulary                                                          */
 /* ================================================================== */
+/**
+ * This page is written for a head of audit, so it uses the words they use.
+ *
+ *   control    the thing that runs                        CA-03
+ *   finding    one control found something, one per day    LAD-CA-03-TKT-00042
+ *   exception  one item inside a finding                   119 inside that finding
+ *
+ * The engine calls these a rule, an observation and an exception line. Those
+ * are the words of the thing that executes; these are the words of the thing
+ * being assured.
+ */
 const PASSED = "#2e7d32";
 const BREACH = "#c62828";
 const ERRORED = "#ef6c00";
 /** Deliberately the colour of an absence: nothing happened here, not "good". */
 const UNCHECKED = "#c7d0de";
 const ABSENT = "#b6c0cf";
+/** Neither a pass nor a fault: a band that is simply where a finding sits. */
+const NEUTRAL = "#5b6b82";
+
+/**
+ * The rating, its colour, and - the important part - the rule that produced it.
+ *
+ * A colour with no stated rule is a colour nobody can defend, and the one
+ * question a head of audit is asked about a RAG rating is what put it there.
+ * The rule rides on the rating word's tooltip rather than being printed under
+ * it: it is a definition, not a fact about this estate, so it does not have to
+ * be on screen every time somebody opens the page.
+ */
+const RATING: Record<Rating, { word: string; colour: string; tint: string; rule: string }> = {
+  red: {
+    word: "Needs attention",
+    colour: BREACH,
+    tint: "#fdf3f3",
+    rule: "Red: a critical finding is open, or a scheduled control missed a data day.",
+  },
+  amber: {
+    word: "Monitor",
+    colour: ERRORED,
+    tint: "#fff8f1",
+    rule: "Amber: something is open, a control owes an opinion, or a control failed to run.",
+  },
+  green: {
+    word: "Assured",
+    colour: PASSED,
+    tint: "#f3f8f4",
+    rule: "Green: every control ran and nothing is open.",
+  },
+};
 
 const num = (n: number) => n.toLocaleString("en-GB");
+const plural = (n: number, one: string, many: string) => (n === 1 ? one : many);
+const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
 const day = (iso: string) =>
   new Date(`${iso}T00:00:00`).toLocaleDateString("en-GB", {
@@ -102,42 +170,86 @@ const longDate = (iso: string | null) =>
     ? new Date(`${iso}T00:00:00`).toLocaleDateString("en-GB", {
         day: "numeric", month: "long", year: "numeric",
       })
-    : "—";
+    : "\u2014";
 
-const plural = (n: number, one: string, many: string) => (n === 1 ? one : many);
-
-/**
- * The three words this page uses about a data date.
- *
- * The backend sends four states - passed, breach, errored, unchecked - because
- * those partition the rules exactly and that is worth asserting on. But they
- * are not words a head of audit thinks in, and "no opinion" is the internal
- * distinction leaking onto the screen. `passed + breach` is simply "the rules
- * that ran"; whatever is left over did not run at all.
- *
- * The VOCABULARY, since four words for related things is the actual problem:
- *
- *   rule             the thing that runs          CA-03
- *   audit observation  one rule found something    1 per rule, per day
- *   exception line     one item it flagged        119 in that same day
- *   ticket            what an auditor acknowledges one per observation
- *
- * An observation is counted per RULE, never per line. Read the other way it
- * turns "2 rules found something" into "119 findings" and loses the only figure
- * that says how much of the rule estate is engaged.
- */
+/** The controls that actually looked at the day's data: they ran and had an answer. */
 const checkedOf = (d: DayRow) => d.passed + d.breach;
 
+/** A day of the week for the sparkline end labels, without the year. */
+const shortDay = (iso: string) =>
+  new Date(`${iso}T00:00:00`).toLocaleDateString("en-GB", { day: "numeric", month: "short" });
+
+/** Severity's colour, read from the one palette map in `theme.ts`. */
+const useSeverityTone = () => {
+  const theme = useTheme();
+  return (level: string) => theme.palette[severityColor[level] ?? "info"].main;
+};
+
 /* ================================================================== */
-/* Shared furniture                                                    */
+/* Furniture                                                           */
 /* ================================================================== */
-const SectionTitle = ({ children, aside }: { children: string; aside?: string }) => (
-  <Stack direction="row" sx={{ mb: 1.5, justifyContent: "space-between", alignItems: "baseline" }}>
-    <Typography variant="overline" sx={{ letterSpacing: 0.8, color: "text.secondary" }}>
+/**
+ * A card that carries its own title.
+ *
+ * The page used to draw a heading and then a card under it, seven times: seven
+ * overlines, each with a margin of its own, stacked above seven boxes. The
+ * title is the top of the box now, which costs nothing and buys back the gap
+ * seven times over.
+ *
+ * `flush` is for a card whose content is a table: the table runs to the card's
+ * edge and its first cell is indented to line up with the title above it. A
+ * table inset by a card's padding sits under the title with a visible step.
+ */
+const Frame = ({ title, aside, children, flush = false, className }: {
+  title: string;
+  aside?: ReactNode;
+  children: ReactNode;
+  flush?: boolean;
+  className?: string;
+}) => (
+  <Card
+    className={className}
+    sx={{
+      // No `height: 100%` here. Inside the grids below, `align-items: stretch`
+      // already makes the frames in a row match. On the frames that are direct
+      // children of the page - the daily evidence - `100%` resolves against the
+      // whole page and the frame swallows it.
+      display: "flex",
+      flexDirection: "column",
+      overflow: flush ? "hidden" : undefined,
+    }}
+  >
+    <Stack
+      direction="row"
+      spacing={1}
+      sx={{
+        px: 2, pt: 1.75, pb: flush ? 1 : 0,
+        justifyContent: "space-between", alignItems: "baseline", flexWrap: "wrap",
+      }}
+    >
+      <Typography variant="overline" sx={{ letterSpacing: 0.8, color: "text.secondary" }}>
+        {title}
+      </Typography>
+      {aside && (
+        <Typography component="div" variant="caption" sx={{ color: "text.secondary" }}>
+          {aside}
+        </Typography>
+      )}
+    </Stack>
+    <Box
+      sx={{
+        flex: 1,
+        minWidth: 0,
+        px: flush ? 0 : 2,
+        pb: flush ? 0 : 1.75,
+        display: "flex",
+        flexDirection: "column",
+        justifyContent: flush ? "flex-start" : "center",
+      }}
+    >
       {children}
-    </Typography>
-    {aside && <Typography variant="caption" sx={{ color: "text.secondary" }}>{aside}</Typography>}
-  </Stack>
+    </Box>
+  </Card>
 );
 
 const headCell = {
@@ -152,7 +264,13 @@ const headCell = {
   whiteSpace: "nowrap" as const,
 };
 
-const bodyCell = { py: 0.8, px: 1.5, borderColor: "#eef1f6", lineHeight: 1.4 };
+const bodyCell = { py: 0.6, px: 1.5, borderColor: "#eef1f6", lineHeight: 1.4 };
+
+/** A table inside a `flush` Frame, indented to the title above it. */
+const flushTable = {
+  "& th:first-of-type, & td:first-of-type": { pl: 2 },
+  "& th:last-of-type, & td:last-of-type": { pr: 2 },
+};
 
 const Sev = ({ level }: { level: string }) => (
   <Chip
@@ -185,102 +303,558 @@ const Clamp = ({ children, lines = 2 }: { children: string; lines?: number }) =>
   </Typography>
 );
 
+interface BarRow {
+  key: string;
+  label: string;
+  value: number;
+  colour: string;
+  /** What the bar cannot say: the exception lines behind it. */
+  note: string;
+}
+
 /**
- * How many of the client's rules actually looked at this day's data.
+ * One row per category: label, bar, count.
  *
- * "2 of 3" says in two words what three columns used to say in six: two ran,
- * one did not. The shortfall is amber and bold, because a rule that never ran
- * is the thing on this page most likely to go unnoticed.
+ * Rows rather than a stacked bar, and rows rather than a pie. A zero-width
+ * segment in a stacked bar or a pie is INVISIBLE - you cannot tell "0 findings
+ * over 90 days" from "there is no 90+ band" - and that zero is the single best
+ * piece of news on this page. A row that is present and empty says so.
+ *
+ * The exception-line figure lives in the tooltip. It is a second magnitude, not
+ * another slice, and printing it inside every row is what made these two blocks
+ * the tallest thing on the page.
  */
-const RulesRan = ({ d }: { d: DayRow }) => {
-  const ran = checkedOf(d);
-  const short = d.assured - ran;
+const BarRows = ({ rows, total, labelWidth }: { rows: BarRow[]; total: number; labelWidth: number }) => (
+  <Stack spacing={0.4} sx={{ width: "100%" }}>
+    {rows.map((r) => (
+      <Tooltip key={r.key} title={r.note}>
+        <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
+          <Typography
+            variant="caption"
+            noWrap
+            sx={{
+              width: labelWidth, flexShrink: 0, textTransform: "capitalize",
+              color: r.value ? "text.secondary" : ABSENT,
+            }}
+          >
+            {r.label}
+          </Typography>
+          <Box sx={{ flex: 1, minWidth: 32, height: 8, borderRadius: 4, bgcolor: "#eef1f6", overflow: "hidden" }}>
+            <Box
+              sx={{
+                width: `${total ? (r.value / total) * 100 : 0}%`,
+                height: "100%",
+                bgcolor: r.value ? r.colour : "transparent",
+              }}
+            />
+          </Box>
+          <Typography
+            variant="caption"
+            sx={{
+              width: 22, flexShrink: 0, textAlign: "right", fontWeight: 700,
+              fontVariantNumeric: "tabular-nums",
+              color: r.value ? "text.primary" : ABSENT,
+            }}
+          >
+            {r.value}
+          </Typography>
+        </Stack>
+      </Tooltip>
+    ))}
+  </Stack>
+);
+
+/* ================================================================== */
+/* 1. The verdict, as one line                                         */
+/* ================================================================== */
+/**
+ * The rating and its drivers on one line.
+ *
+ * It used to be a five-line card saying the same thing three times: the reason,
+ * the RAG rule restated underneath it, and "Position as at <date>" - which the
+ * header already says as "LAST CHECKED". The rule is a definition, so it moved
+ * to the tooltip on the word it defines, under a dotted underline that says
+ * there is something to hover.
+ */
+const VerdictStrip = ({ verdict }: { verdict: Assurance["verdict"] }) => {
+  const tone = RATING[verdict.rating];
   return (
-    <Stack
-      direction="row"
-      spacing={0.4}
-      sx={{ fontVariantNumeric: "tabular-nums", justifyContent: "flex-end", alignItems: "baseline" }}
-    >
-      <Box component="span" sx={{ fontWeight: short ? 700 : 600 }}>
-        {ran}
-      </Box>
-      <Typography
-        component="span" variant="body2"
-        sx={{ color: short ? "warning.main" : ABSENT }}
+    <Card sx={{ mb: 2, borderLeft: `5px solid ${tone.colour}`, bgcolor: tone.tint }}>
+      <Stack
+        direction="row"
+        spacing={1.25}
+        sx={{ px: 2, py: 1.1, alignItems: "center", flexWrap: "wrap", rowGap: 0.25 }}
       >
-        of {d.assured}
+        <Tooltip title={tone.rule}>
+          <Stack direction="row" spacing={0.75} sx={{ alignItems: "center", cursor: "help" }}>
+            <Box sx={{ width: 10, height: 10, borderRadius: 5, bgcolor: tone.colour, flexShrink: 0 }} />
+            <Typography
+              variant="body1"
+              sx={{
+                fontWeight: 700, color: tone.colour, whiteSpace: "nowrap",
+                textDecoration: "underline dotted", textUnderlineOffset: 3,
+              }}
+            >
+              {tone.word}
+            </Typography>
+          </Stack>
+        </Tooltip>
+        <Typography variant="body2" sx={{ color: "text.secondary", minWidth: 0 }}>
+          {cap(verdict.reason)}.
+        </Typography>
+      </Stack>
+    </Card>
+  );
+};
+
+/* ================================================================== */
+/* 2. What, how old, which way - one row                               */
+/* ================================================================== */
+const SeverityChart = ({ open }: { open: Assurance["open"] }) => {
+  const tone = useSeverityTone();
+  const rows: BarRow[] = SEVERITIES.map((severity) => {
+    const hit = open.by_severity.find((r) => r.severity === severity);
+    const findings = hit?.findings ?? 0;
+    const exceptions = hit?.exceptions ?? 0;
+    return {
+      key: severity,
+      label: severity,
+      value: findings,
+      colour: tone(severity),
+      note:
+        `${findings} open ${plural(findings, "finding", "findings")} · ` +
+        `${num(exceptions)} exception ${plural(exceptions, "line", "lines")}` +
+        (open.findings ? ` · ${Math.round((findings / open.findings) * 100)}% of the open backlog` : ""),
+    };
+  });
+  return <BarRows rows={rows} total={open.findings} labelWidth={66} />;
+};
+
+const AgeChart = ({ open }: { open: Assurance["open"] }) => {
+  const rows: BarRow[] = open.aging.map((band) => ({
+    key: band.key,
+    // The band's own key, because the frame's title already says these are days
+    // and "Over 90 days" is four times the width of "90+" for no more meaning.
+    // The full label is in the tooltip.
+    label: band.key.replace("-", "\u2013"),
+    value: band.findings,
+    // The open-ended band is the one that matters, so it is the one that is
+    // coloured. Everything under 90 days is grey: neither a pass nor a fault.
+    colour: band.key === "90+" ? BREACH : NEUTRAL,
+    note:
+      `${band.label} · ${band.findings} open ${plural(band.findings, "finding", "findings")} · ` +
+      `${num(band.exceptions)} exception ${plural(band.exceptions, "line", "lines")}`,
+  }));
+  return <BarRows rows={rows} total={open.findings} labelWidth={46} />;
+};
+
+/**
+ * One bar per data date, oldest on the left, so the shape of the window is
+ * readable before any number is. Height is findings raised that day.
+ */
+const Spark = ({ days }: { days: DayRow[] }) => {
+  const peak = Math.max(1, ...days.map((d) => d.findings));
+  const first = days[0];
+  const last = days[days.length - 1];
+  return (
+    <Stack direction="row" spacing={1.5} sx={{ alignItems: "flex-end" }}>
+      <Stack direction="row" spacing={0.4} sx={{ alignItems: "flex-end", height: 30 }}>
+        {days.map((d) => (
+          <Tooltip
+            key={d.date}
+            title={`${day(d.date)} \u2014 ${d.findings} ${plural(d.findings, "finding", "findings")} raised, ${num(d.exceptions)} exception ${plural(d.exceptions, "line", "lines")}`}
+          >
+            <Box
+              sx={{
+                width: 12,
+                height: `${Math.max(8, (d.findings / peak) * 100)}%`,
+                bgcolor: d.findings ? BREACH : UNCHECKED,
+                borderRadius: 0.5,
+              }}
+            />
+          </Tooltip>
+        ))}
+      </Stack>
+      {first && last && (
+        <Typography variant="caption" sx={{ color: "text.secondary", whiteSpace: "nowrap", pb: 0.25 }}>
+          {shortDay(first.date)} – {shortDay(last.date)}
+        </Typography>
+      )}
+    </Stack>
+  );
+};
+
+const TravelChart = ({ movement, days, backlog }: {
+  movement: Assurance["movement"]; days: DayRow[]; backlog: Record<string, number>;
+}) => {
+  const raised = movement.raised_findings;
+  const delta = raised - movement.previous_raised_findings;
+
+  // No baseline is not the same as no movement. With one window of history
+  // every estate looks like it is rising from nothing, which is a statement
+  // about how long the portal has been running, not about the controls.
+  const direction = !movement.has_previous
+    ? { word: "No prior period", colour: "text.secondary", Icon: RemoveIcon }
+    : delta > 0
+      ? { word: "Rising", colour: BREACH, Icon: ArrowUpwardIcon }
+      : delta < 0
+        ? { word: "Receding", colour: PASSED, Icon: ArrowDownwardIcon }
+        : { word: "Level", colour: "text.secondary", Icon: RemoveIcon };
+
+  const line = { color: "text.secondary", display: "block" };
+
+  return (
+    <Stack spacing={0.6} sx={{ width: "100%" }}>
+      <Stack direction="row" spacing={0.75} sx={{ alignItems: "center" }}>
+        <direction.Icon sx={{ fontSize: 17, color: direction.colour }} />
+        <Typography variant="body2" sx={{ fontWeight: 700, color: direction.colour }}>
+          {direction.word}
+        </Typography>
+      </Stack>
+      <Spark days={days} />
+      <Tooltip title={`${num(movement.raised_exceptions)} exception ${plural(movement.raised_exceptions, "line", "lines")} in the same window`}>
+        <Typography variant="caption" sx={{ ...line, cursor: "help" }}>
+          <strong>{num(raised)}</strong> raised ·{" "}
+          <strong>{num(movement.acknowledged_findings)}</strong> acknowledged
+          {movement.has_previous
+            ? ` · ${num(movement.previous_raised_findings)} the period before`
+            : ""}
+        </Typography>
+      </Tooltip>
+      <Typography variant="caption" sx={line}>
+        Backlog <strong>{num(backlog.open ?? 0)}</strong> open ·{" "}
+        <strong>{num(backlog.acknowledged ?? 0)}</strong> acknowledged ·{" "}
+        <strong>{num(backlog.dismissed ?? 0)}</strong> dismissed
       </Typography>
     </Stack>
   );
 };
 
+/* ================================================================== */
+/* 3. Did the controls look?                                           */
+/* ================================================================== */
 /**
- * How many rules reported an audit observation that day.
+ * The definitions the numbers depend on, on hover.
  *
- * ONE PER RULE, not per exception line. A rule that flagged 119 items raised
- * one observation, and it happens to carry 119 exception lines - which is why
- * both columns survive. Reading an observation as a line would turn
- * "2 rules found something" into "119 findings" and lose the only figure that
- * says how much of the control estate is engaged.
- *
- * The colour rule is the other half: GREEN is reserved for a day where every
- * rule ran AND found nothing. A day where some rule never ran cannot go green
- * however clean the rest of it was, because "clean" is a claim about the rules
- * and an unrun rule has made none. That false clean is what this page exists to
- * refuse.
+ * These used to be printed as sentences under the figures - "a day a control
+ * did not run is not a day it found nothing" - which is a design note being
+ * read aloud on the page. They are definitions rather than facts about this
+ * estate, so they belong on the thing they define.
  */
-const Observations = ({ d }: { d: DayRow }) => {
-  if (d.breach > 0) {
-    return (
-      <Typography variant="body2" sx={{ fontWeight: 700, color: BREACH }}>
-        {d.breach}
-      </Typography>
+const NOT_RUN = "A control that did not run has no opinion about the day. It is not a day it found nothing.";
+const FAILED = "The control errored before it could answer, so it has no opinion about the day either.";
+const NOT_ASSURING = "Never switched on, or not yet past the validation gate. It owes no opinion yet, so it is not counted as a gap.";
+
+const Figure = ({ value, label, tone, hint }: {
+  value: string; label: string; tone?: string; hint?: string;
+}) => {
+  const body = (
+    <Typography variant="body2" sx={{ color: "text.secondary", whiteSpace: "nowrap" }}>
+      <Box
+        component="span"
+        sx={{ fontWeight: 700, color: tone ?? "text.primary", fontVariantNumeric: "tabular-nums" }}
+      >
+        {value}
+      </Box>{" "}
+      {label}
+    </Typography>
+  );
+  return hint ? <Tooltip title={hint}><Box component="span" sx={{ cursor: "help" }}>{body}</Box></Tooltip> : body;
+};
+
+const CoverageStrip = ({ data }: { data: Assurance }) => {
+  const latest = data.days[data.days.length - 1];
+  const ran = checkedOf(latest);
+  const onDemand = data.gaps.filter((g) => !g.scheduled);
+
+  const notes: ReactNode[] = [];
+  if (data.overdue_count > 0) {
+    notes.push(
+      <Box component="span" key="overdue" sx={{ color: "warning.main", fontWeight: 600 }}>
+        <WarningAmberIcon sx={{ fontSize: 15, mr: 0.5, verticalAlign: "middle" }} />
+        {data.overdue_count} scheduled {plural(data.overdue_count, "control", "controls")} missed a day
+        {data.overdue.length
+          ? ` \u2014 ${data.overdue.map((o) => `${o.code} on ${o.missing_days} of ${data.window_days}`).join(", ")}`
+          : ""}
+        {data.overdue_count > data.overdue.length ? ` (worst ${data.overdue.length} shown)` : ""}
+      </Box>,
     );
   }
-  const complete = checkedOf(d) === d.assured;
+  if (onDemand.length) {
+    notes.push(
+      <Box component="span" key="ondemand">
+        on demand: {onDemand.map((o) => `${o.code} ${o.reported_days}/${data.window_days}`).join(", ")} —
+        no cadence, so a coverage note rather than a missed deadline
+      </Box>,
+    );
+  }
+  if (data.controls.not_assured_count) {
+    notes.push(
+      <Box component="span" key="notassuring">
+        not yet assuring: {data.controls.not_assured.map((c) => c.code).join(", ")}
+        {data.controls.not_assured_count > data.controls.not_assured.length
+          ? ` and ${data.controls.not_assured_count - data.controls.not_assured.length} more`
+          : ""}
+      </Box>,
+    );
+  }
+
   return (
-    <Typography
-      variant="body2"
-      sx={{ color: complete ? PASSED : "text.secondary", fontWeight: complete ? 600 : 400 }}
-    >
-      None
-    </Typography>
+    <Card sx={{ mb: 2, px: 2, py: 1.1 }}>
+      <Stack direction="row" spacing={2.5} sx={{ alignItems: "center", flexWrap: "wrap", rowGap: 0.5 }}>
+        <Typography variant="overline" sx={{ color: "text.secondary", letterSpacing: 0.8 }}>
+          Control coverage
+        </Typography>
+        <Figure
+          value={`${ran} of ${latest.assured}`}
+          label={`ran on ${day(latest.date)}`}
+          tone={ran === latest.assured ? PASSED : ERRORED}
+        />
+        <Figure value={num(latest.errored)} label="failed to run" tone={latest.errored ? ERRORED : undefined} hint={FAILED} />
+        <Figure value={num(latest.unchecked)} label="did not run" tone={latest.unchecked ? ERRORED : undefined} hint={NOT_RUN} />
+        <Figure
+          value={`${num(data.controls.not_assured_count)} of ${data.controls.total}`}
+          label="not yet assuring"
+          hint={NOT_ASSURING}
+        />
+      </Stack>
+      {notes.length > 0 && (
+        <Typography variant="caption" sx={{ display: "block", mt: 0.6, color: "text.secondary" }}>
+          {notes.map((n, i) => (
+            <Box component="span" key={i}>
+              {i > 0 && " \u00b7 "}
+              {n}
+            </Box>
+          ))}
+        </Typography>
+      )}
+    </Card>
   );
 };
 
+/* ================================================================== */
+/* 4. What needs a decision                                            */
+/* ================================================================== */
+const PriorityTable = ({ findings }: { findings: Finding[] }) => (
+  <Table size="small" sx={flushTable}>
+    <TableHead>
+      <TableRow>
+        <TableCell sx={{ ...headCell, width: 84 }}>Severity</TableCell>
+        <TableCell sx={{ ...headCell, width: 112 }}>Control</TableCell>
+        <TableCell sx={{ ...headCell, width: 56, textAlign: "right" }}>Age</TableCell>
+        <TableCell sx={{ ...headCell, width: 62, textAlign: "right" }}>Findings</TableCell>
+        <TableCell sx={headCell}>What it found</TableCell>
+      </TableRow>
+    </TableHead>
+    <TableBody>
+      {findings.map((f) => (
+        <TableRow key={`${f.rule_code}-${f.id}`}>
+          <TableCell sx={bodyCell}>
+            <Stack direction="row" spacing={0.5} sx={{ alignItems: "center" }}>
+              <Sev level={f.severity} />
+              {f.repeat && (
+                <Tooltip title={`${f.count} findings raised by this control, one per day it breached - none of them closed`}>
+                  <Chip size="small" label="repeat" variant="outlined" color="warning" />
+                </Tooltip>
+              )}
+            </Stack>
+          </TableCell>
+          <TableCell sx={bodyCell}>
+            <Typography
+              component={Link} to={`/tickets/${f.id}/show`}
+              variant="body2"
+              noWrap
+              sx={{ fontWeight: 600, color: "primary.main", textDecoration: "none", fontFamily: "monospace" }}
+            >
+              {f.rule_code}
+            </Typography>
+          </TableCell>
+          <TableCell sx={{ ...bodyCell, textAlign: "right", fontWeight: 700, whiteSpace: "nowrap" }}>
+            {f.age_days}d
+          </TableCell>
+          <TableCell sx={{ ...bodyCell, textAlign: "right" }}>
+            {f.count > 1 ? (
+              <Tooltip title={`${f.count} separate findings - the control raised one on each day it breached`}>
+                <Chip size="small" label={`\u00d7${f.count}`} sx={{ height: 20 }} />
+              </Tooltip>
+            ) : (
+              <Maybe n={1} />
+            )}
+          </TableCell>
+          <TableCell sx={bodyCell}><Clamp>{f.summary}</Clamp></TableCell>
+        </TableRow>
+      ))}
+    </TableBody>
+  </Table>
+);
+
+const ControlsTable = ({ rows }: { rows: ControlRow[] }) => {
+  const tone = useSeverityTone();
+  return (
+    <Table size="small" sx={flushTable}>
+      <TableHead>
+        <TableRow>
+          <TableCell sx={headCell}>Control</TableCell>
+          {/* Tighter than the priority table's columns on purpose. Side by side
+              at 1366 this card is ~450px, and at its old widths the control code
+              had ~176px for a chip, the code and the name - so the code itself
+              wrapped onto two lines, which reads as a different control. */}
+          <TableCell sx={{ ...headCell, width: 64, textAlign: "right" }}>Days hit</TableCell>
+          <TableCell sx={{ ...headCell, width: 84, textAlign: "right" }}>Exceptions</TableCell>
+          <TableCell sx={{ ...headCell, width: 52, textAlign: "right" }}>Open</TableCell>
+        </TableRow>
+      </TableHead>
+      <TableBody>
+        {rows.map((o) => (
+          <TableRow key={o.code}>
+            <TableCell sx={bodyCell}>
+              <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
+                <Sev level={o.severity} />
+                <Box sx={{ minWidth: 0 }}>
+                  <Typography
+                    component={Link} to={ruleShowPath(o.code)}
+                    variant="body2"
+                    noWrap
+                    sx={{ fontWeight: 600, color: "primary.main", textDecoration: "none", fontFamily: "monospace" }}
+                  >
+                    {o.code}
+                  </Typography>
+                  <Clamp lines={1}>{o.name.replace(/^\S+\s+/, "")}</Clamp>
+                </Box>
+              </Stack>
+            </TableCell>
+            <TableCell sx={{ ...bodyCell, textAlign: "right", color: o.breached_days ? tone(o.severity) : ABSENT }}>
+              <Maybe n={o.breached_days} emphasise />
+            </TableCell>
+            <TableCell sx={{ ...bodyCell, textAlign: "right" }}>
+              <Maybe n={o.exceptions} emphasise />
+            </TableCell>
+            <TableCell sx={{ ...bodyCell, textAlign: "right" }}>
+              <Maybe n={o.open_findings} emphasise />
+            </TableCell>
+          </TableRow>
+        ))}
+      </TableBody>
+    </Table>
+  );
+};
+
+/* ================================================================== */
+/* 5. The evidence                                                     */
+/* ================================================================== */
 /**
- * One data date as four segments. It is the only chart on the page, because it
- * is the only one a head of audit needs: green that the rule ran and found
- * nothing, red that it raised an observation, grey that it did not run at all.
+ * One data date as four segments: green that the control ran and found nothing,
+ * red that it raised a finding, orange that it failed to run, grey that it did
+ * not run at all.
+ *
+ * This is the audit trail behind the briefing above, which is why it sits at
+ * the bottom and drops out of the print. It is still the only place the four
+ * states are visible per day, and folding grey into green is the single thing
+ * this page exists to refuse.
  */
+const KEY: ReadonlyArray<readonly [string, string]> = [
+  [PASSED, "ran, nothing found"],
+  [BREACH, "raised a finding"],
+  [ERRORED, "failed to run"],
+  [UNCHECKED, "did not run"],
+];
+
+/** The four-state key, on the daily evidence title's line rather than a strip. */
+const Key = () => (
+  <Stack direction="row" spacing={1.5} useFlexGap sx={{ flexWrap: "wrap", alignItems: "center", rowGap: 0.25 }}>
+    {KEY.map(([colour, label]) => (
+      <Stack key={label} direction="row" spacing={0.5} sx={{ alignItems: "center" }}>
+        <Box sx={{ width: 9, height: 9, borderRadius: 2, bgcolor: colour, flexShrink: 0 }} />
+        <Typography variant="caption" sx={{ color: "text.secondary", whiteSpace: "nowrap" }}>
+          {label}
+        </Typography>
+      </Stack>
+    ))}
+  </Stack>
+);
+
 const DayBar = ({ d }: { d: DayRow }) => {
   const seg = (n: number, colour: string, label: string) =>
     n > 0 ? (
-      <Tooltip key={label} title={`${n} ${plural(n, "rule", "rules")} — ${label}`}>
+      <Tooltip key={label} title={`${n} ${plural(n, "control", "controls")} \u2014 ${label}`}>
         <Box sx={{ width: `${(n / d.assured) * 100}%`, bgcolor: colour }} />
       </Tooltip>
     ) : null;
-  // Only the parts that happened, so the tooltip reads as a sentence about this
-  // day rather than as four numbers including the zeroes.
   const what = [
-    d.passed && `${d.passed} ran, no observations`,
-    d.breach && `${d.breach} raised an observation`,
+    d.passed && `${d.passed} ran, nothing found`,
+    d.breach && `${d.breach} raised a finding`,
     d.errored && `${d.errored} failed to run`,
     d.unchecked && `${d.unchecked} did not run`,
   ]
     .filter(Boolean)
-    .join(" · ");
+    .join(" \u00b7 ");
   return (
-    <Tooltip
-      title={`${longDate(d.date)} — ${what || "no rules ran"} (of ${d.assured})`}
-    >
+    <Tooltip title={`${longDate(d.date)} \u2014 ${what || "nothing ran"} (of ${d.assured})`}>
       <Box sx={{ display: "flex", height: 9, borderRadius: 5, overflow: "hidden", bgcolor: "#eef1f6" }}>
-        {seg(d.passed, PASSED, "ran, no observations")}
-        {seg(d.breach, BREACH, "raised an observation")}
+        {seg(d.passed, PASSED, "ran, nothing found")}
+        {seg(d.breach, BREACH, "raised a finding")}
         {seg(d.errored, ERRORED, "failed to run")}
         {seg(d.unchecked, UNCHECKED, "did not run")}
       </Box>
     </Tooltip>
+  );
+};
+
+const DailyGrid = ({ days }: { days: DayRow[] }) => {
+  const latest = days[0];
+  return (
+    <Table size="small" sx={flushTable}>
+      <TableHead>
+        <TableRow>
+          <TableCell sx={{ ...headCell, width: 180 }}>Data date</TableCell>
+          <TableCell sx={{ ...headCell, width: 120, textAlign: "right" }}>Controls ran</TableCell>
+          <TableCell sx={{ ...headCell, width: 160, textAlign: "right" }}>Findings raised</TableCell>
+          <TableCell sx={{ ...headCell, width: 140, textAlign: "right" }}>Exceptions</TableCell>
+          <TableCell sx={{ ...headCell, width: 220 }}>Coverage</TableCell>
+        </TableRow>
+      </TableHead>
+      <TableBody>
+        {days.map((d) => {
+          const ran = checkedOf(d);
+          const short = d.assured - ran;
+          return (
+            <TableRow key={d.date} sx={{ bgcolor: d.date === latest.date ? "#f6faf9" : undefined }}>
+              <TableCell sx={{ ...bodyCell, fontWeight: 600, whiteSpace: "nowrap" }}>
+                {day(d.date)}
+                {d.date === latest.date && (
+                  <Chip size="small" label="latest" sx={{ ml: 1, height: 20 }} />
+                )}
+              </TableCell>
+              <TableCell sx={{ ...bodyCell, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>
+                <Box component="span" sx={{ fontWeight: short ? 700 : 600 }}>{ran}</Box>
+                <Typography component="span" variant="body2" sx={{ color: short ? "warning.main" : ABSENT }}>
+                  {" "}of {d.assured}
+                </Typography>
+              </TableCell>
+              <TableCell sx={{ ...bodyCell, textAlign: "right" }}>
+                {d.breach > 0 ? (
+                  <Typography variant="body2" sx={{ fontWeight: 700, color: BREACH }}>{d.breach}</Typography>
+                ) : (
+                  <Typography
+                    variant="body2"
+                    sx={{
+                      color: ran === d.assured ? PASSED : "text.secondary",
+                      fontWeight: ran === d.assured ? 600 : 400,
+                    }}
+                  >
+                    None
+                  </Typography>
+                )}
+              </TableCell>
+              <TableCell sx={{ ...bodyCell, textAlign: "right" }}>
+                <Maybe n={d.exceptions} emphasise />
+              </TableCell>
+              <TableCell sx={bodyCell}><DayBar d={d} /></TableCell>
+            </TableRow>
+          );
+        })}
+      </TableBody>
+    </Table>
   );
 };
 
@@ -313,7 +887,7 @@ export const Dashboard = () => {
   if (!data) {
     return (
       <Alert severity="error">
-        Could not load the assurance position{error ? ` — ${error}` : ""}. Refusing
+        Could not load the assurance position{error ? ` \u2014 ${error}` : ""}. Refusing
         to draw a partial picture that would read as a real count.
       </Alert>
     );
@@ -322,63 +896,27 @@ export const Dashboard = () => {
   if (!data.window_days) {
     return (
       <Alert severity="info">
-        No rule has run for {current?.name ?? entity} yet, so there is no
-        assurance position to report. It appears here as soon as a rule executes.
+        No control has run for {current?.name ?? entity} yet, so there is no
+        assurance position to report. It appears here as soon as a control executes.
       </Alert>
     );
   }
 
-  // Most recent first. A briefing reads from the top, and the newest day is the
-  // only one still open to change.
+  // Most recent first for the grid - a briefing reads from the top. The
+  // sparkline wants the opposite, so it is given the payload's own order.
   const days = [...data.days].reverse();
-  const latest = days[0];
-  // The headline and the grid must count the same thing, or the top of the page
-  // contradicts the table under it. "Ran" is passed+breach: a rule that tried to
-  // run and failed has not checked anything, so it belongs in the shortfall,
-  // exactly where the grid puts it.
-  const missing = latest.assured - checkedOf(latest);
-  const net = data.movement.raised_findings - data.movement.acknowledged_findings;
-  const critical = data.open.by_severity.find((s) => s.severity === "critical");
-
-  const Position = ({
-    label, value, unit, sentence, tone,
-  }: {
-    label: string; value: string; unit?: string; sentence: string;
-    tone?: "error" | "warning" | "success";
-  }) => (
-    <Box sx={{ px: 3, py: 2.25, flex: 1, minWidth: 210 }}>
-      <Typography variant="overline" sx={{ color: "text.secondary" }}>{label}</Typography>
-      <Stack direction="row" spacing={1} sx={{ mt: 0.25, alignItems: "baseline" }}>
-        <Typography
-          sx={{
-            fontSize: "2.125rem", fontWeight: 700, lineHeight: 1.15, letterSpacing: -0.5,
-            color:
-              tone === "error" ? "error.main"
-              : tone === "warning" ? "warning.main"
-              : "text.primary",
-          }}
-        >
-          {value}
-        </Typography>
-        {unit && <Typography variant="body2" sx={{ color: "text.secondary" }}>{unit}</Typography>}
-      </Stack>
-      <Typography variant="caption" sx={{ display: "block", mt: 0.5, color: "text.secondary" }}>
-        {sentence}
-      </Typography>
-    </Box>
-  );
 
   return (
     <Box>
       {/* --- header ------------------------------------------------------- */}
       <Stack
         direction="row"
-        sx={{ mb: 2.5, justifyContent: "space-between", alignItems: "flex-start" }}
+        sx={{ mb: 1.5, justifyContent: "space-between", alignItems: "flex-start" }}
       >
         <Box>
           <Typography variant="h5">{current?.name ?? entity} — assurance position</Typography>
           <Typography variant="body2" sx={{ color: "text.secondary" }}>
-            {data.controls.assured} {plural(data.controls.assured, "rule", "rules")} in scope ·{" "}
+            {data.controls.assured} {plural(data.controls.assured, "control", "controls")} assuring ·{" "}
             last {data.window_days} data {plural(data.window_days, "day", "days")}
           </Typography>
         </Box>
@@ -393,274 +931,79 @@ export const Dashboard = () => {
         </Box>
       </Stack>
 
-      {/* --- the three questions ------------------------------------------ */}
-      <Card sx={{ mb: 2.5 }}>
-        <Box sx={{ display: "flex", flexWrap: "wrap", "& > * + *": { borderLeft: "1px solid #eef1f6" } }}>
-          <Position
-            label="Rules ran"
-            // Always "N of M", never "All N" - "All 1" reads as a mistake, and
-            // the colour already carries whether the two numbers agree.
-            value={`${checkedOf(latest)} of ${latest.assured}`}
-            tone={missing === 0 ? "success" : "warning"}
-            sentence={
-              missing === 0
-                ? `every rule ran on ${day(latest.date)}`
-                : `${missing} ${plural(missing, "rule did", "rules did")} not run on ${day(latest.date)}`
-            }
-          />
-          <Position
-            label="Open exposure"
-            value={num(data.open.exceptions)}
-            unit="exception lines"
-            tone={data.open.findings ? "error" : "success"}
-            sentence={
-              data.open.findings
-                ? `across ${num(data.open.findings)} open ${plural(data.open.findings, "ticket", "tickets")}` +
-                  `${critical ? ` · ${num(critical.exceptions)} from critical` : ""}` +
-                  ` · oldest ${data.open.oldest_days} ${plural(data.open.oldest_days, "day", "days")}`
-                : "nothing outstanding"
-            }
-          />
-          <Position
-            label="Movement"
-            value={`${net > 0 ? "+" : net < 0 ? "−" : ""}${num(Math.abs(net))}`}
-            unit={plural(Math.abs(net), "ticket", "tickets")}
-            tone={net > 0 ? "warning" : "success"}
-            sentence={
-              `${num(data.movement.raised_findings)} raised, ` +
-              `${num(data.movement.acknowledged_findings)} acknowledged` +
-              (data.movement.ack_days !== null
-                ? ` · ${data.movement.ack_days}d to acknowledge`
-                : " in the window")
-            }
-          />
-        </Box>
-      </Card>
+      {/* --- 1. the verdict, one line -------------------------------------- */}
+      <VerdictStrip verdict={data.verdict} />
 
-      {/* --- only rendered when there is something to say --------------------
-           Above the grid, not below it. A missed control is the first thing a
-           head of audit needs, and the last thing they should have to scroll for. */}
-      {data.overdue.length > 0 && (
-        <Alert severity="warning" sx={{ mb: 2, alignItems: "center" }}>
-          <WarningAmberIcon sx={{ mr: 1.5, flexShrink: 0 }} />
-          <Box>
-            <Typography variant="body2" sx={{ fontWeight: 700 }}>
-              {data.overdue.length} scheduled {plural(data.overdue.length, "rule has", "rules have")} missed a data day
-            </Typography>
-            <Typography variant="caption" sx={{ display: "block" }}>
-              {data.overdue
-                .map((o) => `${o.code} did not run on ${o.missing_days} of the last ${data.window_days} days`)
-                .join(" · ")}
-              . Those days were not checked — which is not the same as clean.
-            </Typography>
-          </Box>
-        </Alert>
-      )}
-
-      {data.controls.not_assured_count > 0 && (
-        <Alert severity="info" sx={{ mb: 2 }}>
-          <Typography variant="body2" sx={{ fontWeight: 700 }}>
-            {data.controls.not_assured_count} {plural(data.controls.not_assured_count, "rule is", "rules are")} not yet assuring
-          </Typography>
-          <Typography variant="caption" sx={{ display: "block" }}>
-            {data.controls.not_assured
-              .map((c) => `${c.code} (${c.status}, ${c.validation_status})`)
-              .join(" · ")}
-            . Excluded from the figures above: a rule that was never switched
-            on is not expected to have checked anything.
-          </Typography>
-        </Alert>
-      )}
-
-      {data.gaps.length > 0 && data.overdue.length === 0 && (
-        <Alert severity="info" sx={{ mb: 2 }}>
-          <Typography variant="body2" sx={{ fontWeight: 700 }}>On-demand coverage</Typography>
-          <Typography variant="caption" sx={{ display: "block" }}>
-            {data.gaps
-              .map((o) => `${o.code} (${o.cadence.toLowerCase()}, covered ${o.reported_days} of ${data.window_days})`)
-              .join(" · ")}
-            . None has a cadence, so the days it missed are coverage notes rather
-            than missed deadlines.
-          </Typography>
-        </Alert>
-      )}
-
-      {/* --- question 1: did the controls look? ----------------------------- */}
-      <Box sx={{ mb: 3 }}>
-        <SectionTitle aside={`${data.window_days} data days, most recent first`}>
-          Daily assurance — which rules ran each day, and what they raised
-        </SectionTitle>
-        <Card>
-          <Table size="small">
-            <TableHead>
-              <TableRow>
-                <TableCell sx={{ ...headCell, width: 170 }}>Date</TableCell>
-                <TableCell sx={{ ...headCell, width: 110, textAlign: "right" }}>Rules ran</TableCell>
-                <TableCell sx={{ ...headCell, width: 170 }}>Audit observations</TableCell>
-                <TableCell sx={{ ...headCell, width: 150, textAlign: "right" }}>Exception lines</TableCell>
-                <TableCell sx={{ ...headCell, width: 180 }}>Rule run coverage</TableCell>
-              </TableRow>
-            </TableHead>
-            <TableBody>
-              {days.map((d) => (
-                <TableRow key={d.date} sx={{ bgcolor: d.date === latest.date ? "#f6faf9" : undefined }}>
-                  <TableCell sx={{ ...bodyCell, fontWeight: 600, whiteSpace: "nowrap" }}>
-                    {day(d.date)}
-                    {d.date === latest.date && (
-                      <Chip size="small" label="latest" sx={{ ml: 1, height: 20 }} />
-                    )}
-                  </TableCell>
-                  <TableCell sx={bodyCell}><RulesRan d={d} /></TableCell>
-                  <TableCell sx={bodyCell}><Observations d={d} /></TableCell>
-                  <TableCell sx={{ ...bodyCell, textAlign: "right" }}>
-                    <Maybe n={d.exceptions} emphasise />
-                  </TableCell>
-                  <TableCell sx={bodyCell}>
-                    <DayBar d={d} />
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-          <Stack
-            direction="row"
-            spacing={2.5}
-            useFlexGap
-            sx={{ px: 2, py: 1, borderTop: "1px solid #eef1f6", flexWrap: "wrap" }}
-          >
-            {([[PASSED, "ran, no observations"], [BREACH, "raised an observation"],
-               [ERRORED, "failed to run"], [UNCHECKED, "did not run"]] as const).map(
-              ([colour, label]) => (
-                <Stack key={label} direction="row" spacing={0.75} sx={{ alignItems: "center" }}>
-                  <Box sx={{ width: 10, height: 10, borderRadius: 3, bgcolor: colour, flexShrink: 0 }} />
-                  <Typography variant="caption" sx={{ color: "text.secondary" }}>{label}</Typography>
-                </Stack>
-              ),
-            )}
-          </Stack>
-        </Card>
+      {/* --- 2. what, how old, which way ----------------------------------- */}
+      <Box
+        sx={{
+          display: "grid",
+          gridTemplateColumns: { xs: "1fr", lg: "repeat(3, 1fr)" },
+          gap: 2,
+          mb: 2,
+          alignItems: "stretch",
+        }}
+      >
+        <Frame title="Exposure by severity" aside="open findings, worst first">
+          <SeverityChart open={data.open} />
+        </Frame>
+        <Frame
+          title="Age of open findings"
+          aside={`oldest ${data.open.oldest_days} ${plural(data.open.oldest_days, "day", "days")}`}
+        >
+          <AgeChart open={data.open} />
+        </Frame>
+        <Frame title="Direction of travel" aside={`${data.window_days} data days`}>
+          <TravelChart movement={data.movement} days={data.days} backlog={data.open.by_status} />
+        </Frame>
       </Box>
 
-      {/* --- questions 2 and 3: what was found, and where to look first ------- */}
-      <Box sx={{ display: "grid", gridTemplateColumns: { xs: "1fr", xl: "5fr 7fr" }, gap: 3 }}>
-        <Box sx={{ minWidth: 0 }}>
-          <SectionTitle aside="most observations first">Rules with observations</SectionTitle>
-          <Card sx={{ height: "100%" }}>
-            {data.offenders.length === 0 ? (
-              <Stack
-                direction="row"
-                spacing={1}
-                sx={{ p: 2.5, color: "success.main", alignItems: "center" }}
-              >
-                <TaskAltIcon />
-                <Typography variant="body2">
-                  No rule raised an observation in this window.
-                </Typography>
-              </Stack>
-            ) : (
-              <Table size="small">
-                <TableHead>
-                  <TableRow>
-                    <TableCell sx={headCell}>Rule</TableCell>
-                    <TableCell sx={{ ...headCell, width: 92, textAlign: "right" }}>Days hit</TableCell>
-                    <TableCell sx={{ ...headCell, width: 150, textAlign: "right" }}>Exception lines</TableCell>
-                    <TableCell sx={{ ...headCell, width: 66, textAlign: "right" }}>Open</TableCell>
-                  </TableRow>
-                </TableHead>
-                <TableBody>
-                  {data.offenders.map((o) => (
-                    <TableRow key={o.code}>
-                      <TableCell sx={bodyCell}>
-                        <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
-                          <Sev level={o.severity} />
-                          <Box sx={{ minWidth: 0 }}>
-                            <Typography
-                              component={Link} to={ruleShowPath(o.code)}
-                              variant="body2"
-                              sx={{ fontWeight: 600, color: "primary.main", textDecoration: "none", fontFamily: "monospace" }}
-                            >
-                              {o.code}
-                            </Typography>
-                            <Clamp lines={1}>{o.name.replace(/^\S+\s+/, "")}</Clamp>
-                          </Box>
-                        </Stack>
-                      </TableCell>
-                      <TableCell sx={{ ...bodyCell, textAlign: "right", color: o.breached_days ? BREACH : ABSENT }}>
-                        <Maybe n={o.breached_days} emphasise />
-                      </TableCell>
-                      <TableCell sx={{ ...bodyCell, textAlign: "right" }}>
-                        <Maybe n={o.exceptions} emphasise />
-                      </TableCell>
-                      <TableCell sx={{ ...bodyCell, textAlign: "right" }}>
-                        <Maybe n={o.open_findings} emphasise />
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            )}
-          </Card>
-        </Box>
+      {/* --- 3. did the controls look? ------------------------------------- */}
+      <CoverageStrip data={data} />
 
-        <Box sx={{ minWidth: 0 }}>
-          <SectionTitle aside="oldest first, repeats grouped">
-            Open problems, longest waiting
-          </SectionTitle>
-          <Card sx={{ height: "100%" }}>
-            {data.longest_open.length === 0 ? (
-              <Stack
-                direction="row"
-                spacing={1}
-                sx={{ p: 2.5, color: "success.main", alignItems: "center" }}
-              >
-                <TaskAltIcon />
-                <Typography variant="body2">Nothing open. The queue is clear.</Typography>
-              </Stack>
-            ) : (
-              <Table size="small">
-                <TableHead>
-                  <TableRow>
-                    <TableCell sx={{ ...headCell, width: 84 }}>Severity</TableCell>
-                    <TableCell sx={{ ...headCell, width: 80 }}>Rule</TableCell>
-                    <TableCell sx={{ ...headCell, width: 64, textAlign: "right" }}>Tickets</TableCell>
-                    <TableCell sx={{ ...headCell, width: 62, textAlign: "right" }}>Age</TableCell>
-                    <TableCell sx={headCell}>What it found</TableCell>
-                  </TableRow>
-                </TableHead>
-                <TableBody>
-                  {data.longest_open.map((p) => (
-                    <TableRow key={`${p.rule_code}-${p.id}`}>
-                      <TableCell sx={bodyCell}><Sev level={p.severity} /></TableCell>
-                      <TableCell sx={{ ...bodyCell, whiteSpace: "nowrap" }}>
-                        <Typography
-                          component={Link} to={`/tickets/${p.id}/show`}
-                          variant="body2"
-                          sx={{ fontWeight: 600, color: "primary.main", textDecoration: "none", fontFamily: "monospace" }}
-                        >
-                          {p.rule_code}
-                        </Typography>
-                      </TableCell>
-                      <TableCell sx={{ ...bodyCell, textAlign: "right" }}>
-                        {p.count > 1 ? (
-                          <Tooltip title={`${p.count} separate ${plural(p.count, "ticket", "tickets")} — one per rule that raised an observation`}>
-                            <Chip size="small" label={`×${p.count}`} sx={{ height: 20 }} />
-                          </Tooltip>
-                        ) : (
-                          <Maybe n={1} />
-                        )}
-                      </TableCell>
-                      <TableCell sx={{ ...bodyCell, textAlign: "right", fontWeight: 700, whiteSpace: "nowrap" }}>
-                        {p.age_days}d
-                      </TableCell>
-                      <TableCell sx={bodyCell}><Clamp>{p.summary}</Clamp></TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            )}
-          </Card>
-        </Box>
+      {/* --- 4. what needs a decision -------------------------------------- */}
+      {/* Two columns from `lg`, not `xl`: at 1366 the briefings the two tables
+          hold are the last thing above the fold, and stacking them there put
+          the second one 350px below it. */}
+      <Box sx={{ display: "grid", gridTemplateColumns: { xs: "1fr", lg: "7fr 5fr" }, gap: 2, mb: 2 }}>
+        <Frame
+          title="Findings that need a decision"
+          aside="worst first, oldest first within a severity"
+          flush
+        >
+          {data.priority.length === 0 ? (
+            <Stack direction="row" spacing={1} sx={{ px: 2, pb: 2, color: "success.main", alignItems: "center" }}>
+              <TaskAltIcon />
+              <Typography variant="body2">Nothing open. The queue is clear.</Typography>
+            </Stack>
+          ) : (
+            <PriorityTable findings={data.priority} />
+          )}
+        </Frame>
+
+        <Frame title="Controls that found something" aside="most days breached first" flush>
+          {data.offenders.length === 0 ? (
+            <Stack direction="row" spacing={1} sx={{ px: 2, pb: 2, color: "success.main", alignItems: "center" }}>
+              <TaskAltIcon />
+              <Typography variant="body2">
+                No control raised a finding in this window.
+              </Typography>
+            </Stack>
+          ) : (
+            <ControlsTable rows={data.offenders} />
+          )}
+        </Frame>
       </Box>
+
+      {/* --- 5. the evidence ------------------------------------------------ */}
+      <Frame
+        title="Daily evidence — which controls ran, and what they found"
+        aside={<Key />}
+        flush
+        className="no-print"
+      >
+        <DailyGrid days={days} />
+      </Frame>
     </Box>
   );
 };

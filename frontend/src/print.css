@@ -1,0 +1,33 @@
+/*
+ * The landing page is a briefing a head of audit takes to a committee, so it
+ * has to survive being printed.
+ *
+ * What prints is the briefing. The app bar and the sidebar are chrome that
+ * would otherwise be repeated on every sheet, and the daily grid is the
+ * evidence behind the briefing rather than part of it - so it carries
+ * `no-print` and drops out. Everything else stays.
+ */
+@media print {
+  .RaAppBar-appBar,
+  .RaSidebar-paper,
+  .RaSidebar-docked,
+  .RaMenu-root,
+  .no-print {
+    display: none !important;
+  }
+
+  .RaLayout-content {
+    padding: 0 !important;
+  }
+
+  /* A card is the unit of the briefing. Split across a page break, its numbers
+     land on one sheet and the label that explains them on the next. */
+  .MuiCard-root {
+    break-inside: avoid;
+    box-shadow: none !important;
+  }
+
+  body {
+    background: #fff;
+  }
+}

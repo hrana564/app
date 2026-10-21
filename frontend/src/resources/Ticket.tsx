@@ -28,7 +28,7 @@ const SEVERITY_OPTIONS = SEVERITIES;
  * None that removes grouping entirely.
  */
 const GROUPINGS = [
-  { value: "rule_code", label: "Rule" },
+  { value: "rule_code", label: "Control" },
   { value: "severity", label: "Severity" },
   { value: "status", label: "Status" },
   { value: "", label: "No grouping" },
@@ -116,7 +116,7 @@ const AcknowledgeButton = ({ record: explicit }: { record?: any }) => {
       ) : (
         // Left in place and disabled, with the reason attached. A button that
         // is simply missing is a question the user has to ask.
-        <Tooltip title="Acknowledging a ticket needs the tickets.acknowledge capability">
+        <Tooltip title="Acknowledging a finding needs the tickets.acknowledge capability">
           <span>
             <Button
               size="small"
@@ -149,8 +149,8 @@ const AcknowledgeButton = ({ record: explicit }: { record?: any }) => {
               helperText="Recorded against your username with a timestamp - this is the audit trail."
             />
             <Alert severity="info">
-              Acknowledging marks this ticket reviewed. It does not close the underlying
-              control - the next scheduled run will still raise a ticket if the observation recurs.
+              Acknowledging marks this finding reviewed. It does not close the underlying
+              control - the next scheduled run will still raise a finding if it recurs.
             </Alert>
           </Stack>
         </DialogContent>
@@ -183,7 +183,7 @@ const ReopenButton = ({ record: explicit }: { record?: any }) => {
   if (!record || record.status === "open") return null;
   if (!mayAcknowledge) {
     return (
-      <Tooltip title="Reopening a ticket needs the tickets.acknowledge capability">
+      <Tooltip title="Reopening a finding needs the tickets.acknowledge capability">
         <span>
           <Button size="small" startIcon={<ReplayIcon />} disabled>
             Reopen
@@ -251,7 +251,7 @@ const BulkAckDialog = ({
     try {
       const r = await api.acknowledgeAllTickets({ ...scope.payload, status, note });
       notify(
-        `${r.acknowledged} ticket${r.acknowledged === 1 ? "" : "s"} ${status}`,
+        `${r.acknowledged} finding${r.acknowledged === 1 ? "" : "s"} ${status}`,
         { type: "success" },
       );
       onDone();
@@ -266,7 +266,7 @@ const BulkAckDialog = ({
   return (
     <Dialog open onClose={pending ? undefined : onClose} maxWidth="sm" fullWidth>
       <DialogTitle>
-        {scope.count} ticket{scope.count === 1 ? "" : "s"}
+        {scope.count} finding{scope.count === 1 ? "" : "s"}
         <Typography variant="body2" sx={{ mt: 0.5, color: "text.secondary" }}>
           {scope.describe}
         </Typography>
@@ -281,12 +281,12 @@ const BulkAckDialog = ({
             <>
               <Alert severity="warning">
                 This records <strong>{scope.count}</strong>{" "}
-                {scope.count === 1 ? "ticket" : "tickets"} against your username
+                {scope.count === 1 ? "finding" : "findings"} against your username
                 with one timestamp. It does not stop at the end of this page - it
-                covers every open ticket matching the scope.
+                covers every open finding matching the scope.
               </Alert>
               <MuiTextField
-                label="Auditor note (applied to every ticket)"
+                label="Auditor note (applied to every finding)"
                 value={note}
                 onChange={(e) => setNote(e.target.value)}
                 multiline
@@ -368,10 +368,10 @@ const GroupedInbox = ({
       {/* The header describes the GROUP, because the group is what a row here is. */}
       <TableHead>
         <TableRow>
-          <TableCell sx={{ ...headCellSx, width: "26%" }}>Rule</TableCell>
+          <TableCell sx={{ ...headCellSx, width: "26%" }}>Control</TableCell>
           <TableCell sx={{ ...headCellSx, width: 150 }}>Severity</TableCell>
           <TableCell sx={{ ...headCellSx, width: 120 }}>Open</TableCell>
-          <TableCell sx={headCellSx}>Tickets</TableCell>
+          <TableCell sx={headCellSx}>Findings</TableCell>
           <TableCell align="right" sx={{ ...headCellSx, width: 190 }}>Actions</TableCell>
         </TableRow>
       </TableHead>
@@ -514,7 +514,7 @@ const GroupedInbox = ({
           <Typography variant="body2" sx={{ flex: 1, color: "text.secondary" }}>
             <strong>{groups.length}</strong> of <strong>{totalGroups}</strong>{" "}
             {totalGroups === 1 ? "group" : "groups"} ·{" "}
-            <strong>{totalTickets}</strong> ticket{totalTickets === 1 ? "" : "s"} in total
+            <strong>{totalTickets}</strong> finding{totalTickets === 1 ? "" : "s"} in total
           </Typography>
           <Button size="small" onClick={onToggleAll}>
             {allExpanded ? "Collapse all" : "Expand all"}
@@ -532,7 +532,7 @@ const FlatInbox = ({ tickets }: { tickets: any[] }) => {
     <>
       <TableHead>
         <TableRow>
-          <TableCell sx={{ ...headCellSx, width: 180 }}>Ticket</TableCell>
+          <TableCell sx={{ ...headCellSx, width: 180 }}>Finding</TableCell>
           <TableCell sx={{ ...headCellSx, width: 120 }}>Severity</TableCell>
           <TableCell sx={{ ...headCellSx, width: 140 }}>Status</TableCell>
           <TableCell sx={headCellSx}>Observation</TableCell>
@@ -733,13 +733,13 @@ export const TicketList = () => {
     <>
       <Card>
         <Toolbar sx={{ gap: 1, flexWrap: "wrap", py: 1.5 }}>
-          <MuiTextField size="small" placeholder="Search ticket no, summary…"
+          <MuiTextField size="small" placeholder="Search finding no, summary…"
             value={search} onChange={(e) => setSearch(e.target.value)} sx={{ minWidth: 240 }} />
           <Picker label="status" options={STATUS_OPTIONS} value={filters.status}
             onPick={(v) => { setFilters((f) => ({ ...f, status: v })); setPage(0); }} />
           <Picker label="severity" options={SEVERITY_OPTIONS} value={filters.severity}
             onPick={(v) => { setFilters((f) => ({ ...f, severity: v })); setPage(0); }} />
-          <MuiTextField select size="small" label="rule" value={filters.rule_code}
+          <MuiTextField select size="small" label="control" value={filters.rule_code}
             onChange={(e) => { setFilters((f) => ({ ...f, rule_code: e.target.value })); setPage(0); }}
             sx={{ minWidth: 170 }}>
             <MenuItem value=""><em>All</em></MenuItem>
@@ -799,10 +799,10 @@ export const TicketList = () => {
 
         <Box sx={{ px: 2, py: 1, bgcolor: "#fafbfe" }}>
           <Typography variant="body2" sx={{ color: "text.secondary" }}>
-            <strong>{rowCount}</strong> {groupBy ? (totalCount === 1 ? "group" : "groups") : "tickets"}{" "}
+            <strong>{rowCount}</strong> {groupBy ? (totalCount === 1 ? "group" : "groups") : "findings"}{" "}
             on this page · <strong>{openOnPage}</strong> open in view ·{" "}
-            <strong>{ticketTotal}</strong> ticket{ticketTotal === 1 ? "" : "s"} match
-            {groupBy ? ", counted before paging so no rule is split across pages" : ""}
+            <strong>{ticketTotal}</strong> finding{ticketTotal === 1 ? "" : "s"} match
+            {groupBy ? ", counted before paging so no control is split across pages" : ""}
           </Typography>
         </Box>
 
@@ -813,7 +813,7 @@ export const TicketList = () => {
         {data?.truncated ? (
           <Alert severity="warning" sx={{ borderRadius: 0 }}>
             Showing the newest {data.scanned.toLocaleString()} of{" "}
-            {ticketTotal.toLocaleString()} matching tickets. Narrow the filters
+            {ticketTotal.toLocaleString()} matching findings. Narrow the filters
             to see the rest &mdash; the bulk acknowledge below acts on every
             match, not only the ones listed here.
           </Alert>
@@ -824,7 +824,7 @@ export const TicketList = () => {
         ) : rowCount === 0 ? (
           <Box sx={{ p: 6, textAlign: "center" }}>
             <Typography variant="body1" sx={{ color: "text.secondary" }}>
-              No tickets match these filters.
+              No findings match these filters.
             </Typography>
           </Box>
         ) : (
@@ -853,7 +853,7 @@ export const TicketList = () => {
           labelDisplayedRows={({ from, to, count }) =>
             groupBy
               ? `${from}–${to} of ${count} ${count === 1 ? "group" : "groups"}`
-              : `${from}–${to} of ${count} tickets`
+              : `${from}–${to} of ${count} findings`
           }
         />
       </Card>
@@ -926,7 +926,7 @@ const TicketDetails = () => {
             gap: 2,
           }}>
             <Fact
-              label="Rule"
+              label="Control"
               value={
                 <Box
                   component="span"
@@ -986,8 +986,8 @@ const TicketDetails = () => {
           ) : (
             <Alert severity="warning">
               Not yet reviewed. Acknowledging records your username and the time
-              against this ticket. It does not close the underlying control - the
-              next scheduled run will raise again if the observation recurs.
+              against this finding. It does not close the underlying control - the
+              next scheduled run will raise again if it recurs.
             </Alert>
           )}
         </CardContent>

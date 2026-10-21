@@ -34,12 +34,6 @@ python-dotenv==1.2.4
 # Rule generation via any OpenAI-compatible endpoint (Foundry / Azure / Ollama / MiniMax)
 openai==2.14.0
 
-# The rule agent: a graph that writes a rule, runs it, and repairs it until it
-# works. MIT, with a permissive tree (langchain-core, langgraph-checkpoint,
-# langgraph-sdk, orjson, ormsgpack, xxhash - all MIT or Apache-2.0).
-# The licence gate decides, not this comment: scripts/check_licenses.py.
-langgraph==1.2.16
-
 # --- dev / tooling ---
 # The test suite is scripts/smoke_test.py, a plain script against a running API.
 # It uses httpx, which no other declared dependency is obliged to keep installed,

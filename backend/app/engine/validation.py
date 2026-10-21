@@ -139,6 +139,114 @@ def declared_tables(source: str) -> list[str]:
     return sorted(set(declared_names(source)) | set(referenced_tables(source)))
 
 
+def _module_strings(tree: ast.Module) -> dict[str, str]:
+    """Module-level `NAME = "literal"` assignments, so a named constant resolves.
+
+    A rule that compares `pl.col("tender_type") == CASH_TENDER` names its value
+    rather than spelling it, and the literal is still the thing that has to
+    occur in the data. Only a plain string constant is resolved - anything
+    computed is left alone, because guessing it would be worse than not knowing.
+    """
+    found: dict[str, str] = {}
+    for node in tree.body:
+        if not isinstance(node, ast.Assign):
+            continue
+        value = node.value
+        if not (isinstance(value, ast.Constant) and isinstance(value.value, str)):
+            continue
+        for target in node.targets:
+            if isinstance(target, ast.Name):
+                found[target.id] = value.value
+    return found
+
+
+def _column_of(node: ast.AST) -> str | None:
+    """The column name in `pl.col("x")`, or None."""
+    if not isinstance(node, ast.Call):
+        return None
+    if getattr(node.func, "attr", None) != "col" or not node.args:
+        return None
+    first = node.args[0]
+    if isinstance(first, ast.Constant) and isinstance(first.value, str):
+        return first.value
+    return None
+
+
+def _string_of(node: ast.AST, constants: dict[str, str]) -> str | None:
+    """The literal value of `"x"` or a named module constant, or None."""
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if isinstance(node, ast.Name):
+        return constants.get(node.id)
+    return None
+
+
+def compared_literals(source: str) -> list[tuple[str, str]]:
+    """Every (column, literal) this rule asserts a column equals.
+
+    `pl.col("x") == "y"` and `pl.col("x").is_in(["y", ...])`, on either side,
+    with the literal spelled out or held in a module constant. Pure text.
+
+    Only membership, never exclusion. `pl.col("x") != "y"` and a negated
+    `is_in` claim a value is ABSENT, which is a normal thing to write and a
+    normal thing for the data not to contain - checking those would warn on
+    every correctly-written exclusion.
+
+    The trial uses this to check each literal occurs in the data. A rule that
+    tests a column for a value the column does not hold finds nothing and still
+    reports a clean day - the one failure the execution check cannot see.
+    """
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return []
+
+    constants = _module_strings(tree)
+
+    negated = {
+        id(node.operand)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Invert)
+    }
+
+    found: set[tuple[str, str]] = set()
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Compare):
+            operands = [node.left, *node.comparators]
+            for op, left, right in zip(node.ops, operands, operands[1:]):
+                if not isinstance(op, ast.Eq):
+                    continue
+                column = _column_of(left) or _column_of(right)
+                if column is None:
+                    continue
+                literal = _string_of(right, constants)
+                if literal is None:
+                    literal = _string_of(left, constants)
+                if literal is not None:
+                    found.add((column, literal))
+        elif isinstance(node, ast.Call):
+            if getattr(node.func, "attr", None) != "is_in" or not node.args:
+                continue
+            if id(node) in negated:
+                continue
+            column = _column_of(node.func.value)
+            if column is None:
+                continue
+            argument = node.args[0]
+            elements = (
+                argument.elts
+                if isinstance(argument, (ast.List, ast.Tuple, ast.Set))
+                else []
+            )
+            for element in elements:
+                literal = _string_of(element, constants)
+                if literal is not None:
+                    found.add((column, literal))
+
+    return sorted(found)
+
+
 def scan_source(source: str) -> list[str]:
     """Every reason this file may not run. Pure text - no file, no database.
 

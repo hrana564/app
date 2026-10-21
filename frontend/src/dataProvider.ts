@@ -449,6 +449,8 @@ export interface TrialResult {
   metrics: Record<string, any>;
   error: string | null;
   duration_ms: number;
+  /** Values the rule tests a column for that the data does not hold. */
+  warnings: string[];
 }
 
 export interface RuleGenerateResponse {
@@ -464,6 +466,14 @@ export interface RuleGenerateResponse {
   attempts: GenerationAttempt[];
   suggested_code: string | null;
   error: string | null;
+  trace: AgentStep[];
+}
+
+/** One tool the agent used, and what it learned. */
+export interface AgentStep {
+  tool: string;
+  args: Record<string, any>;
+  summary: string;
 }
 
 /**

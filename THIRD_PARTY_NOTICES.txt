@@ -1,7 +1,7 @@
 THIRD-PARTY NOTICES
 ========================================================================
 
-Audit Portal - generated 2026-10-21 by
+Audit Portal - generated 2026-10-22 by
 backend/scripts/write_third_party_notice.py
 
 This product bundles the third-party software listed below. Each entry is
@@ -42,17 +42,8 @@ idna                            3.20          BSD-3-Clause
 jiter                           0.17.0        MIT
 jsonpatch                       1.36          BSD-3-Clause
 jsonpointer                     3.4           Modified BSD License
-langchain-core                  1.6.12        MIT
-langchain-protocol              0.0.19        MIT
-langgraph                       1.2.16        MIT
-langgraph-checkpoint            4.3.0         MIT
-langgraph-prebuilt              1.1.1         MIT
-langgraph-sdk                   0.4.8         MIT
-langsmith                       0.14.11       MIT
 openai                          2.14.0        Apache-2.0
 opentelemetry-api               1.45.1        Apache-2.0
-orjson                          3.13.0        MPL-2.0 AND (Apache-2.0 OR MIT)
-ormsgpack                       1.13.0        Apache-2.0 OR MIT
 packaging                       26.3          Apache-2.0 OR BSD-2-Clause
 pip                             26.2.1        MIT
 polars                          2.0.0         Copyright (c) 2025 Ritchie Vink
@@ -101,7 +92,6 @@ uuid_utils                      0.18.0        BSD-3-Clause
 uvicorn                         0.54.0        BSD-3-Clause
 watchfiles                      1.3.0         MIT
 websockets                      16.1.1        BSD-3-Clause
-xxhash                          4.0.2         BSD-2-Clause
 zstandard                       0.25.0        BSD-3-Clause
 
 ------------------------------------------------------------------------

@@ -310,6 +310,41 @@ const GenerateRuleDialog = () => {
                 <Alert severity="info">{trial.summary}</Alert>
               )}
 
+              {trial?.warnings?.length ? (
+                <Alert severity="warning">
+                  <strong>The rule tests values the data does not hold.</strong>{" "}
+                  A wrong value matches nothing, so the control would find
+                  nothing and still look clean. Check these before saving.
+                  <Box component="ul" sx={{ mt: 0.5, mb: 0, pl: 2 }}>
+                    {trial.warnings.map((w) => (
+                      <li key={w}>{w}</li>
+                    ))}
+                  </Box>
+                </Alert>
+              ) : null}
+
+              {result.trace?.length ? (
+                <Box>
+                  <Typography variant="caption" sx={{ fontWeight: 700 }}>
+                    WHAT THE AGENT CHECKED
+                  </Typography>
+                  <Stack spacing={0.25} sx={{ mt: 0.5 }}>
+                    {result.trace.map((step, i) => (
+                      <Typography
+                        key={`${step.tool}-${i}`}
+                        variant="body2"
+                        sx={{ color: "text.secondary" }}
+                      >
+                        <Box component="span" sx={{ fontFamily: "monospace" }}>
+                          {step.tool}
+                        </Box>
+                        {step.summary ? ` — ${step.summary}` : ""}
+                      </Typography>
+                    ))}
+                  </Stack>
+                </Box>
+              ) : null}
+
               <CodeBlock code={result.source_code ?? ""} />
             </Stack>
           ) : step === "failed" && result ? (

@@ -413,6 +413,15 @@ class TrialOut(BaseModel):
     metrics: dict[str, Any] = Field(default_factory=dict)
     error: str | None = None
     duration_ms: int = 0
+    warnings: list[str] = Field(default_factory=list)
+
+
+class AgentStep(BaseModel):
+    """One tool the agent used, and what it learned from it."""
+
+    tool: str
+    args: dict[str, Any] = Field(default_factory=dict)
+    summary: str = ""
 
 
 class RuleGenerateResponse(BaseModel):
@@ -434,6 +443,8 @@ class RuleGenerateResponse(BaseModel):
     attempts: list[GenerationAttempt] = Field(default_factory=list)
     suggested_code: str | None = None
     error: str | None = None
+    # What the agent looked at, in order - the evidence behind the rule.
+    trace: list[AgentStep] = Field(default_factory=list)
 
 
 class RuleTestResponse(BaseModel):

@@ -53,13 +53,16 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
 from dataclasses import dataclass, field
 from datetime import date
+from itertools import islice
 from pathlib import Path
 from typing import Any
+
+import csv
 
 from app.engine.ctx import invoke_rule
 from app.engine.loader import load_rule_at
 from app.engine.snapshot import capture
-from app.engine.validation import referenced_tables, scan_source
+from app.engine.validation import compared_literals, referenced_tables, scan_source
 from app.schemas import RuleResult
 from app.settings import settings
 
@@ -75,6 +78,10 @@ STATUS_BANNED = "banned"
 
 # The statuses an agent can act on. Everything else is a stop.
 REPAIRABLE = {STATUS_CODE_ERROR, STATUS_NOT_ALLOWED, STATUS_BANNED}
+
+# How many rows of a staged table are read to check a literal against the data.
+# The check is a sanity signal, not a proof, so it does not need every row.
+LITERAL_SCAN_ROWS = 5000
 
 
 @dataclass
@@ -93,6 +100,7 @@ class TrialResult:
     referenced: list[str] = field(default_factory=list)
     name: str | None = None
     description: str | None = None
+    warnings: list[str] = field(default_factory=list)
 
     @property
     def repairable(self) -> bool:
@@ -112,6 +120,7 @@ class TrialResult:
             "referenced": self.referenced,
             "name": self.name,
             "description": self.description,
+            "warnings": self.warnings,
         }
 
 
@@ -145,6 +154,59 @@ def _run_within(module, *, data_date, lookback_days, registered, snapshot, timeo
         return future.result(timeout=timeout)
     finally:
         executor.shutdown(wait=False)
+
+
+def _staged_values(snap, tables: list[str]) -> tuple[dict[str, set[str]], set[str]]:
+    """The values each column holds in the staged data, and every column seen.
+
+    Read from the frozen copy the rule itself ran against, so the check answers
+    about the same bytes. Bounded, because this is a signal and not a proof.
+    """
+    values: dict[str, set[str]] = {}
+    columns: set[str] = set()
+    for table in tables:
+        for path in snap.paths_for(table):
+            try:
+                with path.open(newline="", encoding="utf-8") as fh:
+                    reader = csv.reader(fh)
+                    try:
+                        header = next(reader)
+                    except StopIteration:
+                        continue
+                    columns.update(header)
+                    for row in islice(reader, LITERAL_SCAN_ROWS):
+                        for index, name in enumerate(header):
+                            if index < len(row) and row[index]:
+                                values.setdefault(name, set()).add(row[index].strip())
+            except (OSError, UnicodeDecodeError):
+                continue
+    return values, columns
+
+
+def _literal_warnings(source: str, snap, tables: list[str]) -> list[str]:
+    """Values the rule tests a column for that the column does not hold.
+
+    A wrong literal still runs: the filter matches nothing, the rule reports a
+    clean day, and the trial says it passed. Nothing in the execution path can
+    see it, so it is said here instead - as a warning, because a value that is
+    genuinely absent can be the point of a correctly-written rule.
+    """
+    pairs = compared_literals(source)
+    if not pairs:
+        return []
+
+    values, columns = _staged_values(snap, tables)
+    warnings: list[str] = []
+    for column, literal in pairs:
+        if column not in columns or literal in values.get(column, set()):
+            continue
+        warnings.append(
+            f"The rule tests {column} for {literal!r}, which does not occur in "
+            f"the data for this date. If that is the intended value, the "
+            f"control finds nothing - check the spelling against the values "
+            f"listed for {column}."
+        )
+    return warnings
 
 
 def run_trial(
@@ -317,6 +379,7 @@ def run_trial(
             referenced=referenced,
             name=getattr(module, "NAME", None),
             description=getattr(module, "DESCRIPTION", None),
+            warnings=_literal_warnings(source, snap, sorted(set(referenced))),
         )
     finally:
         shutil.rmtree(scratch, ignore_errors=True)

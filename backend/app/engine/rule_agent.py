@@ -1,86 +1,63 @@
 """
-The rule agent: generate, run it, and fix it until it works.
+The rule agent: look at the data, write a rule, run it, and fix it until it works.
 
-    generate --> verify --+--> ok -------> END
-       ^                  |
-       |                  +--> repairable -> repair --+
-       |                                              |
-       +----------------------------------------------+
+    ask tools ─► write ─► run_rule ─► (fix ─► run_rule)* ─► submit ─► gate
+       ▲                                                               │
+       └───────────────────────────────────────────────────────────────┘
 
-`verify` is where the truth comes from. It is not a second opinion from the
-model about its own code - it is the code being executed against the bytes the
-estate actually holds. A model asked "is this right?" will say yes; a rule
-asked to read a column that does not exist cannot.
+The model is not handed a snapshot of the data and asked to imagine a rule. It
+is given tools that read the real bytes and it looks. Everything it learns about
+the estate, it learns by asking - `distinct_values` settles a value,
+`join_overlap` settles a key, `column_stats` settles a threshold and a date
+format. It then writes the rule and runs it with `run_rule` until the run is
+clean.
 
-WHY A GRAPH
------------
-The loop has a shape: an attempt is made, the attempt is checked against
-something outside the model, and the answer decides what happens next. Written
-as a straight `while` it is four branches and one shared dict of state that
-every branch has to know about. As a graph the state is declared once, the
-edges say what may follow what, and the attempt history falls out of the state
-rather than being assembled by hand.
+WHY TOOLS
+---------
+A prompt can carry only what we thought to put in it. A tool answers what the
+model actually needs. That is the difference between us guessing which value
+list matters and the model asking for the one it is about to compare against.
 
-The graph is synchronous, so the whole thing runs in a worker thread. The
-model call and the trial are both blocking, and pretending otherwise would buy
-nothing but a way to lose the traceback.
+THE GATE
+--------
+`run_rule` is the truth: the code executed against the bytes the estate holds,
+never the model's opinion of its own code. The submitted source is run once more
+as the gate, so a rule is handed back only if it runs - whatever the model
+believed on the way.
+
+THE LOOP IS SYNCHRONOUS
+-----------------------
+The model call and the trial are both blocking, so the whole thing runs in a
+worker thread. Pretending otherwise would buy nothing but a way to lose the
+traceback.
 
 WHAT IS NOT HERE
 ----------------
-No database, no ledger, no rule row. A generation attempt writes nothing
-outside its own scratch folder, which is deleted afterwards. A rule that has
-not been reviewed by a human does not belong in the catalogue, and a trial
-that raised a ticket would put a finding in the ledger that nobody asked for.
+No database, no ledger, no rule row. A generation writes nothing outside its own
+scratch space. A rule that has not been reviewed by a human does not belong in
+the catalogue, and a trial that raised a ticket would put a finding in the
+ledger that nobody asked for.
 """
 
 from __future__ import annotations
 
+import json
 import logging
-import warnings
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
-from typing import Any, Callable, TypedDict
+from typing import Any, Callable
 
 from app.engine import rule_generator as gen
+from app.engine.agent_tools import TOOL_SCHEMAS, Toolbox
 from app.engine.catalog import Catalog
 from app.engine.trial import TrialResult, run_trial
-from app.settings import settings
 
 log = logging.getLogger("abm.agent")
 
-# langchain-core imports pydantic.v1 for its own internal models, and warns
-# that pydantic v1 is not compatible with Python 3.14. It is: we use pydantic
-# v2 everywhere, and this warning is about a code path we never touch. It
-# would otherwise print on every generation, in the log of a product being
-# sold, saying something that is not true of this code.
-warnings.filterwarnings(
-    "ignore",
-    message=".*Pydantic V1 functionality isn't compatible.*",
-    category=UserWarning,
-)
-
-# The model call, as a function. Injected so the graph can be exercised
-# without a live endpoint.
-Llm = Callable[[str, str], str]
-
-
-class GenState(TypedDict, total=False):
-    """Everything the graph carries between nodes."""
-
-    prompt: str
-    entity: str
-    data_date: date
-    lookback_days: int
-    tables: list[str]
-    allowed: list[str]
-    source: str
-    attempt: int
-    attempts: list[dict[str, Any]]
-    failure: str
-    traceback: str | None
-    fatal: str | None
-    done: bool
-    trial: dict[str, Any] | None
+# The model turn, as a function: given the conversation and the tools, return
+# the next assistant message. Injected so the loop can be exercised without a
+# live endpoint.
+ModelStep = Callable[[list[dict[str, Any]], list[dict[str, Any]]], "gen.ModelReply"]
 
 
 @dataclass
@@ -96,164 +73,67 @@ class GenerationResult:
     attempts: list[dict[str, Any]]
     error: str | None
     fatal: str | None
+    # What the agent looked at, in order. The review screen shows it, so a
+    # person sees why the agent believes the rule is right - not just that it
+    # ran.
+    trace: list[dict[str, Any]] = field(default_factory=list)
 
 
-def _record(state: GenState, attempt: int, ok: bool, error: str | None,
-            traceback: str | None = None) -> list[dict[str, Any]]:
-    """One entry per attempt, recorded when that attempt concludes.
+def _summarise(name: str, result: dict[str, Any]) -> str:
+    """One readable line for the trace. Never the whole payload."""
+    # A tool that failed returns {"error": ...} and nothing else. `run_rule`
+    # returns an "error" key too, holding None on success - so the check is a
+    # real error on a tool that has no verdict, not the key's presence.
+    if "ok" not in result and result.get("error"):
+        return f"error: {result['error']}"
 
-    An attempt concludes at the trial - that is where its outcome is known.
-    The generate and repair nodes do not add records of their own, because
-    "the model answered" is not an outcome; "the rule ran" is.
-    """
-    history = list(state.get("attempts") or [])
-    history.append(
-        {
-            "n": attempt,
-            "ok": ok,
-            "error": error,
-            "traceback": traceback,
-        }
-    )
-    return history
-
-
-def build_graph(llm: Llm, catalog: Catalog):
-    """Compile the graph around one model-call function.
-
-    The catalogue is closed over rather than carried in the state: it is
-    constant for the whole run, and a graph channel is for things that change
-    between nodes.
-    """
-
-    def generate(state: GenState) -> dict[str, Any]:
-        attempt = 1
-        try:
-            raw = llm(
-                gen.SYSTEM_PROMPT,
-                gen.build_prompt(
-                    catalog=catalog,
-                    natural_language=state["prompt"],
-                    entity=state["entity"],
-                    data_date=state["data_date"],
-                    tables=state["tables"],
-                    lookback_days=state["lookback_days"],
-                ),
-            )
-        except Exception as exc:  # noqa: BLE001
-            return {
-                "attempt": attempt,
-                "fatal": f"The model could not be reached: {type(exc).__name__}: {exc}",
-                "attempts": _record(state, attempt, False, str(exc)),
-            }
-
-        source = gen.strip_fences(raw)
-        return {
-            "source": source,
-            "attempt": attempt,
-        }
-
-    def verify(state: GenState) -> dict[str, Any]:
-        attempt = state.get("attempt", 1)
-        source = state.get("source") or ""
-
-        trial = run_trial(
-            source,
-            entity=state["entity"],
-            tables=state["tables"],
-            data_date=state["data_date"],
-            lookback_days=state["lookback_days"],
-            allowed=state["allowed"],
+    if name == "list_tables":
+        return f"{len(result.get('tables', []))} table(s)"
+    if name == "describe_table":
+        columns = result.get("columns") or {}
+        return f"{result.get('rows')} row(s), {len(columns)} column(s)"
+    if name == "sample_rows":
+        return f"{len(result.get('rows', []))} row(s)"
+    if name == "distinct_values":
+        shown = ", ".join(
+            str(value.get("value")) for value in (result.get("values") or [])[:8]
         )
-
-        if trial.ok:
-            return {
-                "trial": trial.as_dict(),
-                "done": True,
-                "attempts": _record(state, attempt, True, None),
-            }
-
-        history = _record(state, attempt, False, trial.error, trial.traceback)
-
-        if not trial.repairable:
-            # The data is not there. No rewrite fixes that, and an agent that
-            # believes otherwise will rewrite working code until it has
-            # nothing left to rewrite.
-            return {
-                "attempts": history,
-                "fatal": trial.error,
-            }
-
-        if attempt >= settings.llm_max_attempts:
-            return {
-                "attempts": history,
-                "fatal": (
-                    f"Gave up after {attempt} attempt(s). Last failure: {trial.error}"
-                ),
-            }
-
-        return {
-            "attempts": history,
-            "failure": trial.error or "The rule did not run.",
-            "traceback": trial.traceback,
-        }
-
-    def repair(state: GenState) -> dict[str, Any]:
-        attempt = state.get("attempt", 1) + 1
-        try:
-            raw = llm(
-                gen.SYSTEM_PROMPT,
-                gen.build_repair_prompt(
-                    catalog=catalog,
-                    source=state.get("source") or "",
-                    failure=state.get("failure") or "The rule did not run.",
-                    traceback_text=state.get("traceback"),
-                    entity=state["entity"],
-                    data_date=state["data_date"],
-                    tables=state["tables"],
-                    lookback_days=state["lookback_days"],
-                ),
+        more = ", ..." if result.get("truncated") else ""
+        return f"{result.get('distinct')} value(s): {shown}{more}"
+    if name == "column_stats":
+        return (
+            f"{result.get('type')}, {result.get('min')} .. {result.get('max')}"
+            f", {result.get('nulls')} null(s)"
+        )
+    if name == "join_overlap":
+        return (
+            f"{result.get('matched_keys')} of {result.get('left_distinct_keys')} "
+            f"key(s) matched"
+        )
+    if name == "filter_count":
+        return f"{result.get('matched')} of {result.get('total')} row(s)"
+    if name == "validate_rule":
+        problems = result.get("problems") or []
+        return "no problems" if not problems else f"{len(problems)} problem(s)"
+    if name.startswith("run_rule"):
+        found = result.get("row_count", 0)
+        if result.get("ok"):
+            return (
+                f"ran: {result.get('status')}, found {found} row(s)"
+                if found
+                else f"ran: {result.get('status')}, found nothing"
             )
-        except Exception as exc:  # noqa: BLE001
-            return {
-                "attempt": attempt,
-                "fatal": f"The model could not be reached: {type(exc).__name__}: {exc}",
-                "attempts": _record(state, attempt, False, str(exc)),
-            }
+        return f"ran: {result.get('status')} - {result.get('error')}"
+    return ""
 
-        return {
-            "source": gen.strip_fences(raw),
-            "attempt": attempt,
-        }
 
-    def route_after_generate(state: GenState) -> str:
-        # A model that could not be reached ends the run. There is nothing to
-        # verify: the source is empty, and "the rule does not define run(ctx)"
-        # would be a complaint about the model's absence, not about the rule.
-        return "end" if state.get("fatal") else "verify"
-
-    def route(state: GenState) -> str:
-        if state.get("done") or state.get("fatal"):
-            return "end"
-        return "repair"
-
-    from langgraph.graph import END, StateGraph
-
-    graph = StateGraph(GenState)
-    graph.add_node("generate", generate)
-    graph.add_node("verify", verify)
-    graph.add_node("repair", repair)
-    graph.set_entry_point("generate")
-    graph.add_conditional_edges(
-        "generate", route_after_generate, {"verify": "verify", "end": END}
-    )
-    graph.add_conditional_edges(
-        "verify", route, {"repair": "repair", "end": END}
-    )
-    graph.add_conditional_edges(
-        "repair", route_after_generate, {"verify": "verify", "end": END}
-    )
-    return graph.compile()
+def _final_run_summary(trial: TrialResult) -> dict[str, Any]:
+    return {
+        "ok": trial.ok,
+        "status": trial.status,
+        "row_count": len(trial.rows),
+        "error": trial.error,
+    }
 
 
 def run_generation(
@@ -265,58 +145,144 @@ def run_generation(
     tables: list[str],
     lookback_days: int = 1,
     allowed: list[str] | None = None,
-    llm: Llm | None = None,
+    llm: ModelStep | None = None,
 ) -> GenerationResult:
-    """Generate a rule, prove it runs, and repair it until it does."""
-    call = llm or gen.complete
+    """Let the agent look at the data, write a rule, and prove it runs."""
+    call = llm or gen.chat
+    selection = list(tables)
+    permitted = list(allowed) if allowed is not None else list(tables)
 
-    state: GenState = {
-        "prompt": prompt,
-        "entity": entity,
-        "data_date": data_date,
-        "lookback_days": lookback_days,
-        "tables": list(tables),
-        "allowed": list(allowed) if allowed is not None else list(tables),
-        "source": "",
-        "attempt": 0,
-        "attempts": [],
-        "done": False,
-    }
+    toolbox = Toolbox(
+        entity=entity,
+        data_date=data_date,
+        lookback_days=lookback_days,
+        tables=selection,
+        catalog=catalog,
+        allowed=permitted,
+    )
 
-    graph = build_graph(call, catalog)
-    final = graph.invoke(state)
+    messages: list[dict[str, Any]] = [
+        {"role": "system", "content": gen.SYSTEM_PROMPT + "\n\n" + gen.AGENT_METHOD},
+        {
+            "role": "user",
+            "content": gen.build_prompt(
+                catalog=catalog,
+                natural_language=prompt,
+                entity=entity,
+                data_date=data_date,
+                tables=selection,
+                lookback_days=lookback_days,
+            ),
+        },
+    ]
 
-    attempts = list(final.get("attempts") or [])
-    trial_raw = final.get("trial")
-    fatal = final.get("fatal")
-    source = final.get("source") or ""
+    trace: list[dict[str, Any]] = []
+    attempts: list[dict[str, Any]] = []
+    source = ""
 
-    trial = None
-    if trial_raw:
-        trial = TrialResult(
-            status=trial_raw["status"],
-            ok=trial_raw["ok"],
-            outcome=trial_raw["outcome"],
-            summary=trial_raw["summary"],
-            rows=trial_raw["rows"],
-            metrics=trial_raw["metrics"],
-            error=trial_raw["error"],
-            traceback=trial_raw["traceback"],
-            duration_ms=trial_raw["duration_ms"],
-            referenced=trial_raw["referenced"],
-            name=trial_raw["name"],
-            description=trial_raw["description"],
-        )
+    def result(**overrides: Any) -> GenerationResult:
+        base = {
+            "ok": False,
+            "source": None,
+            "name": None,
+            "description": None,
+            "datasources_used": [],
+            "trial": None,
+            "attempts": attempts,
+            "error": None,
+            "fatal": None,
+            "trace": trace,
+        }
+        base.update(overrides)
+        return GenerationResult(**base)
 
-    ok = bool(trial and trial.ok)
-    return GenerationResult(
-        ok=ok,
-        source=source if ok else (source or None),
-        name=trial.name if trial else None,
-        description=trial.description if trial else None,
-        datasources_used=list(trial.referenced) if trial else [],
+    try:
+        previous: tuple[Any, ...] | None = None
+        while True:
+            reply = call(messages, TOOL_SCHEMAS)
+
+            assistant: dict[str, Any] = {
+                "role": "assistant",
+                "content": reply.content or "",
+            }
+            if reply.tool_calls:
+                assistant["tool_calls"] = [c.as_message() for c in reply.tool_calls]
+            messages.append(assistant)
+
+            if not reply.tool_calls:
+                source = gen.strip_fences(reply.content or "")
+                break
+
+            signature = tuple(
+                (c.name, json.dumps(c.arguments, sort_keys=True))
+                for c in reply.tool_calls
+            )
+            if signature == previous:
+                # The same look, twice. Nothing new is coming; stop rather than
+                # ask for it forever. This is a stuck-detector, not a budget.
+                source = gen.strip_fences(reply.content or "")
+                break
+            previous = signature
+
+            for tool_call in reply.tool_calls:
+                output = toolbox.call(tool_call.name, tool_call.arguments)
+                trace.append(
+                    {
+                        "tool": tool_call.name,
+                        "args": tool_call.arguments,
+                        "summary": _summarise(tool_call.name, output),
+                    }
+                )
+                if tool_call.name == "run_rule":
+                    attempts.append(
+                        {
+                            "n": len(attempts) + 1,
+                            "ok": bool(output.get("ok")),
+                            "error": output.get("error"),
+                        }
+                    )
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": tool_call.id,
+                        "content": json.dumps(output, default=str),
+                    }
+                )
+    except Exception as exc:  # noqa: BLE001
+        fatal = f"The model could not be reached: {type(exc).__name__}: {exc}"
+        return result(error=fatal, fatal=fatal)
+
+    if not source.strip():
+        fatal = "The model finished without writing a rule."
+        return result(error=fatal, fatal=fatal)
+
+    # The gate: the rule runs, or it is not a rule. Run once more on the source
+    # that was submitted, whatever the model did while it was thinking.
+    trial = run_trial(
+        source,
+        entity=entity,
+        tables=selection,
+        data_date=data_date,
+        lookback_days=lookback_days,
+        allowed=permitted,
+    )
+    attempts.append(
+        {"n": len(attempts) + 1, "ok": trial.ok, "error": None if trial.ok else trial.error}
+    )
+    trace.append(
+        {
+            "tool": "run_rule",
+            "args": {"final": True},
+            "summary": _summarise("run_rule", _final_run_summary(trial)),
+        }
+    )
+
+    return result(
+        ok=trial.ok,
+        source=source,
+        name=trial.name,
+        description=trial.description,
+        datasources_used=list(trial.referenced),
         trial=trial,
-        attempts=attempts,
-        error=None if ok else (fatal or (trial.error if trial else "No result")),
-        fatal=fatal,
+        error=None if trial.ok else trial.error,
     )

@@ -47,6 +47,7 @@ from app.permissions import (
     RULES_WRITE,
 )
 from app.schemas import (
+    AgentStep,
     ExplanationEdit,
     ExplanationOut,
     ExplanationReview,
@@ -309,6 +310,7 @@ async def generate(
             metrics=t.metrics,
             error=t.error,
             duration_ms=t.duration_ms,
+            warnings=t.warnings,
         )
 
     return RuleGenerateResponse(
@@ -329,17 +331,24 @@ async def generate(
         ],
         suggested_code=await _next_generated_code(session, entity),
         error=result.error,
+        trace=[
+            AgentStep(
+                tool=step["tool"],
+                args=step.get("args") or {},
+                summary=step.get("summary", ""),
+            )
+            for step in result.trace
+        ],
     )
 
 
 def _run_agent(catalog, prompt, entity, data_date, tables, lookback_days):
     """Run the agent in a worker thread.
 
-    The model call and the trial are both blocking, so the whole graph runs in
+    The model calls and the trials are all blocking, so the whole loop runs in
     this thread and the endpoint awaits it. The bound comes from the model
-    client's own timeout and from the attempt cap, not from here: a request
-    that gives up early leaves a thread mid-thought, which is worse than one
-    that waits.
+    client's own timeout, not from here: a request that gives up early leaves a
+    thread mid-thought, which is worse than one that waits.
     """
     from app.engine.rule_agent import run_generation
 

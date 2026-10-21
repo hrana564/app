@@ -42,15 +42,23 @@ written down.
 from __future__ import annotations
 
 from datetime import date, datetime, time, timezone
+from typing import Annotated
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy import func, select
 
-from app.api.deps import CurrentUser, SessionDep
+from app.api.deps import SessionDep, require
 from app.api.scope import scoped
-from app.models import Rule, RuleSchedule, Run, Ticket
+from app.models import Rule, RuleSchedule, Run, Ticket, User
+from app.permissions import ASSURANCE_READ
 
 router = APIRouter(prefix="/api", tags=["assurance"])
+
+# The capability this router's read is gated on. The landing page is the
+# first thing anybody sees, so every role holds it - but it is named rather
+# than left implicit, because a matrix with an entry nothing enforces is a
+# matrix that lies about what it covers.
+AssuranceReader = Annotated[User, Depends(require(ASSURANCE_READ))]
 
 UNCHECKED = "unchecked"
 PASSED = "passed"
@@ -128,7 +136,7 @@ def rank_controls(rows: list[dict]) -> list[dict]:
 @router.get("/dashboard")
 async def dashboard(
     session: SessionDep,
-    user: CurrentUser,
+    user: AssuranceReader,
     entity: str | None = None,
     window: int = Query(14, ge=2, le=90),
 ) -> dict:

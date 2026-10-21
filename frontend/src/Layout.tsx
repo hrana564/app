@@ -1,15 +1,24 @@
-import type { ReactNode } from "react";
-import { Box, MenuItem, Select, Typography } from "@mui/material";
+import { useState, type ReactNode } from "react";
+import {
+  Box, Button, Chip, Dialog, DialogActions, DialogContent, DialogTitle,
+  IconButton, Menu, MenuItem, Select, Stack, TextField, Tooltip, Typography,
+} from "@mui/material";
+import AccountCircleIcon from "@mui/icons-material/AccountCircle";
 import {
   AppBar,
   Layout as RaLayout,
   LoadingIndicator,
   type AppBarProps,
 } from "react-admin";
+import { useLogout, useNotify } from "react-admin";
 import { useEntityScope } from "./entityScope";
+import { api } from "./dataProvider";
+import { useCurrentUser } from "./permissions";
+import { FONT } from "./theme";
 
 /**
- * The shell: what the app is called, and which client it is looking at.
+ * The shell: what the app is called, which client it is looking at, and who is
+ * signed in.
  *
  * The entity switch sits immediately before the refresh indicator because that
  * is where a person already looks for the state of the page. It is the only
@@ -53,6 +62,140 @@ const EntitySwitch = () => {
   );
 };
 
+/* ------------------------------------------------------------------ */
+/* Who is signed in                                                    */
+/* ------------------------------------------------------------------ */
+
+/**
+ * The account, and the way out.
+ *
+ * There was no sign-out anywhere before this: the auth provider had a logout
+ * method and nothing called it. With roles in play that matters twice over -
+ * a shared machine kept one person's session, and an administrator checking
+ * what a viewer can see had no way to become a viewer without a private
+ * window.
+ *
+ * The role is shown because it is what the buttons on the screen are about.
+ * A person who cannot tell why a button is disabled cannot ask the right
+ * question about it.
+ */
+const AccountMenu = () => {
+  const user = useCurrentUser();
+  const logout = useLogout();
+  const notify = useNotify();
+  const [anchor, setAnchor] = useState<null | HTMLElement>(null);
+  const [pwOpen, setPwOpen] = useState(false);
+
+  if (!user) return null;
+
+  return (
+    <>
+      <Tooltip title={`Signed in as ${user.username} (${user.role})`}>
+        <IconButton
+          aria-label="account-menu"
+          onClick={(e) => setAnchor(e.currentTarget)}
+          sx={{ color: "#fff" }}
+        >
+          <AccountCircleIcon />
+        </IconButton>
+      </Tooltip>
+
+      <Menu
+        anchorEl={anchor}
+        open={Boolean(anchor)}
+        onClose={() => setAnchor(null)}
+        anchorOrigin={{ vertical: "bottom", horizontal: "right" }}
+        transformOrigin={{ vertical: "top", horizontal: "right" }}
+      >
+        <Box sx={{ px: 2, py: 1, minWidth: 200 }}>
+          <Typography variant="body2" sx={{ fontWeight: 700 }}>
+            {user.full_name || user.username}
+          </Typography>
+          <Stack direction="row" spacing={1} sx={{ mt: 0.5, alignItems: "center" }}>
+            <Typography variant="caption" sx={{ color: "text.secondary" }}>
+              {user.username}
+            </Typography>
+            <Chip size="small" label={user.role} color="primary" variant="outlined" />
+          </Stack>
+        </Box>
+        <MenuItem
+          onClick={() => { setAnchor(null); setPwOpen(true); }}
+        >
+          Change my password
+        </MenuItem>
+        <MenuItem
+          onClick={() => { setAnchor(null); void logout(); }}
+        >
+          Sign out
+        </MenuItem>
+      </Menu>
+
+      <PasswordDialog
+        open={pwOpen}
+        onClose={() => setPwOpen(false)}
+        onDone={() => { setPwOpen(false); notify("Your password has been changed", { type: "info" }); }}
+      />
+    </>
+  );
+};
+
+/**
+ * Change your own password.
+ *
+ * The current password is required, so a session left open on a shared
+ * machine cannot quietly take the account over. Nobody else can set it - the
+ * administrator's route is a reset, and that is a different thing.
+ */
+const PasswordDialog = ({
+  open, onClose, onDone,
+}: { open: boolean; onClose: () => void; onDone: () => void }) => {
+  const notify = useNotify();
+  const [current, setCurrent] = useState("");
+  const [next, setNext] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const submit = async () => {
+    setBusy(true);
+    try {
+      await api.changeOwnPassword(current, next);
+      setCurrent("");
+      setNext("");
+      onDone();
+    } catch (e) {
+      notify((e as Error).message, { type: "error" });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Dialog open={open} onClose={onClose} maxWidth="xs" fullWidth>
+      <DialogTitle sx={{ fontSize: FONT.bodyAlt, fontWeight: 700 }}>
+        Change my password
+      </DialogTitle>
+      <DialogContent>
+        <Stack spacing={2} sx={{ mt: 1 }}>
+          <TextField
+            label="Current password" type="password" size="small" value={current}
+            onChange={(e) => setCurrent(e.target.value)}
+          />
+          <TextField
+            label="New password" type="password" size="small" value={next}
+            onChange={(e) => setNext(e.target.value)}
+            helperText="At least 8 characters"
+          />
+        </Stack>
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={onClose}>Cancel</Button>
+        <Button variant="contained" onClick={submit} disabled={busy || !current || next.length < 8}>
+          Change password
+        </Button>
+      </DialogActions>
+    </Dialog>
+  );
+};
+
 /**
  * A fixed title, deliberately not the current page name.
  *
@@ -79,6 +222,7 @@ const AuditAppBar = ({ alwaysOn, title: _title, ...props }: AppBarProps) => (
     </Typography>
     <Box sx={{ flex: 1 }} />
     <EntitySwitch />
+    <AccountMenu />
     <LoadingIndicator />
   </AppBar>
 );

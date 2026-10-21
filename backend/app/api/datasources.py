@@ -36,12 +36,14 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
+from typing import Annotated
+
 import polars as pl
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import JSONB
 
-from app.api.deps import AdminUser, CurrentUser, SessionDep
+from app.api.deps import SessionDep, require
 from app.engine.datasources import ENTITIES, SYSTEMS_BY_ENTITY, default_entity
 from app.engine.discovery import (
     available_dates,
@@ -50,7 +52,8 @@ from app.engine.discovery import (
     latest_date,
     read_preview,
 )
-from app.models import Datasource, Rule
+from app.models import Datasource, Rule, User
+from app.permissions import DATASOURCES_READ, DATASOURCES_WRITE
 from app.schemas import (
     DatasourceDiscovered,
     DatasourceOut,
@@ -62,12 +65,16 @@ from app.settings import settings
 
 router = APIRouter(prefix="/api/datasources", tags=["datasources"])
 
+# The capabilities this router gates.
+DatasourceReader = Annotated[User, Depends(require(DATASOURCES_READ))]
+DatasourceWriter = Annotated[User, Depends(require(DATASOURCES_WRITE))]
+
 
 # ---------------------------------------------------------------------------
 # Reading
 # ---------------------------------------------------------------------------
 @router.get("/entities")
-async def list_entities(_user: CurrentUser) -> dict:
+async def list_entities(_user: DatasourceReader) -> dict:
     """The two client entities and the systems each one draws from."""
     return {
         "entities": [
@@ -83,7 +90,7 @@ async def list_entities(_user: CurrentUser) -> dict:
 
 @router.get("", response_model=list[DatasourceOut])
 async def list_datasources(
-    session: SessionDep, _user: CurrentUser, entity: str | None = None
+    session: SessionDep, _user: DatasourceReader, entity: str | None = None
 ) -> list[DatasourceOut]:
     # A request that names no client gets the default one. Letting None mean
     # "every client" would be a quieter failure: the screen would look right,
@@ -96,7 +103,7 @@ async def list_datasources(
 
 @router.get("/preview", response_model=DatasourcePreview)
 async def preview(
-    _user: CurrentUser,
+    _user: DatasourceReader,
     entity: str | None = None,
     name: str = "",
     data_date: str | None = None,
@@ -147,7 +154,14 @@ def _row_count(path: Path) -> int | None:
 
 
 @router.get("/available-dates")
-async def available_dates_endpoint(entity: str | None = None) -> dict:
+async def available_dates_endpoint(
+    _user: DatasourceReader, entity: str | None = None
+) -> dict:
+    """The days that have a folder for one client.
+
+    Authenticated like every other read here. It reads the filesystem and
+    answers "what landed", which is not a public fact about the deployment.
+    """
     code = (entity or default_entity()).upper()
     base = settings.sourcedata_dir / code
     return {
@@ -186,7 +200,7 @@ async def _rules_using(session: SessionDep, entity: str) -> dict[str, list[str]]
 @router.get("/overview", response_model=DatasourceOverview)
 async def overview(
     session: SessionDep,
-    _user: CurrentUser,
+    _user: DatasourceReader,
     entity: str | None = None,
     data_date: str | None = None,
 ) -> DatasourceOverview:
@@ -259,7 +273,9 @@ async def overview(
 
 
 @router.get("/discovered")
-async def discovered(entity: str | None = None, data_date: str | None = None) -> list[Any]:
+async def discovered(
+    _user: DatasourceReader, entity: str | None = None, data_date: str | None = None
+) -> list[Any]:
     """Only what is on disk, for the register picker."""
     code = (entity or default_entity()).upper()
     day = data_date or latest_date(code)
@@ -273,7 +289,7 @@ async def discovered(entity: str | None = None, data_date: str | None = None) ->
 # ---------------------------------------------------------------------------
 @router.post("", response_model=DatasourceOut, status_code=201)
 async def register_datasource(
-    payload: DatasourceRegister, session: SessionDep, admin: AdminUser
+    payload: DatasourceRegister, session: SessionDep, admin: DatasourceWriter
 ) -> DatasourceOut:
     """Register a table the ETL delivered.
 
@@ -323,7 +339,7 @@ async def register_datasource(
 
 @router.delete("/{datasource_id}", status_code=204)
 async def delete_datasource(
-    datasource_id: int, session: SessionDep, admin: AdminUser
+    datasource_id: int, session: SessionDep, admin: DatasourceWriter
 ) -> None:
     """Remove a registration. Only ever for a table no rule reads.
 

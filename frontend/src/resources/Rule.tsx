@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Datagrid, Edit, List, Pagination, ShowBase, TextField, TopToolbar,
-  useListContext, useNotify, useRecordContext, useRefresh,
+  useListContext, useNotify, useRecordContext, useRefresh, useRequireAccess,
 } from "react-admin";
 import { useNavigate } from "react-router";
 import {
@@ -25,7 +25,7 @@ import ArrowUpwardIcon from "@mui/icons-material/ArrowUpward";
 import ArrowDownwardIcon from "@mui/icons-material/ArrowDownward";
 import ScheduleIcon from "@mui/icons-material/Schedule";
 import {
-  api, getStoredUser, type DatasourceOverview, type DatasourceRow,
+  api, type DatasourceOverview, type DatasourceRow,
   type RuleGenerateResponse,
 } from "../dataProvider";
 import { CadenceEditor, type CadenceConfig } from "../components/CadenceEditor";
@@ -37,6 +37,7 @@ import {
   RuleStateCell, SeverityChipField, StatusChipField, RowCountField,
 } from "../components/ui";
 import { severityColor, statusColor, SEVERITIES_ASC, FONT } from "../theme";
+import { can, usePermissions } from "../permissions";
 import { useEntityScope } from "../entityScope";
 
 /* ================================================================== */
@@ -62,8 +63,6 @@ interface VersionRow {
   source_file: string;
 }
 
-const isAdminUser = () => getStoredUser()?.role === "admin";
-
 /* ================================================================== */
 /* Rule toolbar: search + prompt-to-rule                               */
 /* ================================================================== */
@@ -86,6 +85,8 @@ const isAdminUser = () => getStoredUser()?.role === "admin";
  * it cannot tell.
  */
 export const GenerateRuleDialog = () => {
+  const perms = usePermissions();
+  const mayGenerate = can(perms, "rules.generate");
   const [open, setOpen] = useState(false);
   const [step, setStep] = useState<"setup" | "working" | "review" | "failed">("setup");
   const [prompt, setPrompt] = useState("");
@@ -219,6 +220,21 @@ export const GenerateRuleDialog = () => {
   );
 
   const trial = result?.trial;
+
+  // The button stays in place and says why, rather than disappearing: a
+  // missing button is a question the user has to ask. The server refuses the
+  // call either way - this is the screen agreeing with it in advance.
+  if (!mayGenerate) {
+    return (
+      <Tooltip title="Generating a rule needs the rules.generate capability">
+        <span>
+          <Button variant="contained" startIcon={<AutoAwesomeIcon />} disabled>
+            Create a rule
+          </Button>
+        </span>
+      </Tooltip>
+    );
+  }
 
   return (
     <>
@@ -929,6 +945,8 @@ export const VersionSourceDialog = ({
   const [busy, setBusy] = useState(false);
   const notify = useNotify();
   const refresh = useRefresh();
+  const perms = usePermissions();
+  const canActivate = can(perms, "rules.activate");
 
   useEffect(() => {
     if (!code || version === null) return;
@@ -978,7 +996,7 @@ export const VersionSourceDialog = ({
       </DialogContent>
       <DialogActions>
         {/* Restore copies v(n) FORWARD into a new version - it does not rewind. */}
-        {isAdminUser() && (
+        {canActivate && (
           <Tooltip title="Copies this source forward into a new draft version. It does not rewind history.">
             <span>
               <Button onClick={restore} disabled={busy || !found} startIcon={<HistoryIcon />}>
@@ -1059,7 +1077,7 @@ const ScheduleDialog = ({
   );
 };
 
-const SchedulesSection = ({ ruleCode, isAdmin }: { ruleCode: string; isAdmin: boolean }) => {
+const SchedulesSection = ({ ruleCode, canWrite }: { ruleCode: string; canWrite: boolean }) => {
   const [schedules, setSchedules] = useState<any[] | null>(null);
   const [editing, setEditing] = useState<any | null>(null);
   const [adding, setAdding] = useState(false);
@@ -1092,7 +1110,7 @@ const SchedulesSection = ({ ruleCode, isAdmin }: { ruleCode: string; isAdmin: bo
             <Typography variant="h6">Schedules</Typography>
             <Chip size="small" label={schedules?.length ?? 0} />
           </Stack>
-          {isAdmin && (
+          {canWrite && (
             <Button size="small" startIcon={<AddIcon />} onClick={() => setAdding(true)}>
               Add schedule
             </Button>
@@ -1131,7 +1149,7 @@ const SchedulesSection = ({ ruleCode, isAdmin }: { ruleCode: string; isAdmin: bo
                     cron: {s.cron}
                   </Typography>
                 </Box>
-                {isAdmin && (
+                {canWrite && (
                   <Stack direction="row" spacing={0.5}>
                     <Button size="small" onClick={() => setEditing(s)}>Edit</Button>
                     <Tooltip title="Remove schedule">
@@ -1172,7 +1190,15 @@ const RuleDetails = () => {
   const notify = useNotify();
   const refresh = useRefresh();
 
-  const isAdmin = isAdminUser();
+  // Four separate questions, because they are four separate permissions.
+  // Running a control is a read of the data; validating one writes a verdict
+  // to its row; changing its lifecycle is a change to the estate; and only
+  // the first of them is the auditor's.
+  const perms = usePermissions();
+  const mayTest = can(perms, "rules.test");
+  const mayWrite = can(perms, "rules.write");
+  const mayActivate = can(perms, "rules.activate");
+  const mayWriteSchedules = can(perms, "schedules.write");
 
   // react-admin does not export a title hook, so set the document title directly.
   useEffect(() => {
@@ -1266,7 +1292,7 @@ const RuleDetails = () => {
 
           <RuleDatasources entity={record.entity} names={record.declared_datasources ?? []} />
 
-          {isAdmin && (
+          {(mayTest || mayWrite || mayActivate) && (
             <>
               <Divider sx={{ my: 2 }} />
               <Stack
@@ -1274,28 +1300,33 @@ const RuleDetails = () => {
                 spacing={1}
                 sx={{ alignItems: "center", flexWrap: "wrap", gap: 1 }}
               >
-                <Button size="small" startIcon={<FactCheckIcon />} onClick={runValidation}
-                  disabled={validating}>
-                  {validating ? "Validating…" : "Validate"}
-                </Button>
-                <Button
-                  size="small"
-                  startIcon={<PlayArrowIcon />}
-                  onClick={() => setRunOpen(true)}
-                >
-                  Run now
-                </Button>
-                {record.status === "active" ? (
-                  <Button size="small" color="warning" onClick={() => setStatus("paused")}>
-                    Pause rule
-                  </Button>
-                ) : (
-                  <Button size="small" variant="contained" disabled={record.validation_status !== "valid"}
-                    onClick={() => setStatus("active")}>
-                    Activate
+                {mayWrite && (
+                  <Button size="small" startIcon={<FactCheckIcon />} onClick={runValidation}
+                    disabled={validating}>
+                    {validating ? "Validating…" : "Validate"}
                   </Button>
                 )}
-                {record.validation_status !== "valid" && record.status !== "active" && (
+                {mayTest && (
+                  <Button
+                    size="small"
+                    startIcon={<PlayArrowIcon />}
+                    onClick={() => setRunOpen(true)}
+                  >
+                    Run now
+                  </Button>
+                )}
+                {mayActivate &&
+                  (record.status === "active" ? (
+                    <Button size="small" color="warning" onClick={() => setStatus("paused")}>
+                      Pause rule
+                    </Button>
+                  ) : (
+                    <Button size="small" variant="contained" disabled={record.validation_status !== "valid"}
+                      onClick={() => setStatus("active")}>
+                      Activate
+                    </Button>
+                  ))}
+                {mayActivate && record.validation_status !== "valid" && record.status !== "active" && (
                   <Typography variant="caption" sx={{ color: "text.secondary" }}>
                     Activation requires a passing validation.
                   </Typography>
@@ -1322,7 +1353,7 @@ const RuleDetails = () => {
       )}
 
       {/* Schedules */}
-      <SchedulesSection ruleCode={record.code} isAdmin={isAdmin} />
+      <SchedulesSection ruleCode={record.code} canWrite={mayWriteSchedules} />
 
       {/* Code */}
       <Card>
@@ -1674,7 +1705,9 @@ const RuleTable = () => {
   const [viewVersion, setViewVersion] = useState<{ code: string; version: number } | null>(null);
   const navigate = useNavigate();
   const refresh = useRefresh();
-  const admin = isAdminUser();
+  const perms = usePermissions();
+  const mayWrite = can(perms, "rules.write");
+  const mayDelete = can(perms, "rules.delete");
 
   const rules: any[] = useMemo(() => data ?? [], [data]);
 
@@ -1846,16 +1879,16 @@ const RuleTable = () => {
                         onClick={() => setRunFor(rule)}
                       />
                       <ActionIcon
-                        title={admin ? "Edit rule" : "Editing is admin only"}
+                        title={mayWrite ? "Edit rule" : "Editing needs the rules.write capability"}
                         icon={<EditIcon fontSize="small" />}
-                        disabled={!admin}
+                        disabled={!mayWrite}
                         onClick={() => openEdit(rule.code)}
                       />
                       <ActionIcon
-                        title={admin ? "Delete rule" : "Deleting is admin only"}
+                        title={mayDelete ? "Delete rule" : "Deleting needs the rules.delete capability"}
                         icon={<DeleteOutlinedIcon fontSize="small" />}
                         color="error"
-                        disabled={!admin}
+                        disabled={!mayDelete}
                         onClick={() => setDeleteFor(rule)}
                       />
                     </Stack>
@@ -2156,8 +2189,20 @@ const RuleEditForm = () => {
   );
 };
 
-export const RuleEdit = () => (
-  <Edit mutationMode="pessimistic">
-    <RuleEditForm />
-  </Edit>
-);
+/**
+ * The rule editor.
+ *
+ * Guarded on the route, not only on the button that leads to it. The list
+ * disabled the edit icon for anyone without `rules.write`, but the URL was
+ * open - so an auditor who typed it landed on a working form and only found
+ * out on Save. `useRequireAccess` sends them to the access-denied page
+ * instead, which says what happened rather than failing at the last moment.
+ */
+export const RuleEdit = () => {
+  useRequireAccess({ resource: "rules", action: "edit" });
+  return (
+    <Edit mutationMode="pessimistic">
+      <RuleEditForm />
+    </Edit>
+  );
+};

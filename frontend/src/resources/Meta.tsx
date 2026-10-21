@@ -22,6 +22,7 @@ import {
 } from "../dataProvider";
 import { FONT } from "../theme";
 import { useEntityScope } from "../entityScope";
+import { can, usePermissions } from "../permissions";
 
 /* ================= Datasources ================= */
 
@@ -247,6 +248,9 @@ const RegisteredTable = ({
   onDelete: (row: DatasourceRow) => void;
   busy: boolean;
 }) => {
+  const perms = usePermissions();
+  const mayRemove = can(perms, "datasources.write");
+
   if (!rows.length) {
     return <Alert severity="info">No datasources registered for this entity yet.</Alert>;
   }
@@ -322,18 +326,30 @@ const RegisteredTable = ({
                   <TableCell align="right" onClick={(e) => e.stopPropagation()}>
                       {/* Removal is offered only where it is safe. A table a live
                           rule reads cannot be removed at all, so the button is
-                          absent rather than present and failing. */}
+                          absent rather than present and failing. And a removal
+                          needs the capability that owns the catalogue, so the
+                          button stays put and says why. */}
                       {row.used_by.length === 0 ? (
-                        <Tooltip title={`Remove ${row.name}`}>
-                          <span>
-                            <IconButton
-                              size="small" aria-label={`delete-${row.name}`}
-                              onClick={() => onDelete(row)} disabled={busy}
-                            >
-                              <DeleteOutlinedIcon fontSize="small" />
-                            </IconButton>
-                          </span>
-                        </Tooltip>
+                        mayRemove ? (
+                          <Tooltip title={`Remove ${row.name}`}>
+                            <span>
+                              <IconButton
+                                size="small" aria-label={`delete-${row.name}`}
+                                onClick={() => onDelete(row)} disabled={busy}
+                              >
+                                <DeleteOutlinedIcon fontSize="small" />
+                              </IconButton>
+                            </span>
+                          </Tooltip>
+                        ) : (
+                          <Tooltip title="Removing a table needs the datasources.write capability">
+                            <span>
+                              <IconButton size="small" aria-label={`delete-${row.name}`} disabled>
+                                <DeleteOutlinedIcon fontSize="small" />
+                              </IconButton>
+                            </span>
+                          </Tooltip>
+                        )
                       ) : (
                         <Tooltip title={`Read by ${row.used_by.join(", ")} — remove those rules first`}>
                           <span>
@@ -474,6 +490,9 @@ const LandedTable = ({
   onRegister: (file: DiscoveredFile) => void;
   busy: boolean;
 }) => {
+  const perms = usePermissions();
+  const mayRegister = can(perms, "datasources.write");
+
   if (!files.length) {
     return (
       <Alert severity="info">
@@ -523,12 +542,25 @@ const LandedTable = ({
               </TableCell>
               <TableCell align="right">
                 {f.state === "new" && (
-                  <Button
-                    size="small" variant="outlined" disabled={busy}
-                    onClick={() => onRegister(f)}
-                  >
-                    Register
-                  </Button>
+                  mayRegister ? (
+                    <Button
+                      size="small" variant="outlined" disabled={busy}
+                      onClick={() => onRegister(f)}
+                    >
+                      Register
+                    </Button>
+                  ) : (
+                    // Left in place and disabled, with the reason attached.
+                    // A button that is simply missing is a question the user
+                    // has to ask; a disabled one that says why is an answer.
+                    <Tooltip title="Registering a table needs the datasources.write capability">
+                      <span>
+                        <Button size="small" variant="outlined" disabled>
+                          Register
+                        </Button>
+                      </span>
+                    </Tooltip>
+                  )
                 )}
               </TableCell>
             </TableRow>

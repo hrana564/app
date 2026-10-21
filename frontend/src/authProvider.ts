@@ -6,6 +6,25 @@ import {
   getToken,
   storeSession,
 } from "./dataProvider";
+import { allows, heldPermissions } from "./permissions";
+
+/**
+ * A refusal is not an expiry.
+ *
+ * `checkError` used to treat a 403 exactly like a 401: clear the session and
+ * report "Session expired". Under a capability model that is wrong in a way
+ * that would be felt constantly - an auditor who pressed a button they were
+ * not allowed to press got signed out of the portal for it.
+ *
+ * react-admin signs the user out whenever `checkError` throws, unless the
+ * thrown error says otherwise. `logoutUser: false` is how it is told to notify
+ * without signing anybody out, and the message it shows is the one we set.
+ */
+const refusal = (message: string) => {
+  const error = new Error(message) as Error & { logoutUser?: boolean };
+  error.logoutUser = false;
+  return error;
+};
 
 export const authProvider: AuthProvider = {
   login: async ({ username, password }) => {
@@ -22,9 +41,14 @@ export const authProvider: AuthProvider = {
   },
 
   checkError: async (error: { status?: number }) => {
-    if (error?.status === 401 || error?.status === 403) {
+    if (error?.status === 401) {
       clearSession();
-      throw new Error("Session expired");
+      const expired = new Error("Session expired") as Error & { logoutUser?: boolean };
+      expired.logoutUser = true;
+      throw expired;
+    }
+    if (error?.status === 403) {
+      throw refusal("You do not have permission to do that.");
     }
   },
 
@@ -34,8 +58,20 @@ export const authProvider: AuthProvider = {
     return { id: cached.id, fullName: cached.full_name || cached.username, role: cached.role };
   },
 
-  getPermissions: async () => {
-    const cached = getStoredUser();
-    return cached?.role === "admin" ? "admin" : "auditor";
-  },
+  /**
+   * The capabilities of the signed-in user.
+   *
+   * A list rather than a role string, because the list is what the screens
+   * ask about. A role is for display; a capability is for a decision.
+   */
+  getPermissions: async () => heldPermissions(),
+
+  /**
+   * May this user take this action on this resource?
+   *
+   * react-admin's `useCanAccess` and `useRequireAccess` both ask here, so the
+   * route guard and the menu item that leads to it come from one answer.
+   */
+  canAccess: async ({ action, resource }) =>
+    allows(String(action), String(resource)),
 };

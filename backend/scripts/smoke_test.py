@@ -37,6 +37,7 @@ RULES_DIR = Path(__file__).resolve().parent.parent / "rules"
 MOUNT_DIR = Path(__file__).resolve().parent.parent.parent / "mount"
 
 ADMIN = ("admin_user", "Admin@2026")
+MANAGER = ("manager_user", "Manager@2026")
 AUDITOR = ("audit_user", "Audit@2026")
 
 # The demo estate is two layouts. Which client gets which one is the
@@ -222,14 +223,257 @@ def main() -> int:
         FIRST, SECOND = served[0], served[1]
 
         section("role based access control")
-        check("auditor can read rules", c.get("/api/rules", headers=ud).status_code == 200)
-        r = c.post("/api/rules", headers=ud,
-                   json={"code": "RBAC-PROBE", "name": "nope",
-                         "source_code": "def run(ctx):\n    return {}\n"})
-        check("auditor CANNOT create rules", r.status_code == 403, f"got {r.status_code}")
-        r = c.post("/api/rules/generate", headers=ud, json={
-            "prompt": "flag anything odd", "entity": FIRST, "datasources": ["ipos_sales"]})
-        check("auditor CANNOT generate rules", r.status_code == 403, f"got {r.status_code}")
+
+        # WHAT EACH ROLE HOLDS, spelled out here rather than imported from the
+        # matrix. A test that reads its expectations out of the code it is
+        # testing proves nothing: change the matrix and the test follows it
+        # down, so the matrix is pinned by this list instead.
+        EXPECTED_CAPABILITIES = {
+            "admin": {
+                "rules.read", "rules.test", "rules.write", "rules.activate",
+                "rules.delete", "rules.generate", "schedules.read",
+                "schedules.write", "runs.read", "runs.rerun", "tickets.read",
+                "tickets.acknowledge", "datasources.read", "datasources.write",
+                "assurance.read", "users.read", "users.write",
+            },
+            # Everything about the estate, nothing about the people.
+            "manager": {
+                "rules.read", "rules.test", "rules.write", "rules.activate",
+                "rules.delete", "rules.generate", "schedules.read",
+                "schedules.write", "runs.read", "runs.rerun", "tickets.read",
+                "tickets.acknowledge", "datasources.read", "datasources.write",
+                "assurance.read",
+            },
+            "auditor": {
+                "rules.read", "rules.test", "schedules.read", "runs.read",
+                "runs.rerun", "tickets.read", "tickets.acknowledge",
+                "datasources.read", "assurance.read",
+            },
+            "viewer": {
+                "rules.read", "rules.test", "schedules.read", "runs.read",
+                "tickets.read", "datasources.read", "assurance.read",
+            },
+        }
+
+        check("the login response carries the admin's capabilities",
+              set(admin["user"].get("permissions") or []) == EXPECTED_CAPABILITIES["admin"],
+              str(sorted(admin["user"].get("permissions") or [])))
+        check("the login response carries the auditor's capabilities",
+              set(auditor["user"].get("permissions") or []) == EXPECTED_CAPABILITIES["auditor"],
+              str(sorted(auditor["user"].get("permissions") or [])))
+
+        # The manager: the estate, but not the people.
+        mr = c.post("/api/auth/login",
+                    json={"username": MANAGER[0], "password": MANAGER[1]})
+        check("manager login", mr.status_code == 200, mr.text[:140])
+        manager = mr.json() if mr.status_code == 200 else {"access_token": "", "user": {}}
+        check("the login response carries the manager's capabilities",
+              set(manager.get("user", {}).get("permissions") or []) == EXPECTED_CAPABILITIES["manager"],
+              str(sorted(manager.get("user", {}).get("permissions") or [])))
+        mh = {"Authorization": f"Bearer {manager['access_token']}"}
+
+        # The demo panel. It advertises working passwords, so it is only
+        # served when the deployment has said so.
+        demo = c.get("/api/auth/demo-accounts")
+        check("the demo accounts are served", demo.status_code == 200,
+              f"{demo.status_code} {demo.text[:140]}")
+        demo_list = demo.json() if demo.status_code == 200 else []
+        check("the demo panel offers one account per role",
+              {d["role"] for d in demo_list} == {"admin", "manager", "auditor", "viewer"},
+              str([d.get("role") for d in demo_list]))
+        check("the demo panel carries the passwords it advertises",
+              all(d.get("password") for d in demo_list),
+              str(demo_list))
+        check("every demo account can actually sign in",
+              all(c.post("/api/auth/login",
+                         json={"username": d["username"],
+                               "password": d["password"]}).status_code == 200
+                  for d in demo_list),
+              str([d.get("username") for d in demo_list]))
+
+        # A viewer, created through the API so that user management is
+        # exercised in the same pass. The username is fixed so a re-run finds
+        # and removes the last one rather than accumulating them.
+        VIEWER = "smoke_viewer"
+        VIEWER_PASSWORD = "Viewer@2026"
+
+        existing = next(
+            (u for u in c.get("/api/users", headers=ah).json()
+             if u["username"] == VIEWER),
+            None,
+        )
+        if existing is not None:
+            c.delete(f"/api/users/{existing['id']}", headers=ah)
+
+        made = c.post("/api/users", headers=ah, json={
+            "username": VIEWER, "password": VIEWER_PASSWORD,
+            "full_name": "Smoke Viewer", "role": "viewer",
+        })
+        check("an administrator can create an account", made.status_code == 201,
+              f"{made.status_code} {made.text[:140]}")
+        viewer_id = made.json().get("id") if made.status_code == 201 else None
+
+        vr = c.post("/api/auth/login",
+                    json={"username": VIEWER, "password": VIEWER_PASSWORD})
+        check("the new account can sign in", vr.status_code == 200, vr.text[:140])
+        viewer = vr.json() if vr.status_code == 200 else {"access_token": "", "user": {}}
+        check("the login response carries the viewer's capabilities",
+              set(viewer.get("user", {}).get("permissions") or []) == EXPECTED_CAPABILITIES["viewer"],
+              str(sorted(viewer.get("user", {}).get("permissions") or [])))
+
+        vh = {"Authorization": f"Bearer {viewer['access_token']}"}
+
+        # THE PROBES
+        # ------------
+        # Every probe names a resource that does not exist, or a payload the
+        # handler refuses on its own terms. That is what makes a probe safe:
+        # a 403 means the capability gate stopped it, and any other status
+        # means the gate let it through and the handler said no for a reason
+        # of its own. Nothing is written and nothing is run.
+        #
+        # `rules.generate` is the one that would otherwise call the model, so
+        # its probe names a datasource that is not registered - which the
+        # endpoint rejects before the agent is asked anything at all.
+        RBAC_PROBES = [
+            ("rules.write", "POST", "/api/rules",
+             {"code": "!!", "name": "xx", "source_code": "def run(ctx):\n    return {}\n"}),
+            ("rules.activate", "PUT", "/api/rules/NOPE-99/status", {"status": "paused"}),
+            ("rules.delete", "DELETE", "/api/rules/NOPE-99", None),
+            ("rules.generate", "POST", "/api/rules/generate",
+             {"prompt": "flag anything odd", "entity": FIRST,
+              "datasources": ["__not_registered__"]}),
+            ("schedules.write", "POST", "/api/rule-schedules",
+             {"rule_code": "NOPE-99", "kind": "DAILY", "config": {"hour": 6, "minute": 30}}),
+            ("runs.rerun", "POST", "/api/rule-runs/99999999/rerun", None),
+            ("tickets.acknowledge", "POST", "/api/tickets/99999999/acknowledge",
+             {"status": "acknowledged"}),
+            ("datasources.write", "POST", "/api/datasources",
+             {"name": "x", "entity": "ZZZ"}),
+            ("assurance.read", "GET", "/api/dashboard", None),
+            ("users.read", "GET", "/api/users", None),
+            ("users.write", "POST", "/api/users",
+             {"username": ADMIN[0], "password": "Whatever@2026", "role": "viewer"}),
+        ]
+
+        def _probe(headers, method, path, body):
+            if method == "GET":
+                return c.get(path, headers=headers)
+            if method == "DELETE":
+                return c.delete(path, headers=headers)
+            return c.request(method, path, headers=headers, json=body)
+
+        for capability, method, path, body in RBAC_PROBES:
+            for role, headers in (("admin", ah), ("manager", mh),
+                                  ("auditor", ud), ("viewer", vh)):
+                r = _probe(headers, method, path, body)
+                held = capability in EXPECTED_CAPABILITIES[role]
+                if held:
+                    check(f"{role} may {capability}", r.status_code != 403,
+                          f"got {r.status_code} {r.text[:120]}")
+                else:
+                    check(f"{role} CANNOT {capability}", r.status_code == 403,
+                          f"got {r.status_code} {r.text[:120]}")
+
+        # The reads are not capability-gated - every signed-in account has
+        # them - so they are asserted as such rather than through the matrix.
+        for path in ("/api/rules", "/api/rule-runs", "/api/tickets",
+                     "/api/rule-schedules", "/api/datasources"):
+            check(f"a viewer may read {path}", c.get(path, headers=vh).status_code == 200)
+
+        # The two datasource reads that took no dependency at all.
+        check("available-dates needs a session",
+              c.get("/api/datasources/available-dates").status_code == 401)
+        check("discovered needs a session",
+              c.get("/api/datasources/discovered").status_code == 401)
+
+        section("user management")
+
+        check("an administrator may list the accounts",
+              c.get("/api/users", headers=ah).status_code == 200)
+        check("a manager may NOT list the accounts",
+              c.get("/api/users", headers=mh).status_code == 403)
+        check("an auditor may NOT list the accounts",
+              c.get("/api/users", headers=ud).status_code == 403)
+        check("a viewer may NOT list the accounts",
+              c.get("/api/users", headers=vh).status_code == 403)
+
+        dup = c.post("/api/users", headers=ah, json={
+            "username": VIEWER, "password": "Whatever@2026", "role": "viewer"})
+        check("a username cannot be taken twice", dup.status_code == 409,
+              f"{dup.status_code} {dup.text[:120]}")
+
+        unknown = c.post("/api/users", headers=ah, json={
+            "username": "smoke_bad_role", "password": "Whatever@2026",
+            "role": "wizard"})
+        check("an unknown role is refused", unknown.status_code == 400,
+              f"{unknown.status_code} {unknown.text[:120]}")
+        check("the refused account was not created",
+              not any(u["username"] == "smoke_bad_role"
+                      for u in c.get("/api/users", headers=ah).json()))
+
+        if viewer_id is not None:
+            # A role change takes effect on the next request: the row is
+            # re-read per request, so the old token does not have to expire.
+            promoted = c.patch(f"/api/users/{viewer_id}", headers=ah,
+                               json={"role": "auditor"})
+            check("a role can be changed", promoted.status_code == 200,
+                  f"{promoted.status_code} {promoted.text[:120]}")
+            check("the new role is the one that is reported",
+                  promoted.status_code == 200
+                  and promoted.json()["role"] == "auditor",
+                  promoted.text[:120])
+            check("the changed role takes effect on the next request",
+                  c.post("/api/tickets/99999999/acknowledge", headers=vh,
+                         json={"status": "acknowledged"}).status_code != 403)
+
+            demoted = c.patch(f"/api/users/{viewer_id}", headers=ah,
+                              json={"role": "viewer"})
+            check("the role can be changed back", demoted.status_code == 200)
+
+            # A deactivated account is locked out on its next request, and its
+            # existing token stops working with it.
+            c.patch(f"/api/users/{viewer_id}", headers=ah, json={"is_active": False})
+            check("a deactivated account cannot sign in",
+                  c.post("/api/auth/login",
+                         json={"username": VIEWER,
+                               "password": VIEWER_PASSWORD}).status_code == 403)
+            check("a deactivated account's existing token stops working",
+                  c.get("/api/rules", headers=vh).status_code == 401)
+            c.patch(f"/api/users/{viewer_id}", headers=ah, json={"is_active": True})
+            check("a reactivated account works again",
+                  c.get("/api/rules", headers=vh).status_code == 200)
+
+            # Nobody may remove their own account: it would end the session
+            # mid-request and leave their own actions attributed to nobody.
+            me = admin["user"]["id"]
+            check("an administrator may NOT delete their own account",
+                  c.delete(f"/api/users/{me}", headers=ah).status_code == 409)
+            check("an administrator may NOT change their own role",
+                  c.patch(f"/api/users/{me}", headers=ah,
+                          json={"role": "viewer"}).status_code == 409)
+
+            removed = c.delete(f"/api/users/{viewer_id}", headers=ah)
+            check("an account can be removed", removed.status_code == 204,
+                  f"{removed.status_code} {removed.text[:120]}")
+            check("the removed account is gone",
+                  not any(u["username"] == VIEWER
+                          for u in c.get("/api/users", headers=ah).json()))
+
+        # Changing your own password needs the current one, and sets it back
+        # to what it was - so the suite is idempotent and the demo password
+        # survives the run.
+        same = c.patch("/api/users/me/password", headers=ud, json={
+            "current_password": AUDITOR[1], "new_password": AUDITOR[1]})
+        check("a user may change their own password", same.status_code == 200,
+              f"{same.status_code} {same.text[:120]}")
+        check("the wrong current password is refused",
+              c.patch("/api/users/me/password", headers=ud, json={
+                  "current_password": "not-the-password",
+                  "new_password": AUDITOR[1]}).status_code == 400)
+        check("the auditor can still sign in afterwards",
+              c.post("/api/auth/login",
+                     json={"username": AUDITOR[0],
+                           "password": AUDITOR[1]}).status_code == 200)
 
         section("entities and datasources")
         ents = c.get("/api/datasources/entities", headers=ud).json()

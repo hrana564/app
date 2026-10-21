@@ -11,10 +11,12 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, HTTPException
+from typing import Annotated
+
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 
-from app.api.deps import AdminUser, CurrentUser, SessionDep
+from app.api.deps import SessionDep, require
 from app.engine import scheduler
 from app.engine.frequency import (
     ALL_KINDS,
@@ -30,7 +32,8 @@ from app.engine.frequency import (
     to_cron,
 )
 from app.engine.scheduler import cadence_of, cron_for
-from app.models import Rule, RuleSchedule
+from app.models import Rule, RuleSchedule, User
+from app.permissions import SCHEDULES_READ, SCHEDULES_WRITE
 from app.schemas import (
     CadenceOption,
     CadencePreviewRequest,
@@ -44,6 +47,10 @@ from app.schemas import (
 log = logging.getLogger("abm.api.schedules")
 
 router = APIRouter(prefix="/api/rule-schedules", tags=["rule schedules"])
+
+# The capabilities this router gates.
+ScheduleReader = Annotated[User, Depends(require(SCHEDULES_READ))]
+ScheduleWriter = Annotated[User, Depends(require(SCHEDULES_WRITE))]
 
 
 def _to_out(schedule: RuleSchedule) -> ScheduleOut:
@@ -68,7 +75,7 @@ def _to_out(schedule: RuleSchedule) -> ScheduleOut:
 # The vocabulary the UI builds its picker from
 # ---------------------------------------------------------------------------
 @router.get("/cadence-options", response_model=dict)
-async def cadence_options(_user: CurrentUser) -> dict:
+async def cadence_options(_user: ScheduleReader) -> dict:
     """Everything the frequency picker needs, in one call."""
     return {
         "presets": [CadenceOption(**p).model_dump(mode="json") for p in PRESET_CHOICES],
@@ -82,7 +89,7 @@ async def cadence_options(_user: CurrentUser) -> dict:
 
 @router.post("/cadence-preview", response_model=CadencePreviewResponse)
 async def cadence_preview(
-    payload: CadencePreviewRequest, _user: CurrentUser
+    payload: CadencePreviewRequest, _user: ScheduleReader
 ) -> CadencePreviewResponse:
     """Show the derived cron and the real fire times BEFORE saving.
 
@@ -136,7 +143,7 @@ async def sync_schedules_for_code(session, code: str) -> int:
 @router.get("", response_model=dict)
 async def list_schedules(
     session: SessionDep,
-    _user: CurrentUser,
+    _user: ScheduleReader,
     rule_code: str | None = None,
 ) -> dict:
     stmt = select(RuleSchedule)
@@ -150,7 +157,7 @@ async def list_schedules(
 
 @router.get("/{schedule_id}", response_model=ScheduleOut)
 async def get_schedule(
-    schedule_id: int, session: SessionDep, _user: CurrentUser
+    schedule_id: int, session: SessionDep, _user: ScheduleReader
 ) -> ScheduleOut:
     sched = await session.get(RuleSchedule, schedule_id)
     if sched is None:
@@ -160,7 +167,7 @@ async def get_schedule(
 
 @router.post("", response_model=ScheduleOut, status_code=201)
 async def create_schedule(
-    payload: ScheduleCreate, session: SessionDep, admin: AdminUser
+    payload: ScheduleCreate, session: SessionDep, admin: ScheduleWriter
 ) -> ScheduleOut:
     cadence = Cadence.from_dict({"kind": payload.kind, **payload.config})
     try:
@@ -234,7 +241,7 @@ async def create_schedule(
 
 @router.put("/{schedule_id}", response_model=ScheduleOut)
 async def update_schedule(
-    schedule_id: int, payload: ScheduleUpdate, session: SessionDep, admin: AdminUser
+    schedule_id: int, payload: ScheduleUpdate, session: SessionDep, admin: ScheduleWriter
 ) -> ScheduleOut:
     sched = await session.get(RuleSchedule, schedule_id)
     if sched is None:
@@ -270,7 +277,7 @@ async def update_schedule(
 
 @router.delete("/{schedule_id}", status_code=204)
 async def delete_schedule(
-    schedule_id: int, session: SessionDep, admin: AdminUser
+    schedule_id: int, session: SessionDep, admin: ScheduleWriter
 ) -> None:
     sched = await session.get(RuleSchedule, schedule_id)
     if sched is None:
@@ -281,7 +288,7 @@ async def delete_schedule(
 
 
 @router.get("/cron/jobs")
-async def live_jobs(_user: CurrentUser) -> dict:
+async def live_jobs(_user: ScheduleReader) -> dict:
     """What APScheduler currently holds. For debugging schedules."""
     return {
         "jobs": scheduler.status(),

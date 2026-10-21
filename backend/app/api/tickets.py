@@ -4,16 +4,23 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, HTTPException, Query
+from typing import Annotated
+
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, select
 
 from app.api.assurance import SEVERITY_ORDER
-from app.api.deps import CurrentUser, SessionDep
+from app.api.deps import SessionDep, require
 from app.api.scope import scoped
-from app.models import Rule, Run, Ticket
+from app.models import Rule, Run, Ticket, User
+from app.permissions import TICKETS_ACKNOWLEDGE, TICKETS_READ
 from app.schemas import BulkAck, TicketAck, TicketOut
 
 router = APIRouter(prefix="/api/tickets", tags=["tickets"])
+
+# The capabilities this router gates.
+TicketReader = Annotated[User, Depends(require(TICKETS_READ))]
+TicketAcknowledger = Annotated[User, Depends(require(TICKETS_ACKNOWLEDGE))]
 
 # Upper bound on rows scanned when grouping. An inbox is small; this exists so
 # a pathological filter cannot pull an unbounded result set into memory.
@@ -66,7 +73,7 @@ def _filtered(stmt, count_stmt, *, status, rule_code, severity, q, entity=None):
 @router.get("", response_model=dict)
 async def list_tickets(
     session: SessionDep,
-    _user: CurrentUser,
+    _user: TicketReader,
     page: int = Query(1, ge=1),
     perPage: int = Query(25, ge=1, le=500),
     status_: str | None = Query(None, alias="status"),
@@ -104,7 +111,7 @@ async def list_tickets(
 async def acknowledge_all(
     payload: BulkAck,
     session: SessionDep,
-    user: CurrentUser,
+    user: TicketAcknowledger,
 ) -> dict:
     """
     Acknowledge every OPEN ticket matching the given filters, in one transaction.
@@ -148,7 +155,7 @@ async def acknowledge_all(
 @router.get("/grouped", response_model=dict)
 async def grouped_tickets(
     session: SessionDep,
-    _user: CurrentUser,
+    _user: TicketReader,
     group_by: str = Query("rule_code", pattern="^(rule_code|severity|status)$"),
     status_: str | None = Query(None, alias="status"),
     rule_code: str | None = None,
@@ -261,7 +268,7 @@ def _group_sort(key: str, group_by: str):
 
 
 @router.get("/summary")
-async def summary(session: SessionDep, _user: CurrentUser, entity: str | None = None) -> dict:
+async def summary(session: SessionDep, _user: TicketReader, entity: str | None = None) -> dict:
     """Aggregate counts for the dashboard. One round trip, Power Automate friendly."""
     rows = (
         await session.execute(
@@ -297,7 +304,7 @@ async def summary(session: SessionDep, _user: CurrentUser, entity: str | None = 
 
 @router.get("/{ticket_id}", response_model=TicketOut)
 async def get_ticket(
-    ticket_id: int, session: SessionDep, _user: CurrentUser
+    ticket_id: int, session: SessionDep, _user: TicketReader
 ) -> TicketOut:
     ticket = await session.get(Ticket, ticket_id)
     if ticket is None:
@@ -310,7 +317,7 @@ async def get_ticket(
 
 @router.post("/{ticket_id}/acknowledge", response_model=TicketOut)
 async def acknowledge(
-    ticket_id: int, payload: TicketAck, session: SessionDep, user: CurrentUser
+    ticket_id: int, payload: TicketAck, session: SessionDep, user: TicketAcknowledger
 ) -> TicketOut:
     """Both roles may acknowledge - this is the auditor's primary action."""
     ticket = await session.get(Ticket, ticket_id)
@@ -336,7 +343,7 @@ async def acknowledge(
 
 @router.post("/{ticket_id}/reopen", response_model=TicketOut)
 async def reopen(
-    ticket_id: int, session: SessionDep, user: CurrentUser
+    ticket_id: int, session: SessionDep, user: TicketAcknowledger
 ) -> TicketOut:
     ticket = await session.get(Ticket, ticket_id)
     if ticket is None:

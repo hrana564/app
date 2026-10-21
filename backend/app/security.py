@@ -1,4 +1,11 @@
-"""Password hashing and JWT issuing/verification."""
+"""Password hashing and JWT issuing/verification.
+
+The token identifies the user and nothing else. What the user may do is
+answered by `app/permissions.py` against the database row, which is re-read on
+every request - so a role changed by an administrator takes effect on the next
+request rather than when the token happens to expire. A role claim baked into
+the token would be a second copy of the truth, and the copy nobody reads.
+"""
 
 from __future__ import annotations
 
@@ -9,9 +16,6 @@ import bcrypt
 import jwt
 
 from app.settings import settings
-
-ROLE_ADMIN = "admin"
-ROLE_AUDITOR = "auditor"
 
 
 def hash_password(plain: str) -> str:
@@ -25,14 +29,13 @@ def verify_password(plain: str, hashed: str) -> bool:
         return False
 
 
-def create_access_token(*, user_id: int, username: str, role: str) -> tuple[str, int]:
+def create_access_token(*, user_id: int, username: str) -> tuple[str, int]:
     """Return (token, expires_in_seconds)."""
     expires_in = settings.access_token_expire_hours * 3600
     now = datetime.now(timezone.utc)
     payload: dict[str, Any] = {
         "sub": str(user_id),
         "username": username,
-        "role": role,
         "iat": int(now.timestamp()),
         "exp": int((now + timedelta(seconds=expires_in)).timestamp()),
     }

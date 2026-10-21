@@ -32,6 +32,18 @@ export const storeSession = (token: string, user: unknown) => {
   localStorage.setItem(USER_KEY, JSON.stringify(user));
   window.dispatchEvent(new Event(SESSION_EVENT));
 };
+/**
+ * Replace the cached user without touching the token.
+ *
+ * Used when the server tells us who the session belongs to - which is how a
+ * role changed by an administrator reaches the browser that is holding the
+ * old answer. The event fires because everything that reads the cached user
+ * (the permission list, the identity) has to hear about it.
+ */
+export const setStoredUser = (user: unknown) => {
+  localStorage.setItem(USER_KEY, JSON.stringify(user));
+  window.dispatchEvent(new Event(SESSION_EVENT));
+};
 export const clearSession = () => {
   localStorage.removeItem(TOKEN_KEY);
   localStorage.removeItem(USER_KEY);
@@ -300,6 +312,36 @@ export interface EntityOut {
   systems: string[];
 }
 
+/**
+ * One account the sign-in screen offers.
+ *
+ * The password is in it because the panel exists so a reviewer can try each
+ * role without being given accounts by hand.
+ */
+export interface DemoAccount {
+  username: string;
+  password: string;
+  role: string;
+  blurb: string;
+}
+
+/**
+ * One account.
+ *
+ * `permissions` is the resolved capability list, derived by the server from
+ * the role. It travels with the user so the frontend never has to know what a
+ * role is allowed to do - the role string is for display, the list is for
+ * decisions.
+ */
+export interface UserRow {
+  id: number;
+  username: string;
+  full_name: string;
+  role: string;
+  is_active: boolean;
+  permissions: string[];
+}
+
 /** One registered table, plus what we know about it right now. */
 export interface DatasourceRow {
   id: number;
@@ -401,6 +443,18 @@ export const api = {
     ),
 
   me: () => request<any>("/api/auth/me"),
+
+  /**
+   * The accounts the sign-in screen offers, with their passwords.
+   *
+   * Served by the API rather than hardcoded here, because the screen and the
+   * seed are then one list rather than two - and two copies of a list of
+   * passwords drift the first time somebody changes one.
+   *
+   * Empty unless the deployment has opted in, which is why the panel is
+   * allowed to render nothing.
+   */
+  demoAccounts: () => request<DemoAccount[]>("/api/auth/demo-accounts"),
 
   /**
    * The assurance read model behind the landing page.
@@ -660,4 +714,44 @@ export const api = {
   deleteSchedule: (id: number) =>
     request<void>(`/api/rule-schedules/${id}`, { method: "DELETE" }),
   schedulerJobs: () => request<any>("/api/rule-schedules/cron/jobs"),
+
+  // --- users ---------------------------------------------------------------
+  // The accounts, and the roles that decide what they may do. The list comes
+  // back as a bare array rather than the `{data, total}` envelope the paged
+  // endpoints use - there are a handful of people, not an estate.
+  listUsers: () => request<UserRow[]>("/api/users"),
+  createUser: (payload: {
+    username: string;
+    password: string;
+    full_name?: string;
+    role?: string;
+  }) =>
+    request<UserRow>("/api/users", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  updateUser: (
+    id: number,
+    payload: {
+      full_name?: string;
+      role?: string;
+      is_active?: boolean;
+      password?: string;
+    },
+  ) =>
+    request<UserRow>(`/api/users/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }),
+  deleteUser: (id: number) =>
+    request<void>(`/api/users/${id}`, { method: "DELETE" }),
+  /** Change your own password. Nobody else can set it. */
+  changeOwnPassword: (currentPassword: string, newPassword: string) =>
+    request<UserRow>("/api/users/me/password", {
+      method: "PATCH",
+      body: JSON.stringify({
+        current_password: currentPassword,
+        new_password: newPassword,
+      }),
+    }),
 };

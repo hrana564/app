@@ -4,9 +4,10 @@ import ScheduleIcon from "@mui/icons-material/Schedule";
 import PlayCircleIcon from "@mui/icons-material/PlayCircle";
 import ReportProblemIcon from "@mui/icons-material/ReportProblem";
 import StorageIcon from "@mui/icons-material/Storage";
+import PeopleIcon from "@mui/icons-material/People";
 
 import { theme } from "./theme";
-import { dataProvider } from "./dataProvider";
+import { dataProvider, api, setStoredUser } from "./dataProvider";
 import { authProvider } from "./authProvider";
 import { Login } from "./pages/Login";
 import { Dashboard } from "./pages/Dashboard";
@@ -16,6 +17,8 @@ import { RuleList, RuleShow, RuleEdit } from "./resources/Rule";
 import { RunList, RunShow } from "./resources/Run";
 import { TicketList, TicketShow } from "./resources/Ticket";
 import { DatasourceList } from "./resources/Meta";
+import { UserList } from "./resources/User";
+import { useEffect } from "react";
 
 /**
  * EntityScope wraps the portal rather than sitting among the resources: the
@@ -63,6 +66,12 @@ const RESOURCES = (
       icon={StorageIcon}
       options={{ label: "Data Sources", recordRepresentation: false }}
     />
+    <Resource
+      name="users"
+      list={UserList}
+      icon={PeopleIcon}
+      options={{ label: "Accounts", recordRepresentation: false }}
+    />
   </>
 );
 
@@ -80,6 +89,28 @@ const RESOURCES = (
  */
 const Portal = () => {
   const { signedIn } = useEntityScope();
+
+  /**
+   * Ask the server who this session belongs to.
+   *
+   * The cached user is whatever the sign-in returned, so a role changed by an
+   * administrator would not reach the browser until the next sign-in - and
+   * the browser is the thing that decides which buttons to offer. One call at
+   * start-up keeps the screen and the server agreeing about what this person
+   * may do.
+   */
+  useEffect(() => {
+    if (!signedIn) return;
+    let live = true;
+    api
+      .me()
+      .then((user) => { if (live) setStoredUser(user); })
+      .catch(() => {
+        /* the 401 handler has already dealt with an expired session */
+      });
+    return () => { live = false; };
+  }, [signedIn]);
+
   if (!signedIn) return <Login />;
   return (
     <Admin

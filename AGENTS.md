@@ -324,6 +324,7 @@ work per client and re-picking it on every reload is noise.
 | The trial touches nothing | `backend/app/engine/trial.py` | No `rule_runs` row, no ticket, no run folder. A trial that raised a ticket would put a finding in the estate that nobody asked for. See §2. |
 | One licence policy for gate and notice | `backend/scripts/check_licenses.py` | `write_third_party_notice.py` imports `BLOCKING`/`PERMISSIVE`/`classify` rather than restating them. It once kept its own lists and they drifted within a single commit - `epl`, `cpal` and `commercial` were blocked by the gate and unknown to the notice, which is the one place a copyleft dependency could be declared into compliance. |
 | One `SEVERITIES` list for the frontend | `frontend/src/theme.ts` | Three screens sorted and filtered by severity with a copy each, and the ticket inbox held two. Derive from `SEVERITIES` / `SEVERITIES_ASC`; the backend equivalent is `SEVERITY_ORDER` in `app/api/assurance.py`, which the ticket group sort imports. |
+| One capability matrix for every gate | `backend/app/permissions.py` | Eleven endpoints asking "may I?" is eleven mappings, and they drift the moment a third role exists. The matrix is the only answer, and every capability in it is enforced by exactly one dependency. See §3b. |
 | Rules may only `import` from the allow-list | `app/engine/validation.py` | Enforced by AST scan, not convention. |
 | The catalogue lives in the `datasources` table, not in `app/` | see §3a | A module under `app/` that also answered "what tables exist" would be a second source of truth, and the two would drift the first time an admin registered something. |
 | Consumers take a `Catalog`, never a storage mechanism | `app/engine/catalog.py` | Keeps the ETL, the catalogue, the rules and the runner decoupled. See §3a. |
@@ -440,6 +441,80 @@ Both exist so a list view never needs a join back to the version history, which
 also keeps the future Power Apps connector to single flat calls. `rule_id` stays
 the authoritative pointer in both cases.
 
+### 3b. Who may do what
+
+```
+app/permissions.py          the matrix - one dict, one answer
+app/api/deps.py             require(*caps) - the only gate
+app/api/users.py            the accounts, and the roles they hold
+frontend/src/permissions.ts the same vocabulary, for the screens
+```
+
+A role is a **named bundle of capabilities**, and an endpoint asks for the
+capability it needs rather than the role it assumes:
+
+```python
+RulesWriter = Annotated[User, Depends(require(RULES_WRITE))]
+```
+
+"Is this user an admin?" was the old question, and it could only ever have two
+answers. "May this user change a rule?" is the question, and it is the one a
+third role can be added to without touching a single router.
+
+Four rules make this hold.
+
+**The matrix is the only answer.** `require_admin` is gone, not deprecated —
+a second way to say "admin only" guarantees somebody keeps using it. Every
+capability in the matrix is enforced by exactly one dependency, and there is
+no capability in it that nothing enforces. A matrix with an entry no gate
+checks is a matrix that lies about what it covers.
+
+**An unknown role holds nothing.** `capabilities_for("wizard")` returns the
+empty set, so a typo in the `users.role` column produces a locked door rather
+than an open one.
+
+**The server ships the answer.** The resolved capability list travels in the
+login response and in `GET /api/auth/me`, and `UserOut` fills it in from the
+role. The frontend never re-derives it from a role string — a second
+derivation is a second answer, and it drifts the first time a role is added,
+silently, because the screen still looks right.
+
+**A 403 is a refusal, not an expiry.** `authProvider.checkError` used to
+treat a 403 like a 401 and sign the user out, which under a capability model
+meant an auditor was logged out of the portal for pressing a button they were
+not allowed to press. It now throws with `logoutUser: false`, so react-admin
+notifies and stays put.
+
+Two consequences worth holding onto. The `users` row is re-read on **every**
+request, so a role changed by an administrator takes effect on the next one —
+there is no waiting for a token to expire, and the JWT therefore carries no
+`role` claim, because a second copy of the truth is a copy nobody reads. And
+the frontend's list is a **type, not a policy**: it names the capabilities so
+that a misspelling is a compile error rather than a check that is silently
+always false.
+
+Roles, today:
+
+| Role | Holds |
+|---|---|
+| `admin` | everything, including managing accounts |
+| `manager` | everything about the estate — rules, schedules, catalogue — and nothing about the people |
+| `auditor` | reads the estate, runs controls, signs off findings. Cannot change the estate. |
+| `viewer` | reads the estate and runs controls. Cannot sign off a finding. |
+
+Adding a role is one line in `ROLE_CAPABILITIES`. Confining a user to
+particular clients is not implemented yet — the app bar's client switch still
+offers every configured client to every user — and it belongs in
+`capabilities_for_user()` when it is.
+
+**The demo accounts are served, not hardcoded.** `GET /api/auth/demo-accounts`
+answers with the four seeded accounts and their passwords, and the sign-in
+screen renders whatever it is given. The panel and the seed are therefore one
+list rather than two — and two copies of a list of passwords drift the first
+time somebody changes one. The endpoint is unauthenticated, because it is read
+before anybody has signed in, so it answers with nothing unless the
+deployment has set `SHOW_DEMO_ACCOUNTS=true`.
+
 ---
 
 ## 4. Rules are plain Python files
@@ -503,7 +578,12 @@ cd frontend && npm run dev
 .\.venv\Scripts\python.exe scripts\make_sample_data.py
 ```
 
-`admin_user` / `Admin@2026` (admin) · `audit_user` / `Audit@2026` (auditor)
+`admin_user` / `Admin@2026` (admin) · `manager_user` / `Manager@2026` (manager) ·
+`audit_user` / `Audit@2026` (auditor) · `viewer_user` / `Viewer@2026` (viewer)
+
+All four are seeded from `.env` and offered on the sign-in screen, so a
+reviewer can try each role without being given accounts by hand. Set
+`SHOW_DEMO_ACCOUNTS=false` to hide that panel.
 
 > Without planted breaches you cannot tell a working rule from a broken one.
 > `make_sample_data.py` is not fixture noise — it is the only reason the test

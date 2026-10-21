@@ -14,6 +14,7 @@ import {
 } from "../components/ui";
 import { runOutcomeColor, runStatusColor, FONT } from "../theme";
 import { useEntityScope } from "../entityScope";
+import { can, usePermissions } from "../permissions";
 
 /**
  * A run summary is written for a detail page, so it runs to 160 characters and
@@ -63,6 +64,21 @@ const stamp = (v?: string) =>
 const RerunButton = ({ label }: { label?: string }) => {
   const record = useRecordContext<any>();
   const notify = useNotify();
+  const perms = usePermissions();
+  const mayRerun = can(perms, "runs.rerun");
+  if (!mayRerun) {
+    return (
+      <Tooltip title="Re-running needs the runs.rerun capability">
+        <span>
+          <ActionIcon
+            title="Re-running needs the runs.rerun capability"
+            icon={<ReplayIcon fontSize="small" />}
+            disabled
+          />
+        </span>
+      </Tooltip>
+    );
+  }
   return (
     <ActionIcon
       title={`Re-run rule for ${record?.data_date ?? "today"}`}

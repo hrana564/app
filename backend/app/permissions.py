@@ -1,0 +1,142 @@
+"""What each role may do, expressed once.
+
+An endpoint asks for the capability it needs, not the role it assumes:
+
+    admin:  AdminUser      ->  write: Annotated[User, Depends(require("rules.write"))]
+
+Eleven endpoints asking "may I?" is eleven mappings, and they drift the first
+time a third role exists. A role here is a named bundle of capabilities, so
+granting one capability to one role is a visible edit in this file rather than
+a hunt through the routers.
+
+Two rules make this hold:
+
+- **An unknown role grants nothing.** A typo in the `users.role` column
+  produces a user who can read nothing, not one who can do everything. Failing
+  closed means a mistake is a locked door rather than an open one.
+- **The matrix is the only answer.** If a second module decides what a role
+  can do, the two drift invisibly: the server still enforces correctly while
+  the screen beside it shows an action the user may not take.
+"""
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:  # pragma: no cover - typing only, avoids an import cycle
+    from app.models import User
+
+ROLE_ADMIN = "admin"
+ROLE_MANAGER = "manager"
+ROLE_AUDITOR = "auditor"
+ROLE_VIEWER = "viewer"
+
+# --- capabilities ---------------------------------------------------------
+# The vocabulary. An endpoint's dependency names one of these, and the same
+# name travels to the frontend in the login response, so a screen can ask the
+# same question the server asked.
+RULES_READ = "rules.read"
+RULES_TEST = "rules.test"
+RULES_WRITE = "rules.write"
+RULES_ACTIVATE = "rules.activate"
+RULES_DELETE = "rules.delete"
+RULES_GENERATE = "rules.generate"
+
+SCHEDULES_READ = "schedules.read"
+SCHEDULES_WRITE = "schedules.write"
+
+RUNS_READ = "runs.read"
+RUNS_RERUN = "runs.rerun"
+
+TICKETS_READ = "tickets.read"
+TICKETS_ACKNOWLEDGE = "tickets.acknowledge"
+
+DATASOURCES_READ = "datasources.read"
+DATASOURCES_WRITE = "datasources.write"
+
+ASSURANCE_READ = "assurance.read"
+
+USERS_READ = "users.read"
+USERS_WRITE = "users.write"
+
+ALL_CAPABILITIES: frozenset[str] = frozenset(
+    {
+        RULES_READ, RULES_TEST, RULES_WRITE, RULES_ACTIVATE, RULES_DELETE,
+        RULES_GENERATE,
+        SCHEDULES_READ, SCHEDULES_WRITE,
+        RUNS_READ, RUNS_RERUN,
+        TICKETS_READ, TICKETS_ACKNOWLEDGE,
+        DATASOURCES_READ, DATASOURCES_WRITE,
+        ASSURANCE_READ,
+        USERS_READ, USERS_WRITE,
+    }
+)
+
+# --- the matrix ------------------------------------------------------------
+# Read everything, change nothing, sign off nothing. The read-only audience:
+# a head of audit who wants to see the estate without being able to alter it.
+ROLE_CAPABILITIES: dict[str, frozenset[str]] = {
+    ROLE_ADMIN: ALL_CAPABILITIES,
+    # Everything about the ESTATE, and nothing about the PEOPLE. A manager
+    # writes the rules, the schedules and the catalogue; a manager cannot add
+    # an account or change a role. That is the split worth having when the
+    # estate is maintained by somebody who is not the portal administrator.
+    ROLE_MANAGER: ALL_CAPABILITIES - {USERS_READ, USERS_WRITE},
+    ROLE_AUDITOR: frozenset(
+        {
+            RULES_READ, RULES_TEST,
+            SCHEDULES_READ,
+            RUNS_READ, RUNS_RERUN,
+            TICKETS_READ, TICKETS_ACKNOWLEDGE,
+            DATASOURCES_READ,
+            ASSURANCE_READ,
+        }
+    ),
+    ROLE_VIEWER: frozenset(
+        {
+            RULES_READ, RULES_TEST,
+            SCHEDULES_READ,
+            RUNS_READ,
+            TICKETS_READ,
+            DATASOURCES_READ,
+            ASSURANCE_READ,
+        }
+    ),
+}
+
+KNOWN_ROLES: tuple[str, ...] = tuple(ROLE_CAPABILITIES)
+
+
+def capabilities_for(role: str) -> frozenset[str]:
+    """The capabilities a role holds.
+
+    An unrecognised role holds none. The alternative - treating an unknown
+    role as the most privileged one - would make a typo in a database column
+    into a security hole, and a typo that silently grants nothing is a locked
+    door somebody notices and fixes.
+    """
+    return ROLE_CAPABILITIES.get(role, frozenset())
+
+
+def capabilities_for_user(user: "User") -> frozenset[str]:
+    """The capabilities one user holds.
+
+    The role is the only thing that decides it today. When a user is confined
+    to particular clients, that restriction is applied here and nowhere else -
+    so there is one answer to "what may this user see" rather than one per
+    endpoint.
+    """
+    return capabilities_for(user.role)
+
+
+def has_capability(user: "User", capability: str) -> bool:
+    return capability in capabilities_for_user(user)
+
+
+def permissions_list(role: str) -> list[str]:
+    """The capabilities a role holds, sorted, for the wire.
+
+    Sorted so the list is stable: two calls with the same role produce the
+    same bytes, which is what lets a client cache it and compare it.
+    """
+    return sorted(capabilities_for(role))

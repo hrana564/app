@@ -18,14 +18,14 @@ from __future__ import annotations
 import logging
 from datetime import date
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from starlette.concurrency import run_in_threadpool
 
-from app.api.deps import AdminUser, CurrentUser, SessionDep
+from app.api.deps import SessionDep, require
 from app.engine.catalog import database_catalog
 from app.engine.datasources import default_entity
 from app.engine.loader import read_source, write_source
@@ -33,7 +33,15 @@ from app.engine.rule_generator import is_configured, preview_context
 from app.engine.rules import CodeError, scoped_code, validate_code, versioned_filename
 from app.engine.runner import execute_rule
 from app.engine.validation import RuleValidator, declared_tables, now
-from app.models import Rule, RuleSchedule, Run, Ticket
+from app.models import Rule, RuleSchedule, Run, Ticket, User
+from app.permissions import (
+    RULES_ACTIVATE,
+    RULES_DELETE,
+    RULES_GENERATE,
+    RULES_READ,
+    RULES_TEST,
+    RULES_WRITE,
+)
 from app.schemas import (
     GenerationAttempt,
     RuleCreate,
@@ -53,6 +61,15 @@ from app.settings import settings
 log = logging.getLogger("abm.api.rules")
 
 router = APIRouter(prefix="/api/rules", tags=["rules"])
+
+# The capabilities this router gates. Named once, so the endpoint signature
+# below reads as the question being asked rather than as a role.
+RulesReader = Annotated[User, Depends(require(RULES_READ))]
+RulesTester = Annotated[User, Depends(require(RULES_TEST))]
+RulesWriter = Annotated[User, Depends(require(RULES_WRITE))]
+RulesActivator = Annotated[User, Depends(require(RULES_ACTIVATE))]
+RulesDeleter = Annotated[User, Depends(require(RULES_DELETE))]
+RulesGenerator = Annotated[User, Depends(require(RULES_GENERATE))]
 
 # Fields copied forward when a new version is created.
 CARRIED_FIELDS = (
@@ -143,7 +160,7 @@ async def publish_version(
 @router.get("", response_model=dict)
 async def list_rules(
     session: SessionDep,
-    _user: CurrentUser,
+    _user: RulesReader,
     page: int = Query(1, ge=1),
     perPage: int = Query(25, ge=1, le=500),
     sort: str = "code",
@@ -189,14 +206,14 @@ async def list_rules(
 
 
 @router.get("/generate/status")
-async def generate_status(_user: CurrentUser) -> dict:
+async def generate_status(_user: RulesReader) -> dict:
     return {"configured": is_configured(), "model": settings.llm_model or None}
 
 
 @router.get("/generate/context")
 async def generate_context(
     session: SessionDep,
-    _user: CurrentUser,
+    _user: RulesReader,
     entity: str | None = None,
     data_date: date | None = None,
 ) -> dict:
@@ -207,7 +224,7 @@ async def generate_context(
 
 @router.post("/generate", response_model=RuleGenerateResponse)
 async def generate(
-    payload: RuleGenerateRequest, session: SessionDep, admin: AdminUser
+    payload: RuleGenerateRequest, session: SessionDep, admin: RulesGenerator
 ) -> RuleGenerateResponse:
     """Ask for a rule, and get back one that has been run.
 
@@ -323,12 +340,12 @@ async def _next_generated_code(session, entity: str) -> str:
 
 
 @router.get("/{code}")
-async def get_rule(code: str, session: SessionDep, _user: CurrentUser) -> RuleOut:
+async def get_rule(code: str, session: SessionDep, _user: RulesReader) -> RuleOut:
     return RuleOut.model_validate(await require_head(session, code))
 
 
 @router.get("/{code}/source")
-async def get_source(code: str, session: SessionDep, _user: CurrentUser) -> dict:
+async def get_source(code: str, session: SessionDep, _user: RulesReader) -> dict:
     rule = await require_head(session, code)
     try:
         source = read_source(rule.source_file, settings.rules_dir)
@@ -347,7 +364,7 @@ async def get_source(code: str, session: SessionDep, _user: CurrentUser) -> dict
 
 @router.get("/{code}/versions", response_model=list[RuleVersionOut])
 async def list_versions(
-    code: str, session: SessionDep, _user: CurrentUser
+    code: str, session: SessionDep, _user: RulesReader
 ) -> list[RuleVersionOut]:
     """Full history for a rule, newest first."""
     rows = (
@@ -385,7 +402,7 @@ async def list_versions(
 # ---------------------------------------------------------------------------
 @router.post("", response_model=RuleOut, status_code=201)
 async def create_rule(
-    payload: RuleCreate, session: SessionDep, admin: AdminUser
+    payload: RuleCreate, session: SessionDep, admin: RulesWriter
 ) -> RuleOut:
     try:
         code = validate_code(payload.code)
@@ -440,7 +457,7 @@ async def create_rule(
 # ---------------------------------------------------------------------------
 @router.put("/{code}", response_model=RuleOut)
 async def update_rule(
-    code: str, payload: RuleUpdate, session: SessionDep, admin: AdminUser
+    code: str, payload: RuleUpdate, session: SessionDep, admin: RulesWriter
 ) -> RuleOut:
     """
     Editing a rule's logic creates version n+1 and moves the head flag.
@@ -476,7 +493,7 @@ async def update_rule(
 
 @router.put("/{code}/status", response_model=RuleOut)
 async def set_status(
-    code: str, payload: RuleStatusUpdate, session: SessionDep, admin: AdminUser
+    code: str, payload: RuleStatusUpdate, session: SessionDep, admin: RulesActivator
 ) -> RuleOut:
     """Lifecycle change only - no new version is created."""
     rule = await require_head(session, code)
@@ -509,8 +526,15 @@ async def set_status(
 # ---------------------------------------------------------------------------
 @router.post("/{code}/validate", response_model=ValidationReport)
 async def validate_rule(
-    code: str, session: SessionDep, _user: CurrentUser
+    code: str, session: SessionDep, admin: RulesWriter
 ) -> ValidationReport:
+    """Validate a rule and record the verdict on its row.
+
+    Validation writes to the rule - the status, the timestamp, the recorded
+    datasources - so it is a change to the estate and is gated as one. It
+    exists to be the precondition for activation, and activation is the
+    administrator's.
+    """
     rule = await require_head(session, code)
     report = await _validate_and_store(session, rule, username=None)
     await session.commit()
@@ -520,7 +544,7 @@ async def validate_rule(
 
 @router.get("/{code}/validate-report", response_model=ValidationReport)
 async def validation_report(
-    code: str, session: SessionDep, _user: CurrentUser
+    code: str, session: SessionDep, _user: RulesReader
 ) -> ValidationReport:
     rule = await require_head(session, code)
     return ValidationReport(
@@ -574,7 +598,7 @@ async def _validate_and_store(session, rule: Rule, *, username: str | None) -> V
 # ---------------------------------------------------------------------------
 @router.post("/{code}/rollback/{version}", response_model=RuleOut)
 async def rollback(
-    code: str, version: int, session: SessionDep, admin: AdminUser
+    code: str, version: int, session: SessionDep, admin: RulesActivator
 ) -> RuleOut:
     """
     Roll back by publishing an OLD version's source as a NEW head.
@@ -616,7 +640,7 @@ async def rollback(
 
 
 @router.delete("/{code}", status_code=204)
-async def delete_rule(code: str, session: SessionDep, admin: AdminUser) -> None:
+async def delete_rule(code: str, session: SessionDep, admin: RulesDeleter) -> None:
     """
     Delete a rule and every version of it.
 
@@ -677,7 +701,7 @@ async def scheduler_remove(schedule_id: int) -> None:
 
 @router.post("/{code}/test", response_model=RuleTestResponse)
 async def test_rule(
-    code: str, payload: RunRequest, session: SessionDep, _user: CurrentUser
+    code: str, payload: RunRequest, session: SessionDep, _user: RulesTester
 ) -> RuleTestResponse:
     rule = await require_head(session, code)
     run = await execute_rule(

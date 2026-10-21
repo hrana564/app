@@ -8,7 +8,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import assurance, auth, datasources, rules, runs, schedules, tickets
+from app.api import assurance, auth, datasources, rules, runs, schedules, tickets, users
 from app.db import SessionLocal, init_models, table_names
 from app.engine import scheduler
 from app.settings import settings
@@ -41,11 +41,14 @@ async def lifespan(app: FastAPI):
 
 
 async def _bootstrap() -> None:
-    """Seed the two bootstrap users and any missing baseline parameters."""
+    """Seed the bootstrap users and any missing baseline parameters."""
     from sqlalchemy import select
 
     from app.models import User
-    from app.security import ROLE_ADMIN, ROLE_AUDITOR, hash_password
+    from app.permissions import (
+        ROLE_ADMIN, ROLE_AUDITOR, ROLE_MANAGER, ROLE_VIEWER,
+    )
+    from app.security import hash_password
 
     async with SessionLocal() as session:
         created: list[str] = []
@@ -69,13 +72,23 @@ async def _bootstrap() -> None:
             )
             created.append(f"{username} ({role})")
 
+        # One account per role, so a reviewer can try each one. The order is
+        # the permission ladder: most to least.
         await ensure_user(
             settings.admin_username, settings.admin_password, ROLE_ADMIN,
             "Audit Administrator",
         )
         await ensure_user(
+            settings.manager_username, settings.manager_password, ROLE_MANAGER,
+            "Audit Manager",
+        )
+        await ensure_user(
             settings.auditor_username, settings.auditor_password, ROLE_AUDITOR,
             "Audit Reviewer",
+        )
+        await ensure_user(
+            settings.viewer_username, settings.viewer_password, ROLE_VIEWER,
+            "Audit Viewer",
         )
 
         if not settings.jwt_secret:
@@ -113,6 +126,7 @@ app.add_middleware(
 )
 
 app.include_router(auth.router)
+app.include_router(users.router)
 app.include_router(rules.router)
 app.include_router(schedules.router)
 app.include_router(runs.router)

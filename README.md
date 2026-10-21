@@ -536,22 +536,44 @@ Two of the four seeded rules prove this works:
 
 ## 6. Roles
 
-Two roles, seeded once from `.env` and then bcrypt-hashed into PostgreSQL.
+Three roles. A role is a **named bundle of capabilities**, and the matrix that
+says which role holds which capability lives in exactly one place —
+`backend/app/permissions.py`. The backend enforces it, and the server sends
+the resolved list to the browser so the screens offer exactly what the server
+will allow.
 
-| Capability | `admin_user` | `audit_user` |
-|---|:---:|:---:|
-| View rules / schedules / runs / tickets | ✅ | ✅ |
-| **Acknowledge / dismiss / reopen a ticket** | ✅ | ✅ |
-| Trigger a manual run or re-run | ✅ | ✅ |
-| Create / edit / pause a rule | ✅ | ❌ |
-| Generate a rule from a prompt | ✅ | ❌ |
-| Create / edit a schedule | ✅ | ❌ |
+| Capability | `admin_user` | `manager_user` | `audit_user` | `viewer_user` |
+|---|:---:|:---:|:---:|:---:|
+| View rules / schedules / runs / tickets | ✅ | ✅ | ✅ | ✅ |
+| Trigger a manual run | ✅ | ✅ | ✅ | ✅ |
+| **Acknowledge / dismiss / reopen a ticket** | ✅ | ✅ | ✅ | ❌ |
+| Re-run a run | ✅ | ✅ | ✅ | ❌ |
+| Create / edit / pause / delete a rule | ✅ | ✅ | ❌ | ❌ |
+| Validate a rule | ✅ | ✅ | ❌ | ❌ |
+| Generate a rule from a prompt | ✅ | ✅ | ❌ | ❌ |
+| Create / edit a schedule | ✅ | ✅ | ❌ | ❌ |
+| Register / remove a datasource | ✅ | ✅ | ❌ | ❌ |
+| Manage accounts | ✅ | ❌ | ❌ | ❌ |
 
-Clean split: **auditors consume and acknowledge; admins author and govern.** This also satisfies
-requirement #30 — *"regulation detail to be updated in the beginning of the year with
-restricted access to modify."*
+Clean split: **auditors consume and acknowledge; admins author and govern.**
+This also satisfies requirement #30 — *"regulation detail to be updated in the
+beginning of the year with restricted access to modify."*
 
-Enforced in the backend (`require_admin` → HTTP 403) and mirrored in the navigation.
+The `manager` role is the split worth having when the estate is maintained by
+somebody who is not the portal administrator: everything about the rules,
+schedules and catalogue, and nothing about the people.
+
+Enforced in the backend (`require(*capabilities)` → HTTP 403) and mirrored in
+the navigation and on every button, so the screen never offers an action the
+server would refuse.
+
+The four accounts are seeded once from `.env` and then bcrypt-hashed into
+PostgreSQL. The sign-in screen offers them — with their passwords — so a
+reviewer can try each role without being given accounts by hand; set
+`SHOW_DEMO_ACCOUNTS=false` and the panel disappears, which is what a live
+deployment should do. **Further accounts are created from the app** — the
+Accounts screen, which only an administrator can reach. A new account cannot
+change its own role, delete itself, or be the last administrator removed.
 
 ---
 
@@ -656,7 +678,13 @@ Vite proxies `/api` to the backend, so the browser sees a single origin in devel
 | Username | Password | Role |
 |---|---|---|
 | `admin_user` | `Admin@2026` | admin |
+| `manager_user` | `Manager@2026` | manager |
 | `audit_user` | `Audit@2026` | auditor |
+| `viewer_user` | `Viewer@2026` | viewer |
+
+All four are seeded from `.env` and offered on the sign-in screen, so you can
+try each role without being given accounts by hand. Set
+`SHOW_DEMO_ACCOUNTS=false` to hide that panel — the accounts still exist.
 
 ---
 
@@ -682,9 +710,11 @@ app/
 │   │   ├── models.py               9 tables
 │   │   ├── schemas.py              API contracts + THE RULE CONTRACT
 │   │   ├── security.py             bcrypt + JWT
+│   │   ├── permissions.py          THE MATRIX: what each role may do
 │   │   ├── api/
-│   │   │   ├── deps.py             auth + role gating
+│   │   │   ├── deps.py             auth + capability gating (require(*caps))
 │   │   │   ├── auth.py  rules.py  schedules.py  runs.py  tickets.py
+│   │   │   ├── users.py            the accounts, and the roles they hold
 │   │   │   ├── assurance.py         the landing page's read model
 │   │   │   ├── scope.py            THE ONLY place a query is filtered by client
 │   │   │   └── datasources.py      register / remove + overview + row preview
@@ -805,57 +835,66 @@ rule that produced them, so those endpoints join to reach it — that join lives
 `app/api/scope.py` and nowhere else. See AGENTS.md §2.
 
 ### Auth
-| Method | Path | Role | Description |
+| Method | Path | Capability | Description |
 |---|---|---|---|
-| POST | `/api/auth/login` | — | `{username, password}` → JWT + user |
-| GET | `/api/auth/me` | any | Current user |
+| POST | `/api/auth/login` | — | `{username, password}` → JWT + user (the user carries the resolved capability list) |
+| GET | `/api/auth/me` | any signed-in user | Current user, with the resolved capability list |
 
 ### Rules
-| Method | Path | Role | Description |
+| Method | Path | Capability | Description |
 |---|---|---|---|
-| GET | `/api/rules` | any | `?page&perPage&sort&order&status&entity&q` |
-| GET | `/api/rules/{id}` | any | One rule |
-| GET | `/api/rules/{id}/source` | any | Python source |
-| GET | `/api/rules/{code}/versions` | any | Full version history |
-| POST | `/api/rules` | admin | Create (bumps to v1) |
-| PUT | `/api/rules/{id}` | admin | Update; new `source_code` → new version |
-| POST | `/api/rules/{id}/rollback/{version}` | admin | Roll back = new version from old |
-| DELETE | `/api/rules/{id}` | admin | Delete |
-| POST | `/api/rules/{code}/test` | any | Run against a date (`{data_date}`) |
-| POST | `/api/rules/{id}/validate` | any | Run the static gate, store the verdict |
-| GET | `/api/rules/{id}/validate-report` | any | Last stored verdict without re-running |
-| GET | `/api/rules/generate/status` | any | Is the LLM configured? |
-| GET | `/api/rules/generate/context?entity=CLIENT-A` | any | What the LLM would be shown |
-| POST | `/api/rules/generate` | admin | Prompt + selection + lookback → a rule **that has been run**. Creates nothing |
+| GET | `/api/rules` | `rules.read` | `?page&perPage&sort&order&status&entity&q` |
+| GET | `/api/rules/{id}` | `rules.read` | One rule |
+| GET | `/api/rules/{id}/source` | `rules.read` | Python source |
+| GET | `/api/rules/{code}/versions` | `rules.read` | Full version history |
+| POST | `/api/rules` | `rules.write` | Create (bumps to v1) |
+| PUT | `/api/rules/{id}` | `rules.write` | Update; new `source_code` → new version |
+| POST | `/api/rules/{id}/rollback/{version}` | `rules.activate` | Roll back = new version from old |
+| DELETE | `/api/rules/{id}` | `rules.delete` | Delete |
+| POST | `/api/rules/{code}/test` | `rules.test` | Run against a date (`{data_date}`) |
+| POST | `/api/rules/{id}/validate` | `rules.write` | Run the static gate, store the verdict |
+| GET | `/api/rules/{id}/validate-report` | `rules.read` | Last stored verdict without re-running |
+| GET | `/api/rules/generate/status` | `rules.read` | Is the LLM configured? |
+| GET | `/api/rules/generate/context?entity=CLIENT-A` | `rules.read` | What the LLM would be shown |
+| POST | `/api/rules/generate` | `rules.generate` | Prompt + selection + lookback → a rule **that has been run**. Creates nothing |
 
 ### Schedules / Runs / Tickets / Params / Datasources
-| Method | Path | Role | Description |
+| Method | Path | Capability | Description |
 |---|---|---|---|
-| GET | `/api/rule-schedules/cadence-options` | any | Everything the frequency picker needs |
-| POST | `/api/rule-schedules/cadence-preview` | any | Derived cron + real fire times, before saving |
-| GET/POST | `/api/rule-schedules` | any / admin | List (`?rule_code=`) / create |
-| GET/PUT/DELETE | `/api/rule-schedules/{id}` | any / admin | Read / update / delete |
-| GET | `/api/rule-schedules/cron/jobs` | any | Live APScheduler jobs |
-| GET | `/api/rule-runs` | any | `?status&outcome&rule_code&entity&page&perPage&sort&order` — `status` filters execution, `outcome` filters findings; neither implies the other |
-| GET | `/api/rule-runs/summary` | any | `?entity` — `{running, completed, failed, breaches, cleared}` |
-| GET | `/api/rule-runs/{id}` | any | One run |
-| POST | `/api/rule-runs/{id}/rerun` | any | Re-run same rule version + data date |
-| GET | `/api/tickets/grouped` | any | `?group_by=rule_code\|severity\|status&entity` — grouped across the **whole** filtered set, paginated by group, so counts are never fragmented |
-| POST | `/api/tickets/acknowledge-all` | any | Scoped bulk acknowledge — one transaction, filters echoed back. Takes `entity`, so it reaches exactly the tickets on screen and no others |
-| GET | `/api/tickets` | any | `?status&severity&rule_code&q&entity` |
-| GET | `/api/tickets/summary` | any | `?entity` — counts + open by severity |
-| GET | `/api/tickets/{id}` | any | One ticket |
-| POST | `/api/tickets/{id}/acknowledge` | **any** | `{status, note}` |
-| POST | `/api/tickets/{id}/reopen` | any | Back to open |
-| GET | `/api/datasources` | any | Registered tables (+ `?entity=`) |
-| GET | `/api/datasources/entities` | any | The two entities and their systems |
-| GET | `/api/datasources/overview?entity=&data_date=` | any | **One call** — registered tables, what the ETL delivered, and which rules read each |
-| GET | `/api/datasources/discovered?entity=&data_date=` | any | Just what is on disk, read from the CSV headers |
-| GET | `/api/datasources/preview?entity=&name=&data_date=&limit=10` | any | First rows of one landed file, plus the file's true row count |
-| GET | `/api/datasources/available-dates?entity=CLIENT-A` | any | Day folders present, plus the latest |
-| POST | `/api/datasources` | admin | Register a table. Columns default to the file's header |
-| DELETE | `/api/datasources/{id}` | admin | Remove a registration. 409 naming the rules, while any active rule reads it |
-| GET | `/api/dashboard?entity=&window=14` | any | The **assurance read model** — see below |
+| GET | `/api/rule-schedules/cadence-options` | `schedules.read` | Everything the frequency picker needs |
+| POST | `/api/rule-schedules/cadence-preview` | `schedules.read` | Derived cron + real fire times, before saving |
+| GET/POST | `/api/rule-schedules` | `schedules.read` / `schedules.write` | List (`?rule_code=`) / create |
+| GET/PUT/DELETE | `/api/rule-schedules/{id}` | `schedules.read` / `schedules.write` | Read / update / delete |
+| GET | `/api/rule-schedules/cron/jobs` | `schedules.read` | Live APScheduler jobs |
+| GET | `/api/rule-runs` | `runs.read` | `?status&outcome&rule_code&entity&page&perPage&sort&order` — `status` filters execution, `outcome` filters findings; neither implies the other |
+| GET | `/api/rule-runs/summary` | `runs.read` | `?entity` — `{running, completed, failed, breaches, cleared}` |
+| GET | `/api/rule-runs/{id}` | `runs.read` | One run |
+| POST | `/api/rule-runs/{id}/rerun` | `runs.rerun` | Re-run same rule version + data date |
+| GET | `/api/tickets/grouped` | `tickets.read` | `?group_by=rule_code\|severity\|status&entity` — grouped across the **whole** filtered set, paginated by group, so counts are never fragmented |
+| POST | `/api/tickets/acknowledge-all` | `tickets.acknowledge` | Scoped bulk acknowledge — one transaction, filters echoed back. Takes `entity`, so it reaches exactly the tickets on screen and no others |
+| GET | `/api/tickets` | `tickets.read` | `?status&severity&rule_code&q&entity` |
+| GET | `/api/tickets/summary` | `tickets.read` | `?entity` — counts + open by severity |
+| GET | `/api/tickets/{id}` | `tickets.read` | One ticket |
+| POST | `/api/tickets/{id}/acknowledge` | `tickets.acknowledge` | `{status, note}` |
+| POST | `/api/tickets/{id}/reopen` | `tickets.acknowledge` | Back to open |
+| GET | `/api/datasources` | `datasources.read` | Registered tables (+ `?entity=`) |
+| GET | `/api/datasources/entities` | `datasources.read` | The two entities and their systems |
+| GET | `/api/datasources/overview?entity=&data_date=` | `datasources.read` | **One call** — registered tables, what the ETL delivered, and which rules read each |
+| GET | `/api/datasources/discovered?entity=&data_date=` | `datasources.read` | Just what is on disk, read from the CSV headers |
+| GET | `/api/datasources/preview?entity=&name=&data_date=&limit=10` | `datasources.read` | First rows of one landed file, plus the file's true row count |
+| GET | `/api/datasources/available-dates?entity=CLIENT-A` | `datasources.read` | Day folders present, plus the latest |
+| POST | `/api/datasources` | `datasources.write` | Register a table. Columns default to the file's header |
+| DELETE | `/api/datasources/{id}` | `datasources.write` | Remove a registration. 409 naming the rules, while any active rule reads it |
+| GET | `/api/dashboard?entity=&window=14` | `assurance.read` | The **assurance read model** — see below |
+
+### Accounts
+| Method | Path | Capability | Description |
+|---|---|---|---|
+| GET | `/api/users` | `users.read` | Every account, with the resolved capability list |
+| POST | `/api/users` | `users.write` | Create one — `{username, password, full_name, role}` |
+| PATCH | `/api/users/{id}` | `users.write` | Change the role, the name, the active flag, or reset the password |
+| DELETE | `/api/users/{id}` | `users.write` | Remove one. 409 for yourself, and for the last active administrator |
+| PATCH | `/api/users/me/password` | any signed-in user | Change your own password. Needs the current one |
 
 ### The assurance read model
 

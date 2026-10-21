@@ -51,8 +51,21 @@ class Settings(BaseSettings):
     # bootstrap users, seeded once on first start
     admin_username: str = "admin_user"
     admin_password: str = ""
+    manager_username: str = "manager_user"
+    manager_password: str = ""
     auditor_username: str = "audit_user"
     auditor_password: str = ""
+    viewer_username: str = "viewer_user"
+    viewer_password: str = ""
+
+    # Whether the sign-in screen may ADVERTISE these accounts and their
+    # passwords. A reviewer who has to be given an account by hand cannot try
+    # each role, so the panel exists - but it is also a list of working
+    # passwords on the front door, which no live deployment wants.
+    #
+    # A deployment that sets this to false gets a plain login form, and the
+    # accounts are still seeded: the panel is what goes, not the accounts.
+    show_demo_accounts: bool = True
 
     # --- rule generation (any OpenAI-compatible endpoint) ----------------
     llm_base_url: str = ""

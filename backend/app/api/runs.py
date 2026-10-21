@@ -4,22 +4,29 @@ from __future__ import annotations
 
 from datetime import date, datetime, timedelta, timezone
 
-from fastapi import APIRouter, HTTPException, Query
+from typing import Annotated
+
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, select
 
-from app.api.deps import CurrentUser, SessionDep
+from app.api.deps import SessionDep, require
 from app.api.scope import scoped
 from app.engine.runner import execute_rule
-from app.models import Run, Rule
+from app.models import Run, Rule, User
+from app.permissions import RUNS_READ, RUNS_RERUN
 from app.schemas import RunOut
 
 router = APIRouter(prefix="/api/rule-runs", tags=["rule-runs"])
+
+# The capabilities this router gates.
+RunReader = Annotated[User, Depends(require(RUNS_READ))]
+RunRerunner = Annotated[User, Depends(require(RUNS_RERUN))]
 
 
 @router.get("", response_model=dict)
 async def list_runs(
     session: SessionDep,
-    _user: CurrentUser,
+    _user: RunReader,
     page: int = Query(1, ge=1),
     perPage: int = Query(25, ge=1, le=500),
     status_: str | None = Query(None, alias="status"),
@@ -63,7 +70,7 @@ async def list_runs(
 
 
 @router.get("/summary")
-async def summary(session: SessionDep, _user: CurrentUser, entity: str | None = None) -> dict:
+async def summary(session: SessionDep, _user: RunReader, entity: str | None = None) -> dict:
     rows = (
         await session.execute(
             scoped(
@@ -103,7 +110,7 @@ async def summary(session: SessionDep, _user: CurrentUser, entity: str | None = 
 
 
 @router.get("/{run_id}", response_model=RunOut)
-async def get_run(run_id: int, session: SessionDep, _user: CurrentUser) -> RunOut:
+async def get_run(run_id: int, session: SessionDep, _user: RunReader) -> RunOut:
     run = await session.get(Run, run_id)
     if run is None:
         raise HTTPException(status_code=404, detail="Run not found")
@@ -111,7 +118,7 @@ async def get_run(run_id: int, session: SessionDep, _user: CurrentUser) -> RunOu
 
 
 @router.post("/{run_id}/rerun", response_model=RunOut)
-async def rerun(run_id: int, session: SessionDep, user: CurrentUser) -> RunOut:
+async def rerun(run_id: int, session: SessionDep, user: RunRerunner) -> RunOut:
     """Re-run the same rule version against the same data date."""
     previous = await session.get(Run, run_id)
     if previous is None:

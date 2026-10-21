@@ -1,4 +1,4 @@
-"""Shared FastAPI dependencies: authentication and role gating."""
+"""Shared FastAPI dependencies: authentication and capability gating."""
 
 from __future__ import annotations
 
@@ -12,8 +12,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import get_session
 from app.models import User
+from app.permissions import capabilities_for_user
 from app.schemas import UserOut
-from app.security import ROLE_ADMIN, decode_access_token
+from app.security import decode_access_token
 
 bearer = HTTPBearer(auto_error=False)
 
@@ -39,6 +40,8 @@ async def get_current_user(
             headers={"WWW-Authenticate": "Bearer"},
         ) from exc
 
+    # The row is re-read on every request rather than trusted from the token,
+    # so a role changed by an administrator takes effect immediately.
     user = await session.get(User, int(payload["sub"]))
     if user is None or not user.is_active:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User inactive")
@@ -48,18 +51,34 @@ async def get_current_user(
 CurrentUser = Annotated[User, Depends(get_current_user)]
 
 
-async def require_admin(current: CurrentUser) -> User:
-    """Route dependency: admin only. Depends on get_current_user, so the token
-    is decoded exactly once."""
-    if current.role != ROLE_ADMIN:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="This action requires the admin role",
-        )
-    return current
+def require(*capabilities: str):
+    """Route dependency: the caller must hold every one of `capabilities`.
 
+    The capability names come from `app/permissions.py`, and the same names
+    travel to the frontend in the login response - so a screen asks the same
+    question the server asked, rather than re-deriving the answer from a role
+    string.
 
-AdminUser = Annotated[User, Depends(require_admin)]
+    The dependency names a CAPABILITY, never a role. "May this user change a
+    rule?" is the question; "is this user an admin?" is an assumption about
+    which roles might change a rule, and it is the assumption that stops the
+    estate being maintained by somebody who is not an administrator.
+    """
+
+    async def _dependency(current: CurrentUser) -> User:
+        held = capabilities_for_user(current)
+        missing = [c for c in capabilities if c not in held]
+        if missing:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=(
+                    f"This action requires the {', '.join(missing)} "
+                    f"capability; your role ({current.role}) does not hold it"
+                ),
+            )
+        return current
+
+    return _dependency
 
 
 def list_filters(params: dict[str, list[str] | None] | dict) -> dict:
@@ -85,9 +104,8 @@ async def user_by_username(session: AsyncSession, username: str) -> User | None:
 __all__ = [
     "SessionDep",
     "CurrentUser",
-    "AdminUser",
     "get_current_user",
-    "require_admin",
+    "require",
     "list_filters",
     "user_by_username",
     "UserOut",

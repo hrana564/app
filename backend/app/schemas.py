@@ -5,7 +5,9 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
+
+from app.permissions import permissions_list
 
 RuleStatus = Literal["draft", "active", "paused", "retired"]
 Severity = Literal["low", "medium", "high", "critical"]
@@ -62,8 +64,39 @@ class UserOut(BaseModel):
     full_name: str = ""
     role: str
     is_active: bool
+    # What this user may do, derived from the role. Carried on the wire so
+    # the frontend never re-derives it from the role string - a second copy
+    # of the matrix is a second answer to "may I?".
+    permissions: list[str] = Field(default_factory=list)
 
     model_config = {"from_attributes": True}
+
+    @model_validator(mode="before")
+    @classmethod
+    def _resolve_permissions(cls, data: Any) -> Any:
+        """Fill `permissions` from the role.
+
+        Derived on the way out so every place that validates a User gets the
+        same list. There is no way to hand out a user without their
+        capabilities, and no call site that has to remember to ask.
+        """
+        if isinstance(data, dict):
+            role = data.get("role")
+            if role is None or data.get("permissions"):
+                return data
+            return {**data, "permissions": permissions_list(role)}
+
+        role = getattr(data, "role", None)
+        if role is None:
+            return data
+        return {
+            "id": data.id,
+            "username": data.username,
+            "full_name": data.full_name,
+            "role": data.role,
+            "is_active": data.is_active,
+            "permissions": permissions_list(role),
+        }
 
 
 class TokenResponse(BaseModel):
@@ -71,6 +104,41 @@ class TokenResponse(BaseModel):
     token_type: str = "bearer"
     expires_in: int
     user: UserOut
+
+
+class UserCreate(BaseModel):
+    username: str = Field(min_length=1, max_length=64)
+    password: str = Field(min_length=8, max_length=128)
+    full_name: str = Field(default="", max_length=128)
+    role: str = "auditor"
+
+
+class UserUpdate(BaseModel):
+    """A partial change to a user. A field left out is left alone."""
+
+    full_name: str | None = Field(default=None, max_length=128)
+    role: str | None = None
+    is_active: bool | None = None
+    password: str | None = Field(default=None, min_length=8, max_length=128)
+
+
+class PasswordChange(BaseModel):
+    current_password: str = Field(min_length=1, max_length=128)
+    new_password: str = Field(min_length=8, max_length=128)
+
+
+class DemoAccount(BaseModel):
+    """One account the sign-in screen offers, with its password.
+
+    Only ever served when the deployment has opted in - see
+    `settings.show_demo_accounts`. A deployment that has not gets an empty
+    list, and the panel does not render.
+    """
+
+    username: str
+    password: str
+    role: str
+    blurb: str
 
 
 # ---------------------------------------------------------------------------

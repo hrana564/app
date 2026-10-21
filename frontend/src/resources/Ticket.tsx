@@ -17,6 +17,7 @@ import { api } from "../dataProvider";
 import { DotLabel, RowsTable } from "../components/ui";
 import { severityColor, statusColor, SEVERITIES, FONT } from "../theme";
 import { useEntityScope } from "../entityScope";
+import { can, usePermissions } from "../permissions";
 
 const STATUS_OPTIONS = ["open", "acknowledged", "dismissed"] as const;
 const SEVERITY_OPTIONS = SEVERITIES;
@@ -80,6 +81,8 @@ const AcknowledgeButton = ({ record: explicit }: { record?: any }) => {
   const [open, setOpen] = useState(false);
   const [note, setNote] = useState("");
   const [pending, setPending] = useState(false);
+  const perms = usePermissions();
+  const mayAcknowledge = can(perms, "tickets.acknowledge");
 
   if (!record || record.status !== "open") return null;
 
@@ -100,14 +103,31 @@ const AcknowledgeButton = ({ record: explicit }: { record?: any }) => {
 
   return (
     <>
-      <Button
-        size="small"
-        variant="contained"
-        startIcon={<CheckCircleOutlinedIcon />}
-        onClick={(e) => { e.stopPropagation(); setOpen(true); }}
-      >
-        Acknowledge
-      </Button>
+      {mayAcknowledge ? (
+        <Button
+          size="small"
+          variant="contained"
+          startIcon={<CheckCircleOutlinedIcon />}
+          onClick={(e) => { e.stopPropagation(); setOpen(true); }}
+        >
+          Acknowledge
+        </Button>
+      ) : (
+        // Left in place and disabled, with the reason attached. A button that
+        // is simply missing is a question the user has to ask.
+        <Tooltip title="Acknowledging a ticket needs the tickets.acknowledge capability">
+          <span>
+            <Button
+              size="small"
+              variant="contained"
+              startIcon={<CheckCircleOutlinedIcon />}
+              disabled
+            >
+              Acknowledge
+            </Button>
+          </span>
+        </Tooltip>
+      )}
       <Dialog open={open} onClose={() => setOpen(false)} maxWidth="sm" fullWidth>
         <DialogTitle>
           Acknowledge {record.ticket_no}
@@ -157,7 +177,20 @@ const ReopenButton = ({ record: explicit }: { record?: any }) => {
   const record = explicit ?? contextRecord;
   const notify = useNotify();
   const refresh = useRefresh();
+  const perms = usePermissions();
+  const mayAcknowledge = can(perms, "tickets.acknowledge");
   if (!record || record.status === "open") return null;
+  if (!mayAcknowledge) {
+    return (
+      <Tooltip title="Reopening a ticket needs the tickets.acknowledge capability">
+        <span>
+          <Button size="small" startIcon={<ReplayIcon />} disabled>
+            Reopen
+          </Button>
+        </span>
+      </Tooltip>
+    );
+  }
   return (
     <Button
       size="small"
@@ -325,6 +358,8 @@ const GroupedInbox = ({
   onBulk: (s: BulkScope) => void;
 }) => {
   const navigate = useNavigate();
+  const perms = usePermissions();
+  const mayAcknowledge = can(perms, "tickets.acknowledge");
   const allExpanded = groups.length > 0 && groups.every((g) => expanded[g.key]);
 
   return (
@@ -414,16 +449,27 @@ const GroupedInbox = ({
 
                 <TableCell align="right" onClick={(e) => e.stopPropagation()}>
                   {group.open > 0 ? (
-                    <Button size="small" startIcon={<DoneAllIcon />}
-                      onClick={() =>
-                        onBulk({
-                          describe: `raised by ${group.key}`,
-                          count: group.open,
-                          payload: { rule_code: group.key },
-                        })
-                      }>
-                      Acknowledge all {group.open}
-                    </Button>
+                    mayAcknowledge ? (
+                      <Button size="small" startIcon={<DoneAllIcon />}
+                        onClick={() =>
+                          onBulk({
+                            describe: `raised by ${group.key}`,
+                            count: group.open,
+                            payload: { rule_code: group.key },
+                          })
+                        }>
+                        Acknowledge all {group.open}
+                      </Button>
+                    ) : (
+                      // Left in place and disabled, with the reason attached.
+                      <Tooltip title="Acknowledging needs the tickets.acknowledge capability">
+                        <span>
+                          <Button size="small" startIcon={<DoneAllIcon />} disabled>
+                            Acknowledge all {group.open}
+                          </Button>
+                        </span>
+                      </Tooltip>
+                    )
                   ) : (
                     <Typography variant="body2" sx={{ color: "text.secondary" }}>all reviewed</Typography>
                   )}
@@ -557,6 +603,8 @@ export const TicketList = () => {
   const [scope, setScope] = useState<BulkScope | null>(null);
   const ruleNames = useRuleNames();
   const { entity } = useEntityScope();
+  const perms = usePermissions();
+  const mayAcknowledge = can(perms, "tickets.acknowledge");
 
   // Debounced search, so typing does not fire a request per keystroke.
   const [q, setQ] = useState("");
@@ -719,21 +767,31 @@ export const TicketList = () => {
             ))}
           </MuiTextField>
 
-          <Button variant="contained" startIcon={<DoneAllIcon />}
-            onClick={() =>
-              onBulk({
-                describe,
-                count: 0,
-                payload: {
-                  rule_code: filters.rule_code || undefined,
-                  severity: filters.severity || undefined,
-                  q: q || undefined,
-                  entity,
-                },
-              })
-            }>
-            Acknowledge all
-          </Button>
+          {mayAcknowledge ? (
+            <Button variant="contained" startIcon={<DoneAllIcon />}
+              onClick={() =>
+                onBulk({
+                  describe,
+                  count: 0,
+                  payload: {
+                    rule_code: filters.rule_code || undefined,
+                    severity: filters.severity || undefined,
+                    q: q || undefined,
+                    entity,
+                  },
+                })
+              }>
+              Acknowledge all
+            </Button>
+          ) : (
+            <Tooltip title="Acknowledging needs the tickets.acknowledge capability">
+              <span>
+                <Button variant="contained" startIcon={<DoneAllIcon />} disabled>
+                  Acknowledge all
+                </Button>
+              </span>
+            </Tooltip>
+          )}
         </Toolbar>
 
         <Divider />

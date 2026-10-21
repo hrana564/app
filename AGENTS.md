@@ -325,6 +325,9 @@ work per client and re-picking it on every reload is noise.
 | One licence policy for gate and notice | `backend/scripts/check_licenses.py` | `write_third_party_notice.py` imports `BLOCKING`/`PERMISSIVE`/`classify` rather than restating them. It once kept its own lists and they drifted within a single commit - `epl`, `cpal` and `commercial` were blocked by the gate and unknown to the notice, which is the one place a copyleft dependency could be declared into compliance. |
 | One `SEVERITIES` list for the frontend | `frontend/src/theme.ts` | Three screens sorted and filtered by severity with a copy each, and the ticket inbox held two. Derive from `SEVERITIES` / `SEVERITIES_ASC`; the backend equivalent is `SEVERITY_ORDER` in `app/api/assurance.py`, which the ticket group sort imports. |
 | One capability matrix for every gate | `backend/app/permissions.py` | Eleven endpoints asking "may I?" is eleven mappings, and they drift the moment a third role exists. The matrix is the only answer, and every capability in it is enforced by exactly one dependency. See §3b. |
+| One `GET /api/roles` for the permission model | `backend/app/api/roles.py` | The Accounts screen kept its own list of three roles and was missing `manager`, so a role that existed could not be assigned through the portal. A list served from the matrix cannot drift from it. See §3b. |
+| One `role_label()` for a role's name | `backend/app/permissions.py` | Written beside the capabilities it describes, and carried on `UserOut`. Four screens name a role; each writing its own word for one is four words that have to agree. |
+| `userMenu={false}` on the AppBar | `frontend/src/Layout.tsx` | react-admin renders its own profile button beside whatever the layout puts in the bar. Supplying a second one — with the name, the role and the password dialog — puts two profile buttons side by side, each knowing half the picture. |
 | Rules may only `import` from the allow-list | `app/engine/validation.py` | Enforced by AST scan, not convention. |
 | The catalogue lives in the `datasources` table, not in `app/` | see §3a | A module under `app/` that also answered "what tables exist" would be a second source of truth, and the two would drift the first time an admin registered something. |
 | Consumers take a `Catalog`, never a storage mechanism | `app/engine/catalog.py` | Keeps the ETL, the catalogue, the rules and the runner decoupled. See §3a. |
@@ -484,6 +487,26 @@ treat a 403 like a 401 and sign the user out, which under a capability model
 meant an auditor was logged out of the portal for pressing a button they were
 not allowed to press. It now throws with `logoutUser: false`, so react-admin
 notifies and stays put.
+
+**The matrix is served, not restated.** `GET /api/roles` answers with the
+whole permission model — every capability with its label and group, every role
+with its label, description and capability list — and the Settings page builds
+from it. Before it, the Accounts screen carried its own list of three roles and
+was **missing one**: `manager` existed on the server and could not be assigned
+through the screen, because nobody had remembered to add it there. Two copies of
+a list are two things that have to agree, and only one of them is checked. The
+same list also had to be hardcoded in a second place — the role picker's
+`helperText` — which is how a role could be offered with a description that
+described a different role.
+
+It needs only a session, no capability. Reading the permission *model* is not
+reading the estate, and the people who ask it most are the ones with least
+permission to spare.
+
+The role's **label** is derived server-side too, next to the capabilities it
+describes (`role_label()`), and travels on `UserOut` as `role_label`. A screen
+showing somebody's account should not have to fetch the whole matrix to write
+"Administrator" instead of "admin".
 
 Two consequences worth holding onto. The `users` row is re-read on **every**
 request, so a role changed by an administrator takes effect on the next one —

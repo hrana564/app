@@ -7,7 +7,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
 
-from app.permissions import permissions_list
+from app.permissions import permissions_list, role_label
 
 RuleStatus = Literal["draft", "active", "paused", "retired"]
 Severity = Literal["low", "medium", "high", "critical"]
@@ -63,6 +63,10 @@ class UserOut(BaseModel):
     username: str
     full_name: str = ""
     role: str
+    # What that role is CALLED, derived alongside the capabilities. A screen
+    # showing a person's account should not have to fetch the whole matrix to
+    # write "Administrator" instead of "admin".
+    role_label: str = ""
     is_active: bool
     # What this user may do, derived from the role. Carried on the wire so
     # the frontend never re-derives it from the role string - a second copy
@@ -74,7 +78,7 @@ class UserOut(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def _resolve_permissions(cls, data: Any) -> Any:
-        """Fill `permissions` from the role.
+        """Fill `permissions` and `role_label` from the role.
 
         Derived on the way out so every place that validates a User gets the
         same list. There is no way to hand out a user without their
@@ -82,9 +86,13 @@ class UserOut(BaseModel):
         """
         if isinstance(data, dict):
             role = data.get("role")
-            if role is None or data.get("permissions"):
+            if role is None:
                 return data
-            return {**data, "permissions": permissions_list(role)}
+            return {
+                **data,
+                "permissions": data.get("permissions") or permissions_list(role),
+                "role_label": data.get("role_label") or role_label(role),
+            }
 
         role = getattr(data, "role", None)
         if role is None:
@@ -94,6 +102,7 @@ class UserOut(BaseModel):
             "username": data.username,
             "full_name": data.full_name,
             "role": data.role,
+            "role_label": role_label(role),
             "is_active": data.is_active,
             "permissions": permissions_list(role),
         }
@@ -139,6 +148,40 @@ class DemoAccount(BaseModel):
     password: str
     role: str
     blurb: str
+
+
+# ---------------------------------------------------------------------------
+# The role matrix
+# ---------------------------------------------------------------------------
+class CapabilityOut(BaseModel):
+    """One capability, named the way a screen shows it."""
+
+    name: str
+    label: str
+    group: str
+    group_label: str
+
+
+class RoleOut(BaseModel):
+    """One role, and what it holds."""
+
+    name: str
+    label: str
+    description: str
+    capabilities: list[str]
+
+
+class RoleMatrixOut(BaseModel):
+    """The whole matrix: the rows, the columns, and which crosses where.
+
+    Served rather than assembled in the frontend. The matrix in
+    `app/permissions.py` is the only answer to "what may this role do", and a
+    screen that showed its own copy of it would be a second answer - one that
+    drifts the first time a capability is added.
+    """
+
+    capabilities: list[CapabilityOut]
+    roles: list[RoleOut]
 
 
 # ---------------------------------------------------------------------------

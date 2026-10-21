@@ -59,18 +59,22 @@ ASSURANCE_READ = "assurance.read"
 USERS_READ = "users.read"
 USERS_WRITE = "users.write"
 
-ALL_CAPABILITIES: frozenset[str] = frozenset(
-    {
-        RULES_READ, RULES_TEST, RULES_WRITE, RULES_ACTIVATE, RULES_DELETE,
-        RULES_GENERATE,
-        SCHEDULES_READ, SCHEDULES_WRITE,
-        RUNS_READ, RUNS_RERUN,
-        TICKETS_READ, TICKETS_ACKNOWLEDGE,
-        DATASOURCES_READ, DATASOURCES_WRITE,
-        ASSURANCE_READ,
-        USERS_READ, USERS_WRITE,
-    }
+# The order the matrix is READ in. A set has no order, and a table whose rows
+# move about when a capability is added is a table nobody can learn - so the
+# order is written down here, once, and the set is derived from it rather than
+# the other way round.
+CAPABILITY_ORDER: tuple[str, ...] = (
+    RULES_READ, RULES_TEST, RULES_WRITE, RULES_ACTIVATE, RULES_DELETE,
+    RULES_GENERATE,
+    SCHEDULES_READ, SCHEDULES_WRITE,
+    RUNS_READ, RUNS_RERUN,
+    TICKETS_READ, TICKETS_ACKNOWLEDGE,
+    DATASOURCES_READ, DATASOURCES_WRITE,
+    ASSURANCE_READ,
+    USERS_READ, USERS_WRITE,
 )
+
+ALL_CAPABILITIES: frozenset[str] = frozenset(CAPABILITY_ORDER)
 
 # --- the matrix ------------------------------------------------------------
 # Read everything, change nothing, sign off nothing. The read-only audience:
@@ -140,3 +144,97 @@ def permissions_list(role: str) -> list[str]:
     same bytes, which is what lets a client cache it and compare it.
     """
     return sorted(capabilities_for(role))
+
+
+# ---------------------------------------------------------------------------
+# How the matrix reads
+# ---------------------------------------------------------------------------
+# The names above are a wire vocabulary. `rules.read` is precise, and it is what
+# a dependency names - but it is not what a person reads on a screen, and the
+# screen that shows the matrix must show the SERVER's matrix rather than a
+# second copy of it written in the frontend.
+#
+# So the labels live here, next to the vocabulary they describe. A label
+# defined in the frontend is a label that drifts: the matrix gains a
+# capability, the frontend is not told, and the screen says the capability does
+# not exist.
+ROLE_LABELS: dict[str, str] = {
+    ROLE_ADMIN: "Administrator",
+    ROLE_MANAGER: "Manager",
+    ROLE_AUDITOR: "Auditor",
+    ROLE_VIEWER: "Viewer",
+}
+
+ROLE_DESCRIPTIONS: dict[str, str] = {
+    ROLE_ADMIN: "Everything, including managing the accounts.",
+    ROLE_MANAGER: (
+        "Everything about the estate - rules, schedules, catalogue - and "
+        "nothing about the people."
+    ),
+    ROLE_AUDITOR: (
+        "Reads the estate, runs controls and signs off findings. Cannot "
+        "change the estate."
+    ),
+    ROLE_VIEWER: (
+        "Reads the estate and runs controls. Cannot sign off a finding or "
+        "change anything."
+    ),
+}
+
+CAPABILITY_LABELS: dict[str, str] = {
+    RULES_READ: "Read the rules",
+    RULES_TEST: "Run a rule against the data",
+    RULES_WRITE: "Create and edit rules",
+    RULES_ACTIVATE: "Activate, pause and retire a rule",
+    RULES_DELETE: "Remove a rule",
+    RULES_GENERATE: "Draft a rule with the assistant",
+    SCHEDULES_READ: "Read the schedules",
+    SCHEDULES_WRITE: "Create and edit schedules",
+    RUNS_READ: "Read the runs",
+    RUNS_RERUN: "Re-run a control",
+    TICKETS_READ: "Read the findings",
+    TICKETS_ACKNOWLEDGE: "Acknowledge a finding",
+    DATASOURCES_READ: "Read the catalogue",
+    DATASOURCES_WRITE: "Register and remove data sources",
+    ASSURANCE_READ: "Read the assurance overview",
+    USERS_READ: "Read the accounts",
+    USERS_WRITE: "Manage the accounts",
+}
+
+# The group a capability belongs to, by the prefix of its name. The groups are
+# the subjects of the portal, and a table of seventeen rows reads better as
+# seven short ones.
+CAPABILITY_GROUPS: dict[str, str] = {
+    "rules": "Rules",
+    "schedules": "Schedules",
+    "runs": "Runs",
+    "tickets": "Findings",
+    "datasources": "Data sources",
+    "assurance": "Assurance",
+    "users": "Accounts",
+}
+
+
+def capability_group(capability: str) -> str:
+    """The group a capability belongs to: the part before its first dot."""
+    return capability.split(".", 1)[0]
+
+
+def capability_label(capability: str) -> str:
+    """What a capability is called on a screen."""
+    return CAPABILITY_LABELS.get(capability, capability)
+
+
+def group_label(group: str) -> str:
+    """What a group of capabilities is called on a screen."""
+    return CAPABILITY_GROUPS.get(group, group)
+
+
+def role_label(role: str) -> str:
+    """What a role is called on a screen."""
+    return ROLE_LABELS.get(role, role)
+
+
+def role_description(role: str) -> str:
+    """What a role is for, in one sentence."""
+    return ROLE_DESCRIPTIONS.get(role, "")

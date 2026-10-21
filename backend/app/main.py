@@ -8,7 +8,9 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import assurance, auth, datasources, rules, runs, schedules, tickets, users
+from app.api import (
+    assurance, auth, datasources, roles, rules, runs, schedules, tickets, users,
+)
 from app.db import SessionLocal, init_models, table_names
 from app.engine import scheduler
 from app.settings import settings
@@ -127,6 +129,7 @@ app.add_middleware(
 
 app.include_router(auth.router)
 app.include_router(users.router)
+app.include_router(roles.router)
 app.include_router(rules.router)
 app.include_router(schedules.router)
 app.include_router(runs.router)

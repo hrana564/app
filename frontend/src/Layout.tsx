@@ -1,13 +1,20 @@
 import { useState, type ReactNode } from "react";
 import {
-  Box, Button, Chip, Dialog, DialogActions, DialogContent, DialogTitle,
-  IconButton, Menu, MenuItem, Select, Stack, TextField, Tooltip, Typography,
+  Avatar, Box, Button, Chip, Dialog, DialogActions, DialogContent, DialogTitle,
+  Divider, IconButton, Menu, MenuItem, Select, Stack, TextField, Tooltip,
+  Typography,
 } from "@mui/material";
 import AccountCircleIcon from "@mui/icons-material/AccountCircle";
+import ArrowDropDownIcon from "@mui/icons-material/ArrowDropDown";
+import BusinessOutlinedIcon from "@mui/icons-material/BusinessOutlined";
+import KeyOutlinedIcon from "@mui/icons-material/KeyOutlined";
+import LogoutOutlinedIcon from "@mui/icons-material/LogoutOutlined";
+import SettingsIcon from "@mui/icons-material/Settings";
 import {
   AppBar,
   Layout as RaLayout,
   LoadingIndicator,
+  Menu as RaMenu,
   type AppBarProps,
 } from "react-admin";
 import { useLogout, useNotify } from "react-admin";
@@ -16,21 +23,115 @@ import { api } from "./dataProvider";
 import { useCurrentUser } from "./permissions";
 import { FONT } from "./theme";
 
+/* ------------------------------------------------------------------ */
+/* The sidebar                                                         */
+/* ------------------------------------------------------------------ */
+
 /**
- * The shell: what the app is called, which client it is looking at, and who is
- * signed in.
+ * A heading over a group of menu items.
  *
+ * Rendered as an `<li>`, because the menu is a `<ul>` and a heading that is
+ * not a list item makes it invalid. It carries `RaMenuGroup` so the CSS can
+ * take it away when the sidebar is collapsed - a two-line label in a 56px
+ * column overflows onto the icon beneath it.
+ */
+const GroupHeading = ({ children }: { children: ReactNode }) => (
+  <Typography
+    component="li"
+    className="RaMenuGroup"
+    variant="overline"
+    sx={{
+      px: 2,
+      pt: 2.5,
+      pb: 0.5,
+      color: "#9aa7ba",
+      fontWeight: 700,
+      letterSpacing: 1.2,
+      listStyle: "none",
+      whiteSpace: "nowrap",
+      overflow: "hidden",
+    }}
+  >
+    {children}
+  </Typography>
+);
+
+/** The rule between two groups, collapsed with the headings above it. */
+const GroupRule = () => (
+  <Box
+    component="li"
+    className="RaMenuGroup"
+    sx={{
+      mx: 2,
+      my: 1.5,
+      borderTop: "1px solid",
+      borderColor: "divider",
+      listStyle: "none",
+    }}
+  />
+);
+
+/**
+ * The sidebar, in two groups.
+ *
+ * The estate was a flat list of five, and the account work had been bolted
+ * onto the end of it as a sixth - so anything else that configures the portal
+ * would have been a seventh, sitting between Data Sources and whatever came
+ * next. Settings is now one destination with the tabs inside it, and the
+ * group heading is where those tabs are announced.
+ *
+ * `Menu.ResourceItem` rather than a hand-written link, because the resource
+ * already knows its own icon and label - and it already asks `canAccess`, so
+ * a capability that is withdrawn takes the menu item with it rather than
+ * leaving a link to a screen that will refuse.
+ */
+const PortalMenu = () => (
+  <RaMenu
+    sx={{
+      pt: 0.5,
+      // Collapsed, only the icons survive - headings and rules are the
+      // width of the column.
+      "&.RaMenu-closed .RaMenuGroup": { display: "none" },
+    }}
+  >
+    <GroupHeading>The audit</GroupHeading>
+    <RaMenu.DashboardItem />
+    <RaMenu.ResourceItem name="tickets" />
+    <RaMenu.ResourceItem name="rules" />
+    <RaMenu.ResourceItem name="runs" />
+    <RaMenu.ResourceItem name="datasources" />
+    <GroupRule />
+    <GroupHeading>Settings</GroupHeading>
+    <RaMenu.Item
+      to="/settings"
+      primaryText="Settings"
+      leftIcon={<SettingsIcon />}
+      sx={{ color: "#8d99ae", "& .RaMenuItemLink-icon": { color: "#8d99ae" } }}
+    />
+  </RaMenu>
+);
+
+/* ------------------------------------------------------------------ */
+/* Which client the portal is looking at                               */
+/* ------------------------------------------------------------------ */
+
+/**
  * The entity switch sits immediately before the refresh indicator because that
  * is where a person already looks for the state of the page. It is the only
  * place the client is chosen - no screen carries its own copy, so the ticket
- * inbox can never be showing one client while the rule list above it shows another.
+ * inbox can never be showing one client while the rule list above it shows
+ * another.
+ *
+ * Drawn as a control rather than as loose text. It used to be a bare value
+ * with a caret hanging off it, which read as a label with a smudge beside it -
+ * and a control nobody recognises as one is a control nobody presses.
  */
 const EntitySwitch = () => {
   const { entity, setEntity, entities } = useEntityScope();
   const current = entities.find((e) => e.code === entity);
 
   return (
-    <Box sx={{ display: "flex", alignItems: "center", pr: 1.5, mr: 1, borderRight: "1px solid rgba(255,255,255,0.25)" }}>
+    <Box sx={{ display: "flex", alignItems: "center", mr: 1.5 }}>
       <Select
         value={entity}
         onChange={(e) => setEntity(e.target.value)}
@@ -38,18 +139,45 @@ const EntitySwitch = () => {
         disableUnderline
         inputProps={{ "aria-label": "Client entity" }}
         renderValue={() => (
-          <Typography variant="body2" sx={{ fontWeight: 700, color: "#fff", whiteSpace: "nowrap" }}>
-            {current ? `${current.code} — ${current.name}` : entity}
-          </Typography>
+          <Stack
+            direction="row"
+            spacing={0.75}
+            sx={{ alignItems: "center", pr: 0.25 }}
+          >
+            <BusinessOutlinedIcon
+              sx={{ fontSize: 17, color: "rgba(255,255,255,0.72)" }}
+            />
+            <Typography
+              variant="body2"
+              sx={{ fontWeight: 600, color: "#fff", whiteSpace: "nowrap" }}
+            >
+              {current ? current.name : entity}
+            </Typography>
+          </Stack>
         )}
         sx={{
           color: "#fff",
-          minWidth: 190,
-          // The closed control sits on the teal bar; the open menu renders in a
-          // portal on paper, so only the closed state needs to be lightened.
-          "& .MuiSelect-select": { py: 0.5, pr: "24px !important" },
-          "& .MuiSelect-icon": { color: "#fff", right: 0 },
-          "&:hover": { bgcolor: "rgba(255,255,255,0.08)" },
+          minWidth: 200,
+          // The closed control sits on the app bar; the open menu renders in
+          // a portal on paper, so only the closed state is drawn as a box.
+          "& .MuiSelect-select": {
+            py: 0.65,
+            pl: 1.25,
+            pr: "28px !important",
+            borderRadius: 2,
+            bgcolor: "rgba(255,255,255,0.10)",
+            border: "1px solid rgba(255,255,255,0.20)",
+            transition: "background-color 120ms ease, border-color 120ms ease",
+          },
+          "& .MuiSelect-icon": {
+            color: "rgba(255,255,255,0.85)",
+            right: 6,
+            fontSize: 20,
+          },
+          "&:hover .MuiSelect-select": {
+            bgcolor: "rgba(255,255,255,0.18)",
+            borderColor: "rgba(255,255,255,0.40)",
+          },
         }}
       >
         {entities.map((e) => (
@@ -75,6 +203,15 @@ const EntitySwitch = () => {
  * what a viewer can see had no way to become a viewer without a private
  * window.
  *
+ * ONE BUTTON, NOT TWO
+ * --------------------
+ * react-admin ships its own `UserMenu` and renders it by default beside
+ * whatever the layout puts in the bar - so there were two profile buttons side
+ * by side, each opening its own menu, each knowing half of the picture. Its
+ * own knew the name; this one knew the role and could change a password.
+ * Neither of them won. `userMenu={false}` on the AppBar silences the default,
+ * and this is the single profile control that is left.
+ *
  * The role is shown because it is what the buttons on the screen are about.
  * A person who cannot tell why a button is disabled cannot ask the right
  * question about it.
@@ -88,17 +225,66 @@ const AccountMenu = () => {
 
   if (!user) return null;
 
+  const name = user.full_name || user.username;
+  const role = user.role_label || user.role;
+
   return (
     <>
-      <Tooltip title={`Signed in as ${user.username} (${user.role})`}>
-        <IconButton
-          aria-label="account-menu"
-          onClick={(e) => setAnchor(e.currentTarget)}
-          sx={{ color: "#fff" }}
+      <Button
+        aria-label="account-menu"
+        onClick={(e) => setAnchor(e.currentTarget)}
+        endIcon={
+          <ArrowDropDownIcon sx={{ fontSize: 20, color: "rgba(255,255,255,0.75)" }} />
+        }
+        sx={{
+          color: "#fff",
+          px: 1,
+          py: 0.4,
+          borderRadius: 2,
+          minWidth: 0,
+          "&:hover": { bgcolor: "rgba(255,255,255,0.12)" },
+          "& .MuiButton-endIcon": { ml: 0.25 },
+        }}
+      >
+        <AccountCircleIcon sx={{ fontSize: 32, mr: 1.25 }} />
+        {/* The name is dropped on a narrow bar rather than wrapping: a bar
+            that grows to two rows pushes the refresh indicator off the edge. */}
+        <Box
+          sx={{
+            display: { xs: "none", md: "block" },
+            textAlign: "left",
+            lineHeight: 1.15,
+            maxWidth: 200,
+          }}
         >
-          <AccountCircleIcon />
-        </IconButton>
-      </Tooltip>
+          <Typography
+            variant="body2"
+            sx={{
+              color: "#fff",
+              fontWeight: 600,
+              lineHeight: 1.25,
+              whiteSpace: "nowrap",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+            }}
+          >
+            {name}
+          </Typography>
+          <Typography
+            variant="caption"
+            sx={{
+              display: "block",
+              color: "rgba(255,255,255,0.72)",
+              lineHeight: 1.25,
+              whiteSpace: "nowrap",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+            }}
+          >
+            {role}
+          </Typography>
+        </Box>
+      </Button>
 
       <Menu
         anchorEl={anchor}
@@ -106,26 +292,55 @@ const AccountMenu = () => {
         onClose={() => setAnchor(null)}
         anchorOrigin={{ vertical: "bottom", horizontal: "right" }}
         transformOrigin={{ vertical: "top", horizontal: "right" }}
+        slotProps={{
+          paper: { sx: { mt: 0.75, minWidth: 280, borderRadius: 2, border: "1px solid #e3e8f0" } },
+        }}
       >
-        <Box sx={{ px: 2, py: 1, minWidth: 200 }}>
-          <Typography variant="body2" sx={{ fontWeight: 700 }}>
-            {user.full_name || user.username}
-          </Typography>
-          <Stack direction="row" spacing={1} sx={{ mt: 0.5, alignItems: "center" }}>
+        <Box sx={{ px: 2, py: 1.75 }}>
+          <Stack direction="row" spacing={1.25} sx={{ alignItems: "center" }}>
+            <Avatar
+              sx={{
+                bgcolor: "primary.main",
+                width: 40,
+                height: 40,
+                fontWeight: 700,
+              }}
+            >
+              <AccountCircleIcon sx={{ fontSize: 40 }} />
+            </Avatar>
+            <Box sx={{ minWidth: 0 }}>
+              <Typography variant="subtitle2" sx={{ fontWeight: 700 }} noWrap>
+                {name}
+              </Typography>
+              <Typography variant="caption" sx={{ color: "text.secondary" }} noWrap>
+                {user.username}
+              </Typography>
+            </Box>
+          </Stack>
+          <Stack direction="row" spacing={1} sx={{ mt: 1.5, alignItems: "center" }}>
+            <Chip size="small" label={role} color="primary" variant="outlined" />
             <Typography variant="caption" sx={{ color: "text.secondary" }}>
-              {user.username}
+              {user.permissions.length} capabilities
             </Typography>
-            <Chip size="small" label={user.role} color="primary" variant="outlined" />
           </Stack>
         </Box>
+        <Divider />
         <MenuItem
-          onClick={() => { setAnchor(null); setPwOpen(true); }}
+          onClick={() => {
+            setAnchor(null);
+            setPwOpen(true);
+          }}
         >
+          <KeyOutlinedIcon sx={{ mr: 1.5, fontSize: 19, color: "text.secondary" }} />
           Change my password
         </MenuItem>
         <MenuItem
-          onClick={() => { setAnchor(null); void logout(); }}
+          onClick={() => {
+            setAnchor(null);
+            void logout();
+          }}
         >
+          <LogoutOutlinedIcon sx={{ mr: 1.5, fontSize: 19, color: "text.secondary" }} />
           Sign out
         </MenuItem>
       </Menu>
@@ -133,7 +348,10 @@ const AccountMenu = () => {
       <PasswordDialog
         open={pwOpen}
         onClose={() => setPwOpen(false)}
-        onDone={() => { setPwOpen(false); notify("Your password has been changed", { type: "info" }); }}
+        onDone={() => {
+          setPwOpen(false);
+          notify("Your password has been changed", { type: "info" });
+        }}
       />
     </>
   );
@@ -205,14 +423,29 @@ const PasswordDialog = ({
  *
  * The name is a child, not the AppBar's `title` prop: that prop is ignored the
  * moment you pass children of your own, which is how the bar ended up nameless.
+ *
+ * `color="primary"` rather than the teal the AppBar defaults to. The teal is an
+ * accent, and on a surface that size it put white 15px text at 4.06:1 - short
+ * of the 4.5:1 the body text is set at. The navy behind it is 11.6:1, and it
+ * is the same navy the sign-in screen is built on, so the two finally agree.
+ *
+ * `userMenu={false}` removes react-admin's own profile button, which was the
+ * second of the two. See `AccountMenu`.
+ *
+ * `toolbar={null}` because the default one ends in its own LoadingIndicator -
+ * the refresh icon - and supplying one adds a second. The refresh belongs
+ * immediately after the switch, so it is placed here rather than left to the
+ * slot's position, and the spacer is explicit instead of leaning on the
+ * toolbar's own justify-content, which does not spread these children.
  */
 const AuditAppBar = ({ alwaysOn, title: _title, ...props }: AppBarProps) => (
-  // `toolbar={null}` because the default one ends in its own LoadingIndicator -
-  // the refresh icon - and supplying one adds a second. The refresh belongs
-  // immediately after the switch, so it is placed here rather than left to the
-  // slot's position, and the spacer is explicit instead of leaning on the
-  // toolbar's own justify-content, which does not spread these children.
-  <AppBar {...props} alwaysOn={alwaysOn} toolbar={null}>
+  <AppBar
+    {...props}
+    alwaysOn={alwaysOn}
+    color="primary"
+    toolbar={null}
+    userMenu={false}
+  >
     <Typography
       variant="h6"
       component="h1"
@@ -232,9 +465,19 @@ const AuditAppBar = ({ alwaysOn, title: _title, ...props }: AppBarProps) => (
  * bar, which is fine for a list and wrong for anything that starts with a
  * floating label: the Data Sources entity picker had its label drawn underneath
  * the bar. One gap, applied once, for every screen.
+ *
+ * `menu={PortalMenu}` supplies the grouped sidebar above.
  */
 export const Layout = ({ children }: { children: ReactNode }) => (
-  <RaLayout appBar={AuditAppBar} sx={{ "& .RaLayout-content": { pt: 2, pb: 3 } }}>
+  <RaLayout
+    appBar={AuditAppBar}
+    menu={PortalMenu}
+    sx={{
+      "& .RaLayout-content": { pt: 2, pb: 3 },
+      "& .RaMenu-open": { pt: 0 },
+      "& .RaMenu-root": { pt: 0 },
+    }}
+  >
     {children}
   </RaLayout>
 );

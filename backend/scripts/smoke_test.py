@@ -291,6 +291,45 @@ def main() -> int:
                   for d in demo_list),
               str([d.get("username") for d in demo_list]))
 
+        # THE MATRIX, SERVED. The screen that shows which role holds what must
+        # be showing the SERVER's matrix - a copy written into the frontend
+        # would be a second answer, and it would drift the first time a
+        # capability is added.
+        check("the role matrix needs a session",
+              c.get("/api/roles").status_code == 401)
+        # Read with the admin's session: this block runs before the viewer
+        # account below has been created, so its token does not exist yet.
+        matrix = c.get("/api/roles", headers=ah)
+        check("the role matrix is served", matrix.status_code == 200,
+              f"{matrix.status_code} {matrix.text[:140]}")
+        if matrix.status_code == 200:
+            served = matrix.json()
+            check("the matrix offers one column per role",
+                  [r["name"] for r in served["roles"]]
+                  == ["admin", "manager", "auditor", "viewer"],
+                  str([r.get("name") for r in served.get("roles", [])]))
+            check("every role holds what the matrix says",
+                  all(set(r["capabilities"]) == EXPECTED_CAPABILITIES[r["name"]]
+                      for r in served["roles"]),
+                  str({r["name"]: sorted(r["capabilities"])
+                       for r in served.get("roles", [])}))
+            check("the matrix covers every capability",
+                  {cap["name"] for cap in served["capabilities"]}
+                  == set().union(*EXPECTED_CAPABILITIES.values()),
+                  str([cap.get("name") for cap in served.get("capabilities", [])]))
+            check("every capability carries a label and a group",
+                  all(cap.get("label") and cap.get("group_label")
+                      for cap in served["capabilities"]),
+                  str(served.get("capabilities", [])[:2]))
+            check("every role carries a label and a description",
+                  all(r.get("label") and r.get("description")
+                      for r in served["roles"]),
+                  str(served.get("roles", [])[:2]))
+            me = c.get("/api/auth/me", headers=ah).json()
+            check("a user carries its role's label",
+                  (me.get("role_label") or "") == "Administrator",
+                  str(me))
+
         # A viewer, created through the API so that user management is
         # exercised in the same pass. The username is fixed so a re-run finds
         # and removes the last one rather than accumulating them.

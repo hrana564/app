@@ -536,7 +536,7 @@ Two of the four seeded rules prove this works:
 
 ## 6. Roles
 
-Three roles. A role is a **named bundle of capabilities**, and the matrix that
+Four roles. A role is a **named bundle of capabilities**, and the matrix that
 says which role holds which capability lives in exactly one place —
 `backend/app/permissions.py`. The backend enforces it, and the server sends
 the resolved list to the browser so the screens offer exactly what the server
@@ -555,9 +555,10 @@ will allow.
 | Register / remove a datasource | ✅ | ✅ | ❌ | ❌ |
 | Manage accounts | ✅ | ❌ | ❌ | ❌ |
 
-Clean split: **auditors consume and acknowledge; admins author and govern.**
-This also satisfies requirement #30 — *"regulation detail to be updated in the
-beginning of the year with restricted access to modify."*
+Clean split: **auditors consume and acknowledge; managers author and maintain;
+admins govern the people.** This also satisfies requirement #30 — *"regulation
+detail to be updated in the beginning of the year with restricted access to
+modify."*
 
 The `manager` role is the split worth having when the estate is maintained by
 somebody who is not the portal administrator: everything about the rules,
@@ -572,8 +573,15 @@ PostgreSQL. The sign-in screen offers them — with their passwords — so a
 reviewer can try each role without being given accounts by hand; set
 `SHOW_DEMO_ACCOUNTS=false` and the panel disappears, which is what a live
 deployment should do. **Further accounts are created from the app** — the
-Accounts screen, which only an administrator can reach. A new account cannot
-change its own role, delete itself, or be the last administrator removed.
+Settings page's Accounts tab, which only an administrator can reach. A new
+account cannot change its own role, delete itself, or be the last administrator
+removed.
+
+The Settings page's other tab is **Roles**: a read-only tick-and-cross table of
+what each role may do, grouped by subject. It is the screen that answers the
+question a greyed-out button only implies — *what can the other role do that I
+cannot?* — and it is built from `GET /api/roles`, so it is the server's matrix
+rather than a picture of one. Everyone can read it, whoever they are.
 
 ---
 
@@ -715,6 +723,7 @@ app/
 │   │   │   ├── deps.py             auth + capability gating (require(*caps))
 │   │   │   ├── auth.py  rules.py  schedules.py  runs.py  tickets.py
 │   │   │   ├── users.py            the accounts, and the roles they hold
+│   │   │   ├── roles.py            GET /api/roles: the whole permission model
 │   │   │   ├── assurance.py         the landing page's read model
 │   │   │   ├── scope.py            THE ONLY place a query is filtered by client
 │   │   │   └── datasources.py      register / remove + overview + row preview
@@ -753,15 +762,17 @@ app/
 └── frontend/
     ├── vite.config.ts              dev proxy to the API's port
     └── src/
-        ├── App.tsx                 Admin + resources
-        ├── Layout.tsx              app bar: the product name + the client switch
+        ├── App.tsx                 Admin + resources + the Settings route
+        ├── Layout.tsx              app bar: name, client switch, ONE profile button
+        ├── permissions.ts          the capability vocabulary, and the gates
         ├── entityScope.tsx         THE ONLY place the client is chosen
         ├── dataProvider.ts         the ONLY module that talks to the API
         ├── authProvider.ts
         ├── theme.ts
         ├── components/ui.tsx       chips, JSON block, code block, rows table
-        ├── pages/       Login.tsx  Dashboard.tsx
-        └── resources/   Rule.tsx  Run.tsx  Ticket.tsx  Meta.tsx
+        ├── components/RoleMatrix.tsx  the read-only roles table
+        ├── pages/       Login.tsx  Dashboard.tsx  Settings.tsx
+        └── resources/   Rule.tsx  Run.tsx  Ticket.tsx  Meta.tsx  User.tsx
 ```
 
 ---
@@ -895,6 +906,15 @@ rule that produced them, so those endpoints join to reach it — that join lives
 | PATCH | `/api/users/{id}` | `users.write` | Change the role, the name, the active flag, or reset the password |
 | DELETE | `/api/users/{id}` | `users.write` | Remove one. 409 for yourself, and for the last active administrator |
 | PATCH | `/api/users/me/password` | any signed-in user | Change your own password. Needs the current one |
+
+### The permission model
+| Method | Path | Capability | Description |
+|---|---|---|---|
+| GET | `/api/roles` | any signed-in user | The whole matrix — capabilities with labels and groups, roles with labels, descriptions and their capability lists. The Settings page and the role picker both build from this |
+
+A read of the permission *model* is not a read of the estate, so it asks for a
+session rather than a capability — and the people who ask it most are the ones
+with least permission to spare.
 
 ### The assurance read model
 

@@ -1,23 +1,23 @@
-import { Admin, Resource } from "react-admin";
+import { Admin, CustomRoutes, Resource } from "react-admin";
+import { Navigate, Route } from "react-router";
 import RuleIcon from "@mui/icons-material/Rule";
 import ScheduleIcon from "@mui/icons-material/Schedule";
 import PlayCircleIcon from "@mui/icons-material/PlayCircle";
 import ReportProblemIcon from "@mui/icons-material/ReportProblem";
 import StorageIcon from "@mui/icons-material/Storage";
-import PeopleIcon from "@mui/icons-material/People";
 
 import { theme } from "./theme";
 import { dataProvider, api, setStoredUser } from "./dataProvider";
 import { authProvider } from "./authProvider";
 import { Login } from "./pages/Login";
 import { Dashboard } from "./pages/Dashboard";
+import { SettingsPage } from "./pages/Settings";
 import { Layout } from "./Layout";
 import { EntityScope, useEntityScope } from "./entityScope";
 import { RuleList, RuleShow, RuleEdit } from "./resources/Rule";
 import { RunList, RunShow } from "./resources/Run";
 import { TicketList, TicketShow } from "./resources/Ticket";
 import { DatasourceList } from "./resources/Meta";
-import { UserList } from "./resources/User";
 import { useEffect } from "react";
 
 /**
@@ -26,7 +26,7 @@ import { useEffect } from "react";
  * react-admin rather than declared here. Context reaches both because it flows
  * down the React tree, not the resource tree.
  *
- * The resources, as elements, built ONCE.
+ * The resources and the routes, as elements, built ONCE.
  *
  * react-admin registers each `<Resource>` in an effect keyed on the children it
  * was handed, and its cleanup calls `unregister`, which is a `setState`. Children
@@ -66,13 +66,26 @@ const RESOURCES = (
       icon={StorageIcon}
       options={{ label: "Data Sources", recordRepresentation: false }}
     />
-    <Resource
-      name="users"
-      list={UserList}
-      icon={PeopleIcon}
-      options={{ label: "Accounts", recordRepresentation: false }}
-    />
   </>
+);
+
+/**
+ * Settings, and the old address of the accounts.
+ *
+ * Settings is a page rather than a resource: it has no list to fetch, no id,
+ * and no endpoints of its own - it holds two screens that do. Making it a
+ * resource would have put it in the data registry with a `hasList` that lies
+ * about what it is.
+ *
+ * `/users` redirects rather than 404s. The accounts screen moved from there
+ * into Settings as a tab, and a link somebody kept now lands on it instead of
+ * on a not-found page.
+ */
+const ROUTES = (
+  <CustomRoutes>
+    <Route path="/settings" element={<SettingsPage />} />
+    <Route path="/users" element={<Navigate to="/settings" replace />} />
+  </CustomRoutes>
 );
 
 /**
@@ -125,6 +138,7 @@ const Portal = () => {
       disableTelemetry
     >
       {RESOURCES}
+      {ROUTES}
     </Admin>
   );
 };

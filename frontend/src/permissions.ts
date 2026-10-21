@@ -39,6 +39,15 @@ export type Permission =
   | "users.read"
   | "users.write";
 
+/**
+ * The roles, as a vocabulary.
+ *
+ * A type, not a policy: the server decides which roles exist and what they
+ * hold, and the screens ask it. This names them so that a misspelling is a
+ * compile error rather than a check that is silently always false.
+ */
+export type Role = "admin" | "manager" | "auditor" | "viewer";
+
 /** The full vocabulary, in the order the server sends it. */
 export const PERMISSIONS: Permission[] = [
   "rules.read",
@@ -134,6 +143,11 @@ export const usePermissions = (): Permission[] => {
  * action that is not listed is ALLOWED: the server is the gate, and a screen
  * that hid an unmapped resource would lock everybody out of it rather than
  * keeping them out of something they may do.
+ *
+ * The accounts are NOT here. They are not a react-admin resource - they live
+ * under Settings, as a tab - so the capability that guards them is asked
+ * directly with `can(perms, "users.read")`. A mapping for a resource that
+ * does not exist is a mapping that nobody keeps true.
  */
 const RESOURCE_ACTIONS: Record<string, Partial<Record<string, Permission>>> = {
   rules: {
@@ -146,12 +160,6 @@ const RESOURCE_ACTIONS: Record<string, Partial<Record<string, Permission>>> = {
   runs: { list: "runs.read", show: "runs.read" },
   tickets: { list: "tickets.read", show: "tickets.read" },
   datasources: { list: "datasources.read" },
-  users: {
-    list: "users.read",
-    create: "users.write",
-    edit: "users.write",
-    delete: "users.write",
-  },
 };
 
 /** The capability that guards one action on one resource, if any does. */

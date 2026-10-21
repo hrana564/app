@@ -338,8 +338,38 @@ export interface UserRow {
   username: string;
   full_name: string;
   role: string;
+  /** What that role is called, derived by the server. A label, not a value. */
+  role_label: string;
   is_active: boolean;
   permissions: string[];
+}
+
+/**
+ * One role, and what it holds.
+ *
+ * Served by the server, because the matrix that decides this is the server's.
+ * The frontend asks "what roles are there, and what does each one do?" and is
+ * answered - it does not keep its own copy of the answer.
+ */
+export interface RoleOption {
+  name: string;
+  label: string;
+  description: string;
+  capabilities: string[];
+}
+
+/** One capability, named the way a screen shows it. */
+export interface CapabilityOption {
+  name: string;
+  label: string;
+  group: string;
+  group_label: string;
+}
+
+/** The whole matrix: the rows, the columns, and which crosses where. */
+export interface RoleMatrix {
+  capabilities: CapabilityOption[];
+  roles: RoleOption[];
 }
 
 /** One registered table, plus what we know about it right now. */
@@ -754,4 +784,14 @@ export const api = {
         new_password: newPassword,
       }),
     }),
+
+  /**
+   * The role matrix: which role holds which capability.
+   *
+   * Read-only, and it is the SERVER's matrix rather than a copy of one. The
+   * settings screen draws it, and the account editor's role picker is built
+   * from the same list - so a role added on the server appears in both
+   * without anything here being edited.
+   */
+  roleMatrix: () => request<RoleMatrix>("/api/roles"),
 };

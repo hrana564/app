@@ -10,7 +10,7 @@ import EditIcon from "@mui/icons-material/Edit";
 import KeyOutlinedIcon from "@mui/icons-material/KeyOutlined";
 import PersonAddAltIcon from "@mui/icons-material/PersonAddAlt";
 import { useNotify } from "react-admin";
-import { api, type UserRow } from "../dataProvider";
+import { api, type RoleOption, type UserRow } from "../dataProvider";
 import { can, usePermissions } from "../permissions";
 import { FONT } from "../theme";
 
@@ -24,18 +24,23 @@ import { FONT } from "../theme";
  * The role column is the important one. Everything else on this screen -
  * the name, the password - is bookkeeping; the role is what the person is
  * actually here to do, and it is the thing worth reading down the column.
+ *
+ * THE LIST OF ROLES IS HANDED IN
+ * -------------------------------
+ * It comes from `GET /api/roles`, fetched once by the Settings page. The
+ * picker used to carry its own list of three, and it was missing one: a role
+ * that existed on the server and could not be assigned through the screen
+ * because nobody had remembered to add it here. Two copies of a list are two
+ * things that have to agree, and only one of them is checked.
  */
 
-const ROLES = [
-  { value: "admin", label: "Administrator" },
-  { value: "auditor", label: "Auditor" },
-  { value: "viewer", label: "Viewer" },
-];
+const labelFor = (roles: RoleOption[], role: string) =>
+  roles.find((r) => r.name === role)?.label ?? role;
 
-const roleLabel = (role: string) =>
-  ROLES.find((r) => r.value === role)?.label ?? role;
+const descriptionFor = (roles: RoleOption[], role: string) =>
+  roles.find((r) => r.name === role)?.description ?? "";
 
-export const UserList = () => {
+export const UserList = ({ roles }: { roles: RoleOption[] }) => {
   const notify = useNotify();
   const perms = usePermissions();
   const mayWrite = can(perms, "users.write");
@@ -143,7 +148,7 @@ export const UserList = () => {
                   <Typography variant="body2">{u.full_name || "—"}</Typography>
                 </TableCell>
                 <TableCell>
-                  <Chip size="small" variant="outlined" label={roleLabel(u.role)} />
+                  <Chip size="small" variant="outlined" label={labelFor(roles, u.role)} />
                 </TableCell>
                 <TableCell>
                   <Chip
@@ -207,6 +212,7 @@ export const UserList = () => {
       <CreateDialog
         open={creating}
         busy={busy}
+        roles={roles}
         onClose={() => setCreating(false)}
         onDone={async () => { setCreating(false); await afterChange("Account created"); }}
       />
@@ -214,6 +220,7 @@ export const UserList = () => {
       <EditDialog
         user={editing}
         busy={busy}
+        roles={roles}
         onClose={() => setEditing(null)}
         onDone={async () => { setEditing(null); await afterChange("Account updated"); }}
       />
@@ -239,8 +246,14 @@ export const UserList = () => {
 /* Create                                                             */
 /* ------------------------------------------------------------------ */
 const CreateDialog = ({
-  open, busy, onClose, onDone,
-}: { open: boolean; busy: boolean; onClose: () => void; onDone: () => void }) => {
+  open, busy, roles, onClose, onDone,
+}: {
+  open: boolean;
+  busy: boolean;
+  roles: RoleOption[];
+  onClose: () => void;
+  onDone: () => void;
+}) => {
   const notify = useNotify();
   const [username, setUsername] = useState("");
   const [fullName, setFullName] = useState("");
@@ -293,16 +306,10 @@ const CreateDialog = ({
           <TextField
             select label="Role" size="small" value={role}
             onChange={(e) => setRole(e.target.value)}
-            helperText={
-              role === "admin"
-                ? "Everything, including managing accounts."
-                : role === "auditor"
-                  ? "Reads the estate and signs off findings. Cannot change it."
-                  : "Reads the estate. Cannot sign off a finding or change anything."
-            }
+            helperText={descriptionFor(roles, role)}
           >
-            {ROLES.map((r) => (
-              <MenuItem key={r.value} value={r.value}>{r.label}</MenuItem>
+            {roles.map((r) => (
+              <MenuItem key={r.name} value={r.name}>{r.label}</MenuItem>
             ))}
           </TextField>
         </Stack>
@@ -325,10 +332,11 @@ const CreateDialog = ({
 /* Edit                                                               */
 /* ------------------------------------------------------------------ */
 const EditDialog = ({
-  user, busy, onClose, onDone,
+  user, busy, roles, onClose, onDone,
 }: {
   user: UserRow | null;
   busy: boolean;
+  roles: RoleOption[];
   onClose: () => void;
   onDone: () => void;
 }) => {
@@ -373,9 +381,10 @@ const EditDialog = ({
           <TextField
             select label="Role" size="small" value={role}
             onChange={(e) => setRole(e.target.value)}
+            helperText={descriptionFor(roles, role)}
           >
-            {ROLES.map((r) => (
-              <MenuItem key={r.value} value={r.value}>{r.label}</MenuItem>
+            {roles.map((r) => (
+              <MenuItem key={r.name} value={r.name}>{r.label}</MenuItem>
             ))}
           </TextField>
           <TextField

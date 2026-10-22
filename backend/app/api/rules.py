@@ -7,7 +7,7 @@ row id - the code is what schedules reference and what filenames derive from.
 
 Two different kinds of change, kept on separate endpoints on purpose:
 
-    PUT /api/rules/{code}            content edit -> creates version n+1
+    PUT /api/rules/{code}            content edit -> rewrites the working draft
     PUT /api/rules/{code}/status     pause / activate / retire -> no new version
 
 Pausing a rule is not a logic change, so it must not burn a version number.
@@ -111,6 +111,33 @@ async def require_head(session, code: str) -> Rule:
     return rule
 
 
+async def working_draft(session, code: str) -> Rule | None:
+    """The one draft an edit rewrites - the newest version still in draft.
+
+    A rule has at most one, and it is one of two things:
+
+      * the head itself, when the rule has never been published: the first
+        version is created as a draft and there is no live control for it to
+        sit beside; or
+      * the single non-head draft candidate, when a published rule is being
+        rewritten before its replacement goes on the air.
+
+    `status == "draft"` is what identifies it; a version that has ever run
+    keeps `active`, `paused` or `retired`, so a demoted history row is never
+    mistaken for a draft. Taking the NEWEST draft - rather than the head - also
+    keeps the working copy the one with the latest edits when an older build
+    left a rule with more than one draft.
+    """
+    return (
+        await session.execute(
+            select(Rule)
+            .where(Rule.code == code, Rule.status == "draft")
+            .order_by(Rule.version.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+
+
 async def row_for(session, code: str, version: int | None = None) -> Rule:
     """The version asked for, or the head when none is asked for.
 
@@ -208,16 +235,23 @@ async def publish_version(
 
 
 async def pending_version(session, code: str) -> int | None:
-    """The newest version that is not the head - a draft waiting to be published.
+    """The newest DRAFT that is not the head - a candidate waiting to publish.
 
     One number answers the question on both ends of it: the live version's page
     says "v3 is waiting", and v3's own page reads the same number and knows it is
     a candidate rather than a record of something already superseded.
+
+    The `status == "draft"` filter is load-bearing. Without it, publishing a
+    draft leaves the version it just replaced as the newest non-head row - and
+    the live page announces that demoted history as a draft waiting to be
+    published, which is the opposite of what happened.
     """
     value = (
         await session.execute(
             select(func.max(Rule.version)).where(
-                Rule.code == code, Rule.is_version_active.is_(False)
+                Rule.code == code,
+                Rule.is_version_active.is_(False),
+                Rule.status == "draft",
             )
         )
     ).scalar_one()
@@ -279,6 +313,7 @@ async def list_rules(
             .where(
                 Rule.code.in_([r.code for r in rows]),
                 Rule.is_version_active.is_(False),
+                Rule.status == "draft",
             )
             .group_by(Rule.code)
         )
@@ -945,38 +980,66 @@ async def create_rule(
 
 
 # ---------------------------------------------------------------------------
-# update - content edits create a version
+# update - a content edit rewrites the working draft
 # ---------------------------------------------------------------------------
 @router.put("/{code}", response_model=RuleOut)
 async def update_rule(
     code: str, payload: RuleUpdate, session: SessionDep, admin: RulesWriter
 ) -> RuleOut:
     """
-    Editing a rule's logic creates version n+1 as a DRAFT.
+    Edit a rule's logic.
 
-    The draft does not become the head. The live version keeps running until the
-    draft is published - which validates it and puts it on the air. Moving the
-    head here instead took the control off the air the moment somebody saved an
-    edit nobody had read yet.
+    The edit lands on the rule's ONE working draft:
+
+      * a rule that has never been published already IS a draft, so the edit
+        rewrites that version in place and the number does not move. A new
+        version per save is what produced a v2 beside a v1 that had never run.
+      * a published rule with a draft candidate waiting has that candidate
+        rewritten, so repeated edits still leave exactly one draft.
+      * a published rule with no draft gets version n+1 as a new draft
+        candidate. The live version keeps running until that is published.
+
+    Either way the live control is never taken off the air by a save, and a
+    draft is never numbered twice.
     """
     current = await require_head(session, code)
     if code != validate_code(code):
         raise HTTPException(status_code=400, detail="Rule code is malformed")
 
-    source = read_source(current.source_file, settings.rules_dir)
+    draft = await working_draft(session, code)
+
     if payload.source_code is not None:
         source = payload.source_code
+    else:
+        source = read_source((draft or current).source_file, settings.rules_dir)
 
-    nxt = await publish_version(
-        session,
-        source=current,
-        code=code,
-        new_source=source,
-        change_note=payload.change_note or "updated",
-        author=admin.username,
-        origin=payload.origin,
-        promote=False,
-    )
+    if draft is not None:
+        # Rewrite the working draft in place. Its version number stays: nothing
+        # has been released, so there is no history to keep and no reason to
+        # spend the next number. The run folder keeps its own copy of any source
+        # a test run used, so rewriting the file here does not rewrite evidence.
+        nxt = draft
+        write_source(nxt.source_file, source, settings.rules_dir)
+        nxt.change_note = payload.change_note or "updated"
+        nxt.validation_status = "unvalidated"
+        nxt.validation_messages = []
+        nxt.validated_at = None
+        nxt.validated_by = None
+        nxt.declared_datasources = declared_tables(source)
+        if payload.origin is not None:
+            nxt.origin = payload.origin
+    else:
+        nxt = await publish_version(
+            session,
+            source=current,
+            code=code,
+            new_source=source,
+            change_note=payload.change_note or "updated",
+            author=admin.username,
+            origin=payload.origin,
+            promote=False,
+        )
+
     for field in ("name", "description", "severity", "lookback_days"):
         value = getattr(payload, field, None)
         if value is not None:
@@ -1024,7 +1087,7 @@ async def set_status(
 # ---------------------------------------------------------------------------
 @router.post("/{code}/validate", response_model=ValidationReport)
 async def validate_rule(
-    code: str, session: SessionDep, admin: RulesWriter
+    code: str, session: SessionDep, admin: RulesWriter, version: int | None = None
 ) -> ValidationReport:
     """Validate a rule and record the verdict on its row.
 
@@ -1032,8 +1095,11 @@ async def validate_rule(
     datasources - so it is a change to the estate and is gated as one. It
     exists to be the precondition for activation, and activation is the
     administrator's.
+
+    A version may be named so the draft on screen is the one validated. Without
+    one this is the head, which is what a live rule wants.
     """
-    rule = await require_head(session, code)
+    rule = await row_for(session, code, version)
     report = await _validate_and_store(session, rule, username=None)
     await session.commit()
     await session.refresh(rule)
@@ -1182,11 +1248,15 @@ async def publish_rule(
     The validation is not a formality. The estate may have moved since the draft
     was written - a table it reads may have been removed - and promoting code
     that cannot read its data would swap a working control for a broken one.
+
+    A draft that is already the head - a rule that was never published - is
+    activated in place rather than a head being moved: there is nothing live
+    for it to replace.
     """
     current = await require_head(session, code)
     rule = await row_for(session, code, payload.version)
 
-    if rule.is_version_active:
+    if rule.is_version_active and rule.status != "draft":
         raise HTTPException(
             status_code=409,
             detail=f"{code} v{payload.version} is already the live version.",
@@ -1195,9 +1265,13 @@ async def publish_rule(
     report = await _validate_and_store(session, rule, username=admin.username)
     activated = report.status == "valid"
     if activated:
-        current.is_version_active = False
-        rule.is_version_active = True
-        rule.status = "active"
+        if rule.is_version_active:
+            # The draft IS the head: nothing to demote, just put it on the air.
+            rule.status = "active"
+        else:
+            current.is_version_active = False
+            rule.is_version_active = True
+            rule.status = "active"
     await session.commit()
     await session.refresh(rule)
 
@@ -1215,13 +1289,111 @@ async def publish_rule(
     return PublishOut(rule=out, validation=report, activated=activated)
 
 
+@router.delete("/{code}/draft", status_code=204)
+async def discard_draft(code: str, session: SessionDep, _user: RulesWriter) -> None:
+    """Throw away the rule's working draft.
+
+    There is at most one. Discarding a candidate leaves the published version
+    exactly as it was; discarding the draft of a rule that was never published
+    leaves nothing, so the whole rule goes with it.
+
+    Gated on `rules.write` rather than `rules.delete`: throwing away your own
+    uncommitted work is authoring, not destroying the estate. The version that
+    is on the air is never touched here.
+    """
+    draft = await working_draft(session, code)
+    if draft is None:
+        raise HTTPException(status_code=404, detail=f"{code} has no draft to discard")
+
+    published = (
+        await session.execute(
+            select(func.count())
+            .select_from(Rule)
+            .where(Rule.code == code, Rule.status != "draft")
+        )
+    ).scalar_one()
+
+    # Everything that goes. A rule that was never published has no version to
+    # fall back to, so discarding its draft discards the rule - including any
+    # stray drafts an older build left behind.
+    if published:
+        targets = [draft]
+    else:
+        targets = (
+            await session.execute(select(Rule).where(Rule.code == code))
+        ).scalars().all()
+
+    target_ids = [t.id for t in targets]
+
+    # Findings are never thrown away with a draft. A draft cannot raise one
+    # until it is live, but if one somehow does the answer is no.
+    findings = (
+        await session.execute(
+            select(func.count()).select_from(Ticket).where(Ticket.rule_id.in_(target_ids))
+        )
+    ).scalar_one()
+    if findings:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"{code} has {findings} finding(s) and cannot be discarded. "
+                f"Set it to 'retired' instead so the history is preserved."
+            ),
+        )
+
+    # A test run can point at a draft now, and Run.rule_id is a RESTRICT foreign
+    # key, so those runs go before the rows. The run folder keeps its own copy of
+    # the source, so nothing else is lost with them.
+    for run in (
+        await session.execute(select(Run).where(Run.rule_id.in_(target_ids)))
+    ).scalars().all():
+        await session.delete(run)
+
+    # Explanations are keyed to the version rows and describe code that is about
+    # to stop existing.
+    for expl in (
+        await session.execute(
+            select(RuleExplanation).where(RuleExplanation.rule_id.in_(target_ids))
+        )
+    ).scalars().all():
+        await session.delete(expl)
+
+    if not published:
+        # Nothing survives, so any schedule is cleaned up rather than left
+        # pointing at a code that no longer exists.
+        for sched in (
+            await session.execute(
+                select(RuleSchedule).where(RuleSchedule.rule_code == code)
+            )
+        ).scalars().all():
+            await scheduler_remove(sched.id)
+            await session.delete(sched)
+
+    file_names = {Path(t.source_file).name for t in targets if t.source_file}
+    for t in targets:
+        await session.delete(t)
+    await session.commit()
+
+    for name in file_names:
+        try:
+            (Path(settings.rules_dir) / name).unlink(missing_ok=True)
+        except OSError as exc:
+            # A stray file is untidy, not dangerous - never fail the discard.
+            log.warning("could not remove %s: %s", name, exc)
+
+
 @router.delete("/{code}", status_code=204)
 async def delete_rule(code: str, session: SessionDep, admin: RulesDeleter) -> None:
     """
     Delete a rule and every version of it.
 
-    Refused when runs or tickets reference it: findings must not disappear
-    because someone deleted a rule. Retire it instead.
+    Findings are never deleted: a rule that has raised a ticket is refused, and
+    the caller is pointed at 'retired' so the history survives.
+
+    A rule that never ran on a schedule can be deleted along with its manual
+    test runs - an experiment must be discardable. A rule that RAN on a
+    schedule has history worth keeping even if it found nothing, so it is
+    refused too.
     """
     versions = (
         await session.execute(select(Rule).where(Rule.code == code))
@@ -1230,20 +1402,51 @@ async def delete_rule(code: str, session: SessionDep, admin: RulesDeleter) -> No
         raise HTTPException(status_code=404, detail=f"No rule with code {code!r}")
 
     ids = [r.id for r in versions]
-    for model, label in ((Run, "run"), (Ticket, "ticket")):
-        count = (
-            await session.execute(
-                select(func.count()).select_from(model).where(model.rule_id.in_(ids))
-            )
-        ).scalar_one()
-        if count:
-            raise HTTPException(
-                status_code=409,
-                detail=(
-                    f"Rule {code} has {count} {label}(s) and cannot be deleted. "
-                    f"Set it to 'retired' instead so the history is preserved."
-                ),
-            )
+
+    findings = (
+        await session.execute(
+            select(func.count()).select_from(Ticket).where(Ticket.rule_id.in_(ids))
+        )
+    ).scalar_one()
+    if findings:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Rule {code} has {findings} finding(s) and cannot be deleted. "
+                f"Set it to 'retired' instead so the history is preserved."
+            ),
+        )
+
+    scheduled = (
+        await session.execute(
+            select(func.count())
+            .select_from(Run)
+            .where(Run.rule_id.in_(ids), Run.triggered_by == "schedule")
+        )
+    ).scalar_one()
+    if scheduled:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Rule {code} has {scheduled} scheduled run(s) and cannot be "
+                f"deleted. Set it to 'retired' instead so the history is preserved."
+            ),
+        )
+
+    # Only manual test runs can be attached at this point; they go with the rule
+    # rather than blocking it.
+    for run in (
+        await session.execute(select(Run).where(Run.rule_id.in_(ids)))
+    ).scalars().all():
+        await session.delete(run)
+
+    # Explanations describe version source that is about to stop existing.
+    for expl in (
+        await session.execute(
+            select(RuleExplanation).where(RuleExplanation.rule_id.in_(ids))
+        )
+    ).scalars().all():
+        await session.delete(expl)
 
     # No FK from schedules, so they must be cleaned up explicitly.
     for sched in (
@@ -1279,7 +1482,11 @@ async def scheduler_remove(schedule_id: int) -> None:
 async def test_rule(
     code: str, payload: RunRequest, session: SessionDep, _user: RulesTester
 ) -> RuleTestResponse:
-    rule = await require_head(session, code)
+    # A version may be named so a draft can be tested. Without one this is the
+    # head, which is what a live rule's "Run now" wants. A draft has its own
+    # source file, so testing one has to name it or the button runs different
+    # code to the page it was pressed on.
+    rule = await row_for(session, code, payload.version)
     run = await execute_rule(
         session,
         rule=rule,

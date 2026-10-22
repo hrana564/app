@@ -590,6 +590,10 @@ class RunOut(BaseModel):
 
 class RunRequest(BaseModel):
     data_date: date | None = None
+    # Which version to run. Omitted means the head, which is what a manual test
+    # of a live rule wants. A draft is its own row with its own source file, so
+    # testing one has to name it or the button runs different code to the page.
+    version: int | None = Field(default=None, ge=1)
 
 
 # ---------------------------------------------------------------------------

@@ -639,10 +639,10 @@ export const api = {
 
   ruleVersions: (code: string) => request<any>(`/api/rules/${code}/versions`),
 
-  testRule: (code: string, data_date: string | null) =>
+  testRule: (code: string, data_date: string | null, version?: number | null) =>
     request<any>(`/api/rules/${code}/test`, {
       method: "POST",
-      body: JSON.stringify({ data_date }),
+      body: JSON.stringify({ data_date, version: version ?? null }),
     }),
 
   updateRule: (code: string, payload: Record<string, unknown>) =>
@@ -650,6 +650,16 @@ export const api = {
 
   deleteRule: (code: string) =>
     request<void>(`/api/rules/${code}`, { method: "DELETE" }),
+
+  /**
+   * Throw away the rule's working draft.
+   *
+   * A rule has at most one, and it is the version an edit rewrites. The
+   * published version is never touched - except when the draft is the only
+   * version, which means the rule was never published and goes with it.
+   */
+  discardDraft: (code: string) =>
+    request<void>(`/api/rules/${code}/draft`, { method: "DELETE" }),
 
   setRuleStatus: (code: string, status: string) =>
     request<any>(`/api/rules/${code}/status`, {
@@ -663,8 +673,11 @@ export const api = {
       { method: "POST" },
     ),
 
-  validateRule: (code: string) =>
-    request<any>(`/api/rules/${code}/validate`, { method: "POST" }),
+  validateRule: (code: string, version?: number | null) =>
+    request<any>(
+      `/api/rules/${code}/validate${version ? `?version=${version}` : ""}`,
+      { method: "POST" },
+    ),
 
   validationReport: (code: string, version?: number | null) =>
     request<any>(

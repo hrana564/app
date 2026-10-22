@@ -1,11 +1,12 @@
 """
 End-to-end smoke test against a running API.
 
-Rules are addressed by their permanent `code`; each edit publishes a new version
-row in `rules_master`. This suite covers that versioning behaviour explicitly:
-an edit supersedes the head, editing resets validation, pausing does NOT burn a
-version, rollback appends forward, schedules survive a version bump, and a rule
-with findings cannot be deleted.
+Rules are addressed by their permanent `code`, and each has one working draft.
+This suite covers that versioning behaviour explicitly: an edit rewrites the
+draft (a new version is minted only when a published rule is rewritten), editing
+resets validation, pausing does NOT burn a version, rollback appends forward, a
+draft can be discarded, schedules survive a version bump, and a rule with
+findings cannot be deleted.
 
 All version assertions are DELTA based, so the suite is re-runnable.
 
@@ -1077,7 +1078,7 @@ def main() -> int:
                 "source_code": "import os\n\n\n"
                                "def run(ctx):\n    return {'status': 'success'}\n",
                 "change_note": "smoke: broken candidate"})
-            check("a broken edit still creates a draft candidate",
+            check("a broken edit rewrites the waiting draft, still off the air",
                   bad.status_code == 200 and bad.json()["is_version_active"] is False,
                   f"{bad.status_code}")
             refused = c.post(f"/api/rules/{VCODE}/publish", headers=ah,
@@ -1091,6 +1092,24 @@ def main() -> int:
                   live_now["is_version_active"] and live_now["status"] == "active",
                   f"v{live_now.get('version')} status={live_now.get('status')}")
 
+            # The draft can be thrown away without touching the control that is
+            # on the air. The broken candidate above is exactly the thing an
+            # author wants rid of.
+            before_discard = c.get(f"/api/rules/{VCODE}/versions", headers=ud).json()
+            dd = c.delete(f"/api/rules/{VCODE}/draft", headers=ah)
+            check("a candidate draft can be discarded",
+                  dd.status_code == 204, f"{dd.status_code} {dd.text[:140]}")
+            after_discard = c.get(f"/api/rules/{VCODE}/versions", headers=ud).json()
+            check("discarding a candidate removes only that draft",
+                  len(after_discard) == len(before_discard) - 1
+                  and all(x["status"] != "draft" for x in after_discard),
+                  str([(x["version"], x["status"]) for x in after_discard]))
+            check("the live version survives the discard",
+                  c.get(f"/api/rules/{VCODE}", headers=ud).json()["is_version_active"])
+            check("and no draft is announced afterwards",
+                  c.get(f"/api/rules/{VCODE}", headers=ud).json()["pending_version"] is None,
+                  str(c.get(f"/api/rules/{VCODE}", headers=ud).json().get("pending_version")))
+
             # A rule with no findings CAN be deleted, and its files go with it.
             r = c.delete(f"/api/rules/{VCODE}", headers=ah)
             check("a rule with no findings can be deleted", r.status_code == 204,
@@ -1098,6 +1117,52 @@ def main() -> int:
             check("deleting a rule removes its version files",
                   not any(RULES_DIR.glob(f"{VCODE}_v*.py")),
                   str([f.name for f in RULES_DIR.glob(f'{VCODE}_v*.py')]))
+
+        # ------------------------------------------------------------------ #
+        # A rule that has never been published IS its own draft. Editing it must
+        # rewrite that one version rather than spend a new number, and discarding
+        # it must remove the rule - there is nothing live to fall back to.
+        section("one draft per rule")
+        DCODE = f"{ESTATE_CLIENT[ESTATE_RETAIL]}-SMOKE-DRAFT-PROBE"
+        dsrc = ("DATASOURCES = ['ipos_sales']\n\n\n"
+                "def run(ctx):\n    return {'status': 'no_rows_returned'}\n")
+        c.delete(f"/api/rules/{DCODE}", headers=ah)  # idempotent re-run
+        made = c.post("/api/rules", headers=ah, json={
+            "code": DCODE, "name": "draft probe", "source_code": dsrc,
+            "entity": ESTATE_CLIENT[ESTATE_RETAIL], "status": "draft"})
+        if made.status_code == 201:
+            dv = made.json()["version"]
+            check("a new rule is a head draft with no pending draft",
+                  made.json()["is_version_active"] and made.json()["status"] == "draft"
+                  and made.json()["pending_version"] is None,
+                  f"active={made.json().get('is_version_active')} "
+                  f"pending={made.json().get('pending_version')}")
+
+            e1 = c.put(f"/api/rules/{DCODE}", headers=ah, json={
+                "source_code": dsrc + "# one\n", "change_note": "first edit"})
+            check("editing an unpublished draft keeps its version",
+                  e1.status_code == 200 and e1.json()["version"] == dv,
+                  f"{e1.status_code} v{e1.json().get('version')}")
+            e2 = c.put(f"/api/rules/{DCODE}", headers=ah, json={
+                "source_code": dsrc + "# two\n", "change_note": "second edit"})
+            check("editing again still does not spend a number",
+                  e2.status_code == 200 and e2.json()["version"] == dv
+                  and e2.json()["is_version_active"] and e2.json()["status"] == "draft",
+                  f"v{e2.json().get('version')} status={e2.json().get('status')}")
+            check("the edit resets validation",
+                  e2.json()["validation_status"] == "unvalidated")
+            dhist = c.get(f"/api/rules/{DCODE}/versions", headers=ud).json()
+            check("the rule still has exactly one version", len(dhist) == 1,
+                  f"{len(dhist)} rows")
+
+            dd2 = c.delete(f"/api/rules/{DCODE}/draft", headers=ah)
+            check("discarding a never-published draft removes the rule",
+                  dd2.status_code == 204, f"{dd2.status_code} {dd2.text[:140]}")
+            check("and its source file with it",
+                  not any(RULES_DIR.glob(f"{DCODE}_v*.py")),
+                  str([f.name for f in RULES_DIR.glob(f'{DCODE}_v*.py')]))
+        else:
+            c.delete(f"/api/rules/{DCODE}", headers=ah)
 
         # ------------------------------------------------------------------ #
         section("execution - clean and breach days")

@@ -53,6 +53,18 @@ const TRIGGER_LABEL: Record<string, string> = {
   schedule: "scheduled",
 };
 
+/**
+ * `pass` and `fail` are the values the engine stores; these are the words a
+ * reader gets. Both mean the rule executed - the difference is what it found -
+ * so neither is ever the word "fail", which read as a broken system. The
+ * vocabulary matches the rest of the app: a run raises findings, it does not
+ * "fail".
+ */
+const OUTCOME_LABEL: Record<string, string> = {
+  fail: "Findings raised",
+  pass: "No findings",
+};
+
 const stamp = (v?: string) =>
   v
     ? new Date(v).toLocaleString(undefined, {
@@ -143,13 +155,13 @@ export const RunOutcomeCell = ({ source }: { source: string; label?: string }) =
   return (
     <Typography
       variant="body2"
+      noWrap
       sx={{
         color: palette[runOutcomeColor[outcome] ?? "info"]?.main ?? "#8d99ae",
         fontWeight: 700,
-        textTransform: "capitalize",
       }}
     >
-      {outcome}
+      {OUTCOME_LABEL[outcome] ?? outcome}
     </Typography>
   );
 };
@@ -185,7 +197,7 @@ const RunSummary = ({ source }: { source: string; label?: string }) => {
  * that takes the remainder.
  */
 const FIXED_WIDTHS: Array<[number, number]> = [
-  [1, 58], [2, 112], [3, 98], [4, 82], [5, 82], [7, 70], [8, 82], [9, 124], [10, 50],
+  [1, 58], [2, 112], [3, 98], [4, 148], [5, 150], [7, 70], [8, 82], [9, 124], [10, 50],
 ];
 
 export const RunList = () => {
@@ -207,8 +219,8 @@ export const RunList = () => {
         <IdField source="id" label="#" />
         <TextLike source="rule_code" label="Rule" mono />
         <TextLike source="data_date" label="Data date" secondary />
-        <RunStatusCell source="status" label="Ran" />
-        <RunOutcomeCell source="outcome" label="Observations" />
+        <RunStatusCell source="status" label="Rule Execution" />
+        <RunOutcomeCell source="outcome" label="Outcome" />
         <RunSummary source="summary" label="What it found" />
         <TextLike source="duration_ms" label="Took" render={duration} secondary />
         <TextLike source="triggered_by" label="By" render={(v: string) => TRIGGER_LABEL[v] ?? v} secondary />
@@ -263,16 +275,14 @@ const RunDetails = () => {
               >
                 Rule outcome
               </Typography>
-              <Typography variant="body1" sx={{ fontWeight: 600, textTransform: "capitalize" }}>
-                {record.outcome ?? "none"}
+              <Typography variant="body1" sx={{ fontWeight: 600 }}>
+                {record.outcome ? OUTCOME_LABEL[record.outcome] ?? record.outcome : "none"}
               </Typography>
-              <Typography variant="caption" sx={{ color: "text.secondary", display: "block" }}>
-                {!record.outcome
-                  ? "the rule never got an answer"
-                  : record.outcome === "fail"
-                    ? "a finding was raised"
-                    : "nothing found"}
-              </Typography>
+              {!record.outcome && (
+                <Typography variant="caption" sx={{ color: "text.secondary", display: "block" }}>
+                  the rule never got an answer
+                </Typography>
+              )}
             </Box>
             <Box>
               <Typography

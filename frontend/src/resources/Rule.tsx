@@ -745,7 +745,7 @@ const RunRuleDialog = ({
     setBusy(true);
     setError(null);
     try {
-      setOut(await api.testRule(rule.code, day));
+      setOut(await api.testRule(rule.code, day, rule.version));
       onDone();
     } catch (e: any) {
       setError(e.message);
@@ -947,6 +947,102 @@ const DeleteRuleDialog = ({
 };
 
 /* ================================================================== */
+/* Discard the working draft                                           */
+/* ================================================================== */
+/**
+ * Remove the one draft an edit rewrites.
+ *
+ * A rule has at most one, and it is either a candidate beside a live version -
+ * in which case only the draft goes - or the only version there is, when the
+ * rule was never published. The latter is a delete, and the dialog says so.
+ */
+const DiscardDraftDialog = ({
+  rule, onClose, onDone,
+}: {
+  rule: any | null;
+  onClose: () => void;
+  onDone: () => void;
+}) => {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const notify = useNotify();
+
+  useEffect(() => { setError(null); }, [rule]);
+
+  if (!rule) return null;
+
+  // A draft that is the head is the whole rule: there is nothing published for
+  // it to sit beside.
+  const wholeRule = Boolean(rule.is_version_active && rule.status === "draft");
+
+  const discard = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await api.discardDraft(rule.code);
+      notify(
+        wholeRule
+          ? `${rule.code} deleted - it had never been published`
+          : `Draft v${rule.version} discarded`,
+        { type: "success" },
+      );
+      onDone();
+      onClose();
+    } catch (e: any) {
+      // The server refuses when the draft carries a finding; show its sentence.
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Dialog open onClose={busy ? undefined : onClose} maxWidth="sm" fullWidth>
+      <DialogTitle>
+        {wholeRule ? `Delete ${rule.code}?` : `Discard draft v${rule.version}?`}
+      </DialogTitle>
+      <DialogContent>
+        <Stack spacing={2} sx={{ mt: 1 }}>
+          {wholeRule ? (
+            <Typography variant="body2">
+              This rule was never published, so the draft is all there is.
+              Discarding it removes the rule and the Python source file on disk.
+              It cannot be undone.
+            </Typography>
+          ) : (
+            <Typography variant="body2">
+              The live version keeps running. Only draft{" "}
+              <strong>v{rule.version}</strong> and its source file are removed.
+            </Typography>
+          )}
+
+          {wholeRule && (
+            <Alert severity="warning">
+              Any manual test runs against this rule go with it. Nothing that
+              raised a finding can be discarded.
+            </Alert>
+          )}
+
+          {error && <Alert severity="error">{error}</Alert>}
+        </Stack>
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={onClose} disabled={busy}>Cancel</Button>
+        <Button
+          variant="contained"
+          color="error"
+          onClick={discard}
+          disabled={busy}
+          startIcon={busy ? <CircularProgress size={16} color="inherit" /> : <DeleteOutlinedIcon />}
+        >
+          {busy ? "Discarding…" : wholeRule ? "Delete rule" : "Discard draft"}
+        </Button>
+      </DialogActions>
+    </Dialog>
+  );
+};
+
+/* ================================================================== */
 /* Schedules section                                                   */
 /* ================================================================== */
 const ScheduleDialog = ({
@@ -1125,6 +1221,7 @@ const RuleDetails = ({ asked }: { asked?: number }) => {
   const [restoreOpen, setRestoreOpen] = useState(false);
   const [restoring, setRestoring] = useState(false);
   const [publishing, setPublishing] = useState(false);
+  const [discardOpen, setDiscardOpen] = useState(false);
   const notify = useNotify();
   const refresh = useRefresh();
 
@@ -1173,7 +1270,7 @@ const RuleDetails = ({ asked }: { asked?: number }) => {
   const runValidation = async () => {
     setValidating(true);
     try {
-      const r = await api.validateRule(record.code);
+      const r = await api.validateRule(record.code, record.version);
       setReport(r);
       notify(r.status === "valid" ? "Validation passed" : `${r.errors.length} error(s)`,
         { type: r.status === "valid" ? "success" : "error" });
@@ -1264,16 +1361,27 @@ const RuleDetails = ({ asked }: { asked?: number }) => {
 
   if (!record) return null;
 
-  // The head is the version the scheduler runs. A non-head row is one of two
-  // things, and they call for opposite pages: a DRAFT CANDIDATE waiting to be
-  // published, or a RECORD of a version that has been superseded. The pending
-  // number tells them apart, so a draft is not shown as a museum piece.
+  // The head is the version the scheduler runs. `status === "draft"` identifies
+  // the working draft - the version an edit rewrites. There is normally exactly
+  // one, whether it is the head (a rule never published, where the draft is all
+  // there is) or a candidate beside the live version; taking the NEWEST draft
+  // also resolves a rule an older build left with several.
   const headVersion =
     versions.find((v) => v.is_version_active)?.version ?? record.version;
-  const superseded = !record.is_version_active;
-  const isCandidate =
-    superseded && record.status === "draft" && record.version === record.pending_version;
-  const isRecord = superseded && !isCandidate;
+  const liveVersion = versions.find((v) => v.is_version_active)?.version ?? null;
+  const draftVersions = versions.filter((v) => v.status === "draft");
+  const workingDraftVersion = draftVersions.length
+    ? Math.max(...draftVersions.map((v) => v.version))
+    : null;
+  const isDraft = record.status === "draft" && record.version === workingDraftVersion;
+  // A version that has ever been published carries active/paused/retired. Any
+  // such row means something is on the air for a draft to sit beside.
+  const hasPublished = versions.some((v) => v.status !== "draft");
+  const isLive = record.is_version_active && !isDraft;
+  // Everything else - a superseded version, or a stale draft head an older build
+  // left behind - is a read-only record.
+  const isRecord = !isDraft && !isLive;
+  const draftHasLive = hasPublished;
 
   const errors = report?.errors ?? [];
   const warnings = report?.warnings ?? [];
@@ -1328,30 +1436,33 @@ const RuleDetails = ({ asked }: { asked?: number }) => {
         </Alert>
       )}
 
-      {isCandidate && (
+      {isDraft && (
         <Alert
           severity="warning"
           action={
-            headVersion !== record.version && (
+            draftHasLive && liveVersion !== null && (
               <Button
                 color="inherit"
                 size="small"
-                onClick={() => navigate(ruleShowPath(record.code, headVersion))}
+                onClick={() => navigate(ruleShowPath(record.code, liveVersion))}
               >
-                Open v{headVersion}
+                Open v{liveVersion}
               </Button>
             )
           }
         >
-          <strong>Draft v{record.version}.</strong> This is a candidate, not the
-          live control: v{headVersion} keeps running until this one is published.
+          <strong>Draft v{record.version}.</strong>{" "}
+          {draftHasLive
+            ? `This is not the live control - v${liveVersion} keeps running until this is published.`
+            : "Nothing is published yet, so this draft is the whole rule."}{" "}
+          Editing rewrites this version; the number only moves when it goes live.
         </Alert>
       )}
 
       {/* The live version, when a replacement is waiting. The draft is the
           reason somebody is on this page, so it is said here rather than only
           on the version history lower down. */}
-      {!superseded && record.pending_version && (
+      {isLive && record.pending_version && (
         <Alert
           severity="info"
           action={
@@ -1406,9 +1517,15 @@ const RuleDetails = ({ asked }: { asked?: number }) => {
                   </Button>
                 </Stack>
               )
-            ) : isCandidate ? (
+            ) : isDraft ? (
               (mayTest || mayWrite || mayActivate) && (
                 <Stack direction="row" spacing={1} sx={{ alignItems: "center", flexWrap: "wrap", gap: 1 }}>
+                  {mayWrite && (
+                    <Button size="small" startIcon={<EditIcon />}
+                      onClick={() => navigate(ruleEditPath(record.code))}>
+                      Edit
+                    </Button>
+                  )}
                   {mayActivate && (
                     <Button
                       size="small"
@@ -1433,6 +1550,12 @@ const RuleDetails = ({ asked }: { asked?: number }) => {
                       onClick={() => setRunOpen(true)}
                     >
                       Run now
+                    </Button>
+                  )}
+                  {mayWrite && (
+                    <Button size="small" color="error" startIcon={<DeleteOutlinedIcon />}
+                      onClick={() => setDiscardOpen(true)}>
+                      Discard draft
                     </Button>
                   )}
                 </Stack>
@@ -1471,7 +1594,7 @@ const RuleDetails = ({ asked }: { asked?: number }) => {
             )}
           </Stack>
 
-          {!superseded && mayActivate && record.validation_status !== "valid" && record.status !== "active" && (
+          {!isRecord && mayActivate && record.validation_status !== "valid" && record.status !== "active" && (
             <Typography variant="caption" sx={{ color: "text.secondary", display: "block", mt: 1 }}>
               Activation requires a passing validation.
             </Typography>
@@ -1514,13 +1637,13 @@ const RuleDetails = ({ asked }: { asked?: number }) => {
         source={source}
         mayWrite={mayWrite}
         mayReview={can(perms, "rules.explain_review")}
-        readOnly={superseded}
+        readOnly={isRecord}
         onChanged={refresh}
       />
 
       {/* Schedules belong to the rule, not to one version, but a page about an
           old version is not the place to change when the control runs. */}
-      <SchedulesSection ruleCode={record.code} canWrite={mayWriteSchedules && !superseded} />
+      <SchedulesSection ruleCode={record.code} canWrite={mayWriteSchedules && !isRecord} />
 
       {/* Version history */}
       {versions.length > 0 && (
@@ -1559,6 +1682,9 @@ const RuleDetails = ({ asked }: { asked?: number }) => {
                     {v.is_version_active && (
                       <Chip size="small" variant="outlined" color="success" label="current" />
                     )}
+                    {v.status === "draft" && (
+                      <Chip size="small" variant="outlined" color="warning" label="draft" />
+                    )}
                     <Typography variant="body2">{v.change_note || "(no note)"}</Typography>
                   </Stack>
                   <Typography variant="caption" sx={{ color: "text.secondary" }}>
@@ -1575,6 +1701,12 @@ const RuleDetails = ({ asked }: { asked?: number }) => {
       <RuleActivity ruleCode={record.code} />
 
       <RunRuleDialog rule={runOpen ? record : null} onClose={() => setRunOpen(false)} onDone={refresh} />
+
+      <DiscardDraftDialog
+        rule={discardOpen ? record : null}
+        onClose={() => setDiscardOpen(false)}
+        onDone={refresh}
+      />
 
       <Dialog open={restoreOpen} onClose={() => setRestoreOpen(false)} maxWidth="sm" fullWidth>
         <DialogTitle>Restore v{record.version} as the current version?</DialogTitle>
@@ -1849,7 +1981,7 @@ const RuleActivity = ({ ruleCode }: { ruleCode: string }) => {
                     found three breaches - a working control dressed as a clean
                     day, which is the one misreading the ledger split exists to
                     prevent. */}
-                <RunStatusCell source="status" label="Ran" />
+                <RunStatusCell source="status" label="Rule Execution" />
                 <RunOutcomeCell source="outcome" label="Outcome" />
                 <TextField source="summary" label="Observation" />
                 <RowCountField source="rows" />
@@ -2224,8 +2356,16 @@ const RuleEditForm = () => {
 
   if (!record) return null;
 
-  const nextVersion = ((record.pending_version ?? record.version) as number) + 1;
-  const hasDraft = Boolean(record.pending_version);
+  // The version an edit lands on. A published rule being rewritten has a draft
+  // candidate; a rule that was never published IS a draft. Either way the save
+  // rewrites that version. Only a published rule with no draft spends the next
+  // number.
+  const workingDraftVersion =
+    (record.pending_version as number | undefined) ??
+    (record.status === "draft" ? (record.version as number) : null);
+  const createsNew = workingDraftVersion === null;
+  const nextVersion = workingDraftVersion ?? ((record.version as number) + 1);
+  const hasDraft = workingDraftVersion !== null;
   const changed =
     working !== loadedSource ||
     form.name !== (record.name ?? "") ||
@@ -2291,13 +2431,13 @@ const RuleEditForm = () => {
   const publish = async () => {
     setBusy(true);
     try {
-      const draftVersion = record.pending_version as number | undefined;
+      const pendingDraft = record.pending_version as number | undefined;
       let version: number;
-      if (changed || draftVersion === undefined) {
+      if (changed || pendingDraft === undefined) {
         const saved = await api.updateRule(code, payload());
         version = Number(saved.version);
       } else {
-        version = draftVersion;
+        version = pendingDraft;
       }
       const outcome = await api.publishRule(code, version);
       if (!outcome.activated) {
@@ -2334,13 +2474,25 @@ const RuleEditForm = () => {
   return (
     <Stack spacing={2}>
       <Alert severity="info">
-        A change here creates <strong>draft version {nextVersion}</strong> of{" "}
-        <strong>{record.code}</strong> and resets its validation.{" "}
-        <strong>v{record.version} keeps running</strong> until the draft is
-        published.
-        {hasDraft && (
+        {createsNew ? (
           <>
-            {" "}Draft v{record.pending_version} is already waiting.
+            A change here creates <strong>draft version {nextVersion}</strong> of{" "}
+            <strong>{record.code}</strong> and resets its validation.{" "}
+            <strong>v{record.version} keeps running</strong> until the draft is
+            published.
+          </>
+        ) : (
+          <>
+            A change here rewrites <strong>draft v{nextVersion}</strong> of{" "}
+            <strong>{record.code}</strong> and resets its validation.{" "}
+            {record.status === "draft" ? (
+              "Nothing is published yet, so the version number does not move."
+            ) : (
+              <>
+                <strong>v{record.version} keeps running</strong> until the draft
+                is published.
+              </>
+            )}
           </>
         )}
       </Alert>

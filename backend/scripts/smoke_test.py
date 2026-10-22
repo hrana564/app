@@ -1165,6 +1165,46 @@ def main() -> int:
             c.delete(f"/api/rules/{DCODE}", headers=ah)
 
         # ------------------------------------------------------------------ #
+        # A never-published draft must be publishable with no edit first: the
+        # edit page's Publish sends the draft's OWN version, which for such a
+        # rule is the head. Sending none is what posted `{version: null}` and
+        # earned a 422 instead of activating the control.
+        section("publishing a never-published draft")
+        PCODE = f"{ESTATE_CLIENT[ESTATE_RETAIL]}-SMOKE-PUBLISH-PROBE"
+        psrc = ("DATASOURCES = ['ipos_sales']\n\n\n"
+                "def run(ctx):\n    return {'status': 'no_rows_returned'}\n")
+        c.delete(f"/api/rules/{PCODE}", headers=ah)  # idempotent re-run
+        pmade = c.post("/api/rules", headers=ah, json={
+            "code": PCODE, "name": "publish probe", "source_code": psrc,
+            "entity": ESTATE_CLIENT[ESTATE_RETAIL], "status": "draft"})
+        if pmade.status_code == 201:
+            pv = pmade.json()["version"]
+            ppub = c.post(f"/api/rules/{PCODE}/publish", headers=ah,
+                          json={"version": pv})
+            pbody = ppub.json() if ppub.status_code == 200 else {}
+            check("publishing a never-published draft activates it in place",
+                  ppub.status_code == 200 and pbody.get("activated") is True
+                  and pbody.get("rule", {}).get("is_version_active") is True
+                  and pbody.get("rule", {}).get("version") == pv,
+                  f"{ppub.status_code} {ppub.text[:160]}")
+            check("and it is now the live control",
+                  pbody.get("rule", {}).get("status") == "active",
+                  str(pbody.get("rule", {}).get("status")))
+            check("publishing it a second time is refused",
+                  c.post(f"/api/rules/{PCODE}/publish", headers=ah,
+                         json={"version": pv}).status_code == 409)
+            # An edit now mints a candidate beside the live version.
+            pedit = c.put(f"/api/rules/{PCODE}", headers=ah, json={
+                "source_code": psrc + "# edited after publish\n"})
+            check("an edit after publishing creates the next draft",
+                  pedit.status_code == 200
+                  and pedit.json()["version"] == pv + 1
+                  and pedit.json()["is_version_active"] is False,
+                  f"v{pedit.json().get('version')} "
+                  f"active={pedit.json().get('is_version_active')}")
+        c.delete(f"/api/rules/{PCODE}", headers=ah)
+
+        # ------------------------------------------------------------------ #
         section("execution - clean and breach days")
         for base, (clean_day, breach_day) in EXEC_EXPECTATIONS.items():
             rcode = filed_code(base)

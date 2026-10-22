@@ -2431,13 +2431,18 @@ const RuleEditForm = () => {
   const publish = async () => {
     setBusy(true);
     try {
-      const pendingDraft = record.pending_version as number | undefined;
+      // Publish the working draft. `workingDraftVersion` is the version an edit
+      // lands on - the head when a rule was never published, otherwise the
+      // candidate - and falls back to minting the next number only when there is
+      // no draft. Coalescing null and undefined here matters: the server sends
+      // `pending_version: null` for a never-published rule, and `null === undefined`
+      // is false, which is what posted `{version: null}` and earned a 422.
       let version: number;
-      if (changed || pendingDraft === undefined) {
+      if (changed || workingDraftVersion == null) {
         const saved = await api.updateRule(code, payload());
         version = Number(saved.version);
       } else {
-        version = pendingDraft;
+        version = workingDraftVersion;
       }
       const outcome = await api.publishRule(code, version);
       if (!outcome.activated) {

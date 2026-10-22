@@ -778,12 +778,20 @@ export const api = {
    *
    * The draft is validated first and only promoted if it passes, so a candidate
    * that cannot read the estate cannot replace a working control.
+   *
+   * The version is required: sending none would reach the server as
+   * `{version: null}` and come back as a 422 that names the wrong problem, so it
+   * fails here with the real one.
    */
-  publishRule: (code: string, version: number) =>
-    request<{ rule: any; validation: any; activated: boolean }>(
+  publishRule: (code: string, version: number) => {
+    if (version == null) {
+      throw new Error(`publishRule: no version given for ${code}`);
+    }
+    return request<{ rule: any; validation: any; activated: boolean }>(
       `/api/rules/${code}/publish`,
       { method: "POST", body: JSON.stringify({ version }) },
-    ),
+    );
+  },
 
   createRule: (payload: {
     code: string;

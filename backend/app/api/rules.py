@@ -54,11 +54,14 @@ from app.schemas import (
     ExplanationStepOut,
     GateOut,
     GenerationAttempt,
+    PublishOut,
     RollbackOut,
     RuleCreate,
     RuleGenerateRequest,
     RuleGenerateResponse,
     RuleOut,
+    RulePublish,
+    RuleReviseRequest,
     RuleStatusUpdate,
     RuleTestResponse,
     RuleUpdate,
@@ -153,13 +156,23 @@ async def publish_version(
     change_note: str,
     author: str,
     origin: str | None = None,
+    promote: bool = True,
 ) -> Rule:
     """
-    Create the next version and move the head flag onto it.
+    Create the next version.
 
-    The previous head is retained, so history is append-only and a rollback can
-    copy any earlier version forward. A new version always starts as `draft`
-    with validation reset - it must be re-validated and re-approved.
+    `promote` is the whole of the difference between a candidate and a release:
+
+      promote=True   the new version becomes the head, so the scheduler runs it.
+                     The previous head is demoted. This is a rollback, and a
+                     first version.
+      promote=False  the new version is a DRAFT CANDIDATE. The live version keeps
+                     the head and keeps running until this one is published. This
+                     is an edit, so the control is never off the air while its
+                     replacement is written and read.
+
+    Either way the new row starts as `draft` with validation reset - a candidate
+    must be validated, and published, before it runs.
     """
     version = await max_version(session, code) + 1
     filename = versioned_filename(code, version)
@@ -168,7 +181,7 @@ async def publish_version(
     nxt = Rule(
         code=code,
         version=version,
-        is_version_active=True,
+        is_version_active=promote,
         status="draft",
         source_file=filename,
         change_note=change_note,
@@ -187,10 +200,28 @@ async def publish_version(
     for field in CARRIED_FIELDS:
         setattr(nxt, field, getattr(source, field))
 
-    source.is_version_active = False
+    if promote:
+        source.is_version_active = False
     session.add(nxt)
     await session.flush()
     return nxt
+
+
+async def pending_version(session, code: str) -> int | None:
+    """The newest version that is not the head - a draft waiting to be published.
+
+    One number answers the question on both ends of it: the live version's page
+    says "v3 is waiting", and v3's own page reads the same number and knows it is
+    a candidate rather than a record of something already superseded.
+    """
+    value = (
+        await session.execute(
+            select(func.max(Rule.version)).where(
+                Rule.code == code, Rule.is_version_active.is_(False)
+            )
+        )
+    ).scalar_one()
+    return int(value) if value else None
 
 
 # ---------------------------------------------------------------------------
@@ -238,10 +269,27 @@ async def list_rules(
 
     rows = (await session.execute(stmt)).scalars().all()
     total = (await session.execute(count_stmt)).scalar_one()
-    return {
-        "data": [RuleOut.model_validate(r).model_dump(mode="json") for r in rows],
-        "total": total,
-    }
+
+    # One grouped query for the drafts on this page, rather than one per row: the
+    # list marks a rule that has a version waiting to be published.
+    pending: dict[str, int] = {}
+    if rows:
+        pending_rows = await session.execute(
+            select(Rule.code, func.max(Rule.version))
+            .where(
+                Rule.code.in_([r.code for r in rows]),
+                Rule.is_version_active.is_(False),
+            )
+            .group_by(Rule.code)
+        )
+        pending = {code: int(version) for code, version in pending_rows}
+
+    data = []
+    for r in rows:
+        out = RuleOut.model_validate(r)
+        out.pending_version = pending.get(r.code)
+        data.append(out.model_dump(mode="json"))
+    return {"data": data, "total": total}
 
 
 @router.get("/generate/status")
@@ -277,16 +325,7 @@ async def generate(
     target = payload.data_date or _latest_data_date(entity)
 
     catalog = await database_catalog(session)
-    registered = sorted(catalog.names_for(entity))
-    unknown = [t for t in payload.datasources if t not in registered]
-    if unknown:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                f"{', '.join(unknown)} is not registered for {entity}. "
-                f"Registered: {', '.join(registered) or '(none)'}"
-            ),
-        )
+    await _check_registered(catalog, entity, payload.datasources)
 
     result = await run_in_threadpool(
         _run_agent,
@@ -298,6 +337,82 @@ async def generate(
         payload.lookback_days,
     )
 
+    return _agent_response(
+        result,
+        entity=entity,
+        data_date=target,
+        lookback_days=payload.lookback_days,
+        suggested_code=await _next_generated_code(session, entity),
+    )
+
+
+@router.post("/{code}/revise", response_model=RuleGenerateResponse)
+async def revise(
+    code: str, payload: RuleReviseRequest, session: SessionDep, admin: RulesWriter
+) -> RuleGenerateResponse:
+    """Rewrite an existing rule from a plain-language change request.
+
+    Nothing is created. The agent is given the rule's current source - the draft
+    being worked on if there is one, otherwise the live version - and told to
+    change only what the request asks. It proves the result runs, and what comes
+    back is a candidate and the verdict on it. It becomes a version when the
+    admin saves it, which is what keeps an unreviewed rule out of the catalogue.
+    """
+    current = await require_head(session, code)
+    base = await _revision_base(session, code, current)
+    source = _source_or_409(base)
+
+    entity = base.entity
+    target = payload.data_date or _latest_data_date(entity)
+    lookback = payload.lookback_days or base.lookback_days
+
+    catalog = await database_catalog(session)
+    await _check_registered(catalog, entity, payload.datasources)
+
+    result = await run_in_threadpool(
+        _run_revision,
+        catalog,
+        payload.prompt,
+        source,
+        entity,
+        target,
+        payload.datasources,
+        lookback,
+    )
+    return _agent_response(
+        result, entity=entity, data_date=target, lookback_days=lookback
+    )
+
+
+async def _check_registered(catalog, entity: str, datasources: list[str]) -> None:
+    """Refuse a selection the client does not have registered.
+
+    The selection binds. A rule that reads a table outside it is rejected before
+    it runs, so saying so here names the table and the client rather than leaving
+    the agent to discover it.
+    """
+    registered = sorted(catalog.names_for(entity))
+    unknown = [t for t in datasources if t not in registered]
+    if unknown:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"{', '.join(unknown)} is not registered for {entity}. "
+                f"Registered: {', '.join(registered) or '(none)'}"
+            ),
+        )
+
+
+def _agent_response(
+    result,
+    *,
+    entity: str,
+    data_date: date,
+    lookback_days: int,
+    suggested_code: str | None = None,
+) -> RuleGenerateResponse:
+    """The agent's answer, on the wire. Shared by generate and revise - the two
+    differ in the prompt they build, not in what they hand back."""
     trial = None
     if result.trial is not None:
         t = result.trial
@@ -316,8 +431,8 @@ async def generate(
     return RuleGenerateResponse(
         ok=result.ok,
         entity=entity,
-        data_date=target,
-        lookback_days=payload.lookback_days,
+        data_date=data_date,
+        lookback_days=lookback_days,
         source_code=result.source,
         name=result.name,
         description=result.description,
@@ -329,7 +444,7 @@ async def generate(
             )
             for a in result.attempts
         ],
-        suggested_code=await _next_generated_code(session, entity),
+        suggested_code=suggested_code,
         error=result.error,
         trace=[
             AgentStep(
@@ -339,6 +454,40 @@ async def generate(
             )
             for step in result.trace
         ],
+    )
+
+
+async def _revision_base(session, code: str, current: Rule) -> Rule:
+    """The version a revision starts from.
+
+    A pending draft is the thing being worked on, so a revision continues it
+    rather than starting again from the live code. With no draft it is the live
+    version.
+    """
+    newest = (
+        await session.execute(
+            select(Rule)
+            .where(Rule.code == code)
+            .order_by(Rule.version.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    return newest or current
+
+
+def _run_revision(catalog, prompt, current_source, entity, data_date, tables, lookback_days):
+    """Run a revision in a worker thread, for the same reason as `_run_agent`."""
+    from app.engine.rule_agent import run_revision
+
+    return run_revision(
+        catalog=catalog,
+        request=prompt,
+        current_source=current_source,
+        entity=entity,
+        data_date=data_date,
+        tables=tables,
+        lookback_days=lookback_days,
+        allowed=tables,
     )
 
 
@@ -395,7 +544,10 @@ async def get_rule(
     The page asks for a version by number, because a rule is a chain of rows and
     "the rule" is whichever of them you are reading.
     """
-    return RuleOut.model_validate(await row_for(session, code, version))
+    rule = await row_for(session, code, version)
+    out = RuleOut.model_validate(rule)
+    out.pending_version = await pending_version(session, code)
+    return out
 
 
 @router.get("/{code}/source")
@@ -800,10 +952,12 @@ async def update_rule(
     code: str, payload: RuleUpdate, session: SessionDep, admin: RulesWriter
 ) -> RuleOut:
     """
-    Editing a rule's logic creates version n+1 and moves the head flag.
+    Editing a rule's logic creates version n+1 as a DRAFT.
 
-    The new version starts as `draft` with validation reset, so it must be
-    re-validated and re-approved before it can run.
+    The draft does not become the head. The live version keeps running until the
+    draft is published - which validates it and puts it on the air. Moving the
+    head here instead took the control off the air the moment somebody saved an
+    edit nobody had read yet.
     """
     current = await require_head(session, code)
     if code != validate_code(code):
@@ -820,6 +974,8 @@ async def update_rule(
         new_source=source,
         change_note=payload.change_note or "updated",
         author=admin.username,
+        origin=payload.origin,
+        promote=False,
     )
     for field in ("name", "description", "severity", "lookback_days"):
         value = getattr(payload, field, None)
@@ -828,7 +984,9 @@ async def update_rule(
 
     await session.commit()
     await session.refresh(nxt)
-    return RuleOut.model_validate(nxt)
+    out = RuleOut.model_validate(nxt)
+    out.pending_version = await pending_version(session, code)
+    return out
 
 
 @router.put("/{code}/status", response_model=RuleOut)
@@ -1007,6 +1165,54 @@ async def rollback(
         validation=report,
         activated=activated,
     )
+
+
+@router.post("/{code}/publish", response_model=PublishOut)
+async def publish_rule(
+    code: str, payload: RulePublish, session: SessionDep, admin: RulesActivator
+) -> PublishOut:
+    """Put a draft version on the air.
+
+    A draft exists beside the live version, which is what lets a control be
+    rewritten and read without ever leaving the air. Publishing is the move that
+    ends that: the candidate is validated, and only if it passes does the head
+    flag move to it. The version it replaces stays in the history and stops
+    running.
+
+    The validation is not a formality. The estate may have moved since the draft
+    was written - a table it reads may have been removed - and promoting code
+    that cannot read its data would swap a working control for a broken one.
+    """
+    current = await require_head(session, code)
+    rule = await row_for(session, code, payload.version)
+
+    if rule.is_version_active:
+        raise HTTPException(
+            status_code=409,
+            detail=f"{code} v{payload.version} is already the live version.",
+        )
+
+    report = await _validate_and_store(session, rule, username=admin.username)
+    activated = report.status == "valid"
+    if activated:
+        current.is_version_active = False
+        rule.is_version_active = True
+        rule.status = "active"
+    await session.commit()
+    await session.refresh(rule)
+
+    if activated:
+        # Schedules follow the rule: promoting it re-registers them, and the
+        # scheduler resolves the code to the new head when one fires.
+        from app.api.schedules import sync_schedules_for_code
+
+        await sync_schedules_for_code(session, code)
+        await session.commit()
+        await session.refresh(rule)
+
+    out = RuleOut.model_validate(rule)
+    out.pending_version = await pending_version(session, code)
+    return PublishOut(rule=out, validation=report, activated=activated)
 
 
 @router.delete("/{code}", status_code=204)

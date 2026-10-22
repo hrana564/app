@@ -14,6 +14,7 @@ import {
 } from "@mui/material";
 import AutoAwesomeIcon from "@mui/icons-material/AutoAwesome";
 import PlayArrowIcon from "@mui/icons-material/PlayArrow";
+import PublishIcon from "@mui/icons-material/Publish";
 import BugReportIcon from "@mui/icons-material/BugReport";
 import FactCheckIcon from "@mui/icons-material/FactCheck";
 import AddIcon from "@mui/icons-material/Add";
@@ -29,6 +30,8 @@ import {
 } from "../dataProvider";
 import { CadenceEditor, type CadenceConfig } from "../components/CadenceEditor";
 import { DatasourcePicker } from "../components/DatasourcePicker";
+import { RuleDiff } from "../components/RuleDiff";
+import { inspectBinding } from "../components/ruleSource";
 import { RuleExplainer } from "../components/RuleExplainer";
 import { TEMPLATES, templatePrompt } from "../components/rulePrompts";
 import { RunOutcomeCell, RunStatusCell } from "./Run";
@@ -1121,6 +1124,7 @@ const RuleDetails = ({ asked }: { asked?: number }) => {
   const [runOpen, setRunOpen] = useState(false);
   const [restoreOpen, setRestoreOpen] = useState(false);
   const [restoring, setRestoring] = useState(false);
+  const [publishing, setPublishing] = useState(false);
   const notify = useNotify();
   const refresh = useRefresh();
 
@@ -1218,14 +1222,58 @@ const RuleDetails = ({ asked }: { asked?: number }) => {
     }
   };
 
+  /**
+   * Put a draft candidate on the air.
+   *
+   * The server validates it first and only promotes it if it passes, so a draft
+   * that cannot read the estate leaves the live control untouched. The live
+   * version stops running only once this succeeds.
+   */
+  const publishDraft = async () => {
+    setPublishing(true);
+    try {
+      const outcome = await api.publishRule(record.code, record.version);
+      if (!outcome.activated) {
+        notify(
+          `v${record.version} did not pass validation, so nothing went live: ` +
+            `${outcome.validation?.errors?.join("; ") ?? "see the errors below"}`,
+          { type: "warning" },
+        );
+        if (outcome.validation) setReport(outcome.validation);
+        return;
+      }
+      // The words for the version that is now live. Written here, not left to a
+      // page visit: a GET must not spend money at a model, and a page that fell
+      // back to the code silently is exactly what this avoids.
+      try {
+        await api.generateExplanation(record.code, record.version);
+      } catch (e: any) {
+        notify(
+          `v${record.version} is live, but its description could not be written: ${e.message}`,
+          { type: "warning" },
+        );
+      }
+      notify(`v${record.version} is now live`, { type: "success" });
+      refresh();
+    } catch (e: any) {
+      notify(e.message, { type: "error" });
+    } finally {
+      setPublishing(false);
+    }
+  };
+
   if (!record) return null;
 
-  // The head is the version the scheduler runs. A page about an older row is a
-  // record of what the control used to do, so it offers no edits to that row -
-  // only the one forward move that puts the code back on the air.
+  // The head is the version the scheduler runs. A non-head row is one of two
+  // things, and they call for opposite pages: a DRAFT CANDIDATE waiting to be
+  // published, or a RECORD of a version that has been superseded. The pending
+  // number tells them apart, so a draft is not shown as a museum piece.
   const headVersion =
     versions.find((v) => v.is_version_active)?.version ?? record.version;
   const superseded = !record.is_version_active;
+  const isCandidate =
+    superseded && record.status === "draft" && record.version === record.pending_version;
+  const isRecord = superseded && !isCandidate;
 
   const errors = report?.errors ?? [];
   const warnings = report?.warnings ?? [];
@@ -1257,9 +1305,9 @@ const RuleDetails = ({ asked }: { asked?: number }) => {
     // flex item's automatic minimum width lets that table set the width of the
     // whole page, and at 1366 the rule page scrolled sideways by 225px.
     <Stack spacing={2} sx={{ minWidth: 0 }}>
-      {/* An old version is a record. Saying so before the title is the only
-          way to be sure it is read before somebody presses something. */}
-      {superseded && (
+      {/* Say which of the three this page is, before the title, so it is read
+          before somebody presses something. */}
+      {isRecord && (
         <Alert
           severity="info"
           action={
@@ -1277,6 +1325,47 @@ const RuleDetails = ({ asked }: { asked?: number }) => {
           You are reading <strong>v{record.version}</strong>. v{headVersion} is the
           current version, and the scheduler runs that one. This page is a record
           of what v{record.version} did, and cannot be edited.
+        </Alert>
+      )}
+
+      {isCandidate && (
+        <Alert
+          severity="warning"
+          action={
+            headVersion !== record.version && (
+              <Button
+                color="inherit"
+                size="small"
+                onClick={() => navigate(ruleShowPath(record.code, headVersion))}
+              >
+                Open v{headVersion}
+              </Button>
+            )
+          }
+        >
+          <strong>Draft v{record.version}.</strong> This is a candidate, not the
+          live control: v{headVersion} keeps running until this one is published.
+        </Alert>
+      )}
+
+      {/* The live version, when a replacement is waiting. The draft is the
+          reason somebody is on this page, so it is said here rather than only
+          on the version history lower down. */}
+      {!superseded && record.pending_version && (
+        <Alert
+          severity="info"
+          action={
+            <Button
+              color="inherit"
+              size="small"
+              onClick={() => navigate(ruleShowPath(record.code, record.pending_version))}
+            >
+              Open the draft
+            </Button>
+          }
+        >
+          Draft <strong>v{record.pending_version}</strong> is waiting to be
+          published. This version keeps running until it is.
         </Alert>
       )}
 
@@ -1304,7 +1393,7 @@ const RuleDetails = ({ asked }: { asked?: number }) => {
               </Stack>
             </Box>
 
-            {superseded ? (
+            {isRecord ? (
               mayActivate && (
                 <Stack direction="row" spacing={1} sx={{ alignItems: "center", flexWrap: "wrap", gap: 1 }}>
                   <Button
@@ -1315,6 +1404,37 @@ const RuleDetails = ({ asked }: { asked?: number }) => {
                   >
                     Restore v{record.version} as the current version
                   </Button>
+                </Stack>
+              )
+            ) : isCandidate ? (
+              (mayTest || mayWrite || mayActivate) && (
+                <Stack direction="row" spacing={1} sx={{ alignItems: "center", flexWrap: "wrap", gap: 1 }}>
+                  {mayActivate && (
+                    <Button
+                      size="small"
+                      variant="contained"
+                      startIcon={publishing ? <CircularProgress size={14} color="inherit" /> : <PublishIcon />}
+                      onClick={publishDraft}
+                      disabled={publishing}
+                    >
+                      {publishing ? "Publishing…" : `Publish v${record.version}`}
+                    </Button>
+                  )}
+                  {mayWrite && (
+                    <Button size="small" startIcon={<FactCheckIcon />} onClick={runValidation}
+                      disabled={validating}>
+                      {validating ? "Validating…" : "Validate"}
+                    </Button>
+                  )}
+                  {mayTest && (
+                    <Button
+                      size="small"
+                      startIcon={<PlayArrowIcon />}
+                      onClick={() => setRunOpen(true)}
+                    >
+                      Run now
+                    </Button>
+                  )}
                 </Stack>
               )
             ) : (
@@ -1870,10 +1990,32 @@ const SeverityCell = fieldFromRecord(
   (value) => <DotLabel value={value} tone={severityColor[value] ?? "default"} />,
 );
 
-/** Did the rule run, and did it find anything? State answers the first. */
-const StateCell = fieldFromRecord(
-  (value) => <DotLabel value={value} tone={statusColor[value] ?? "default"} />,
-);
+/**
+ * The rule's lifecycle state, plus a marker when a draft is waiting.
+ *
+ * The state alone would read "active" while a replacement sits unpublished,
+ * which is the one thing the reader needs to know: the thing on the air is not
+ * the newest version.
+ */
+const StateCell = ({ source, label }: { source?: string; label?: string }) => {
+  void source;
+  void label;
+  const record = useRecordContext<any>();
+  return (
+    <Stack direction="row" spacing={0.75} sx={{ alignItems: "center" }}>
+      <DotLabel value={record?.status} tone={statusColor[record?.status] ?? "default"} />
+      {record?.pending_version ? (
+        <Chip
+          size="small"
+          variant="outlined"
+          color="warning"
+          label={`draft v${record.pending_version}`}
+          sx={{ height: 20, fontSize: FONT.label }}
+        />
+      ) : null}
+    </Stack>
+  );
+};
 
 /**
  * May this rule run at all? A second column because it is a second question:
@@ -2018,10 +2160,23 @@ const RuleEditForm = () => {
   const record = useRecordContext<any>();
   const notify = useNotify();
   const navigate = useNavigate();
+  const perms = usePermissions();
+  const mayPublish = can(perms, "rules.activate");
+
   const [busy, setBusy] = useState(false);
-  const [source, setSource] = useState("");
-  const [loadedSource, setLoadedSource] = useState("");
   const [loading, setLoading] = useState(true);
+  // The live version's source, kept only as the left-hand side of the diff.
+  const [liveSource, setLiveSource] = useState("");
+  // What was on disk when the page opened - the candidate's starting point, and
+  // the baseline for "has anything changed".
+  const [loadedSource, setLoadedSource] = useState("");
+  // The candidate. Only two things ever change it: the datasource picker and the
+  // agent. There is no textarea, because the code is not the thing a person edits.
+  const [working, setWorking] = useState("");
+  const [request, setRequest] = useState("");
+  const [revised, setRevised] = useState(false);
+  const [step, setStep] = useState<"idle" | "working" | "review" | "failed">("idle");
+  const [result, setResult] = useState<RuleGenerateResponse | null>(null);
   const [form, setForm] = useState({
     name: "",
     description: "",
@@ -2030,8 +2185,10 @@ const RuleEditForm = () => {
     change_note: "",
   });
 
+  const code = record?.code;
+
   useEffect(() => {
-    if (!record?.code) return;
+    if (!code) return;
     setLoading(true);
     setForm({
       name: record.name ?? "",
@@ -2040,32 +2197,87 @@ const RuleEditForm = () => {
       lookback_days: record.lookback_days ?? 1,
       change_note: "",
     });
-    api.ruleSource(record.code)
-      .then((r) => {
-        setSource(r.source_code ?? "");
-        setLoadedSource(r.source_code ?? "");
+    // Start from the newest version: the draft being worked on if there is one,
+    // otherwise the live code. The live source is fetched separately because it
+    // is what the diff is measured against.
+    const pending = record.pending_version as number | undefined;
+    Promise.all([
+      api.ruleSource(code),
+      pending ? api.ruleSource(code, pending) : Promise.resolve(null),
+    ])
+      .then(([live, draft]) => {
+        const base: string = draft?.source_code ?? live?.source_code ?? "";
+        setLiveSource(live?.source_code ?? "");
+        setLoadedSource(base);
+        setWorking(base);
       })
-      .catch((e: any) => notify(`Could not load source: ${e.message}`, { type: "error" }))
+      .catch((e: any) =>
+        notify(`Could not load the rule's source: ${e.message}`, { type: "error" }),
+      )
       .finally(() => setLoading(false));
-  }, [record?.code]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [code]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // The tables the agent may read - taken from the candidate, so what the picker
+  // shows and what the agent is told cannot drift.
+  const binding = useMemo(() => inspectBinding(working), [working]);
+  const selection = binding.unreadable ? binding.referenced : binding.declared;
 
   if (!record) return null;
-  const nextVersion = (record.version ?? 1) + 1;
-  const dirty =
+
+  const nextVersion = ((record.pending_version ?? record.version) as number) + 1;
+  const hasDraft = Boolean(record.pending_version);
+  const changed =
+    working !== loadedSource ||
     form.name !== (record.name ?? "") ||
     form.description !== (record.description ?? "") ||
     form.severity !== record.severity ||
-    form.lookback_days !== record.lookback_days ||
-    source !== loadedSource;
+    form.lookback_days !== record.lookback_days;
+
+  const payload = () => ({
+    ...form,
+    source_code: working,
+    change_note:
+      form.change_note || request.trim().slice(0, 120) || "revised",
+    // A version whose source the agent wrote is machine-written, whatever the
+    // rule's first version was. A picker-only change leaves this unset, so the
+    // row keeps saying the code was written by hand.
+    origin: revised ? "llm" : undefined,
+  });
+
+  const rewrite = async () => {
+    setBusy(true);
+    setStep("working");
+    setResult(null);
+    try {
+      const g = await api.reviseRule(code, {
+        prompt: request,
+        datasources: selection,
+        lookback_days: form.lookback_days,
+      });
+      setResult(g);
+      if (g.ok && g.source_code) {
+        setWorking(g.source_code);
+        setRevised(true);
+      }
+      setStep(g.ok ? "review" : "failed");
+    } catch (e: any) {
+      setResult(null);
+      setStep("failed");
+      notify(e.message ?? String(e), { type: "error" });
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const save = async () => {
     setBusy(true);
     try {
-      const updated = await api.updateRule(record.code, { ...form, source_code: source });
-      notify(`${record.code} v${updated.version} published as draft - validate it to activate`, {
-        type: "success",
-      });
-      navigate(ruleShowPath(record.code, updated.version));
+      const saved = await api.updateRule(code, payload());
+      notify(
+        `${code} v${saved.version} saved as a draft - publish it to put it on the air`,
+        { type: "success" },
+      );
+      navigate(ruleShowPath(code, saved.version));
     } catch (e: any) {
       notify(e.message, { type: "error" });
     } finally {
@@ -2073,14 +2285,197 @@ const RuleEditForm = () => {
     }
   };
 
+  // Publishing saves first if anything moved, then validates the draft and
+  // promotes it. The server does the validating; if it fails the draft stays a
+  // draft and nothing goes live, which is the point.
+  const publish = async () => {
+    setBusy(true);
+    try {
+      const draftVersion = record.pending_version as number | undefined;
+      let version: number;
+      if (changed || draftVersion === undefined) {
+        const saved = await api.updateRule(code, payload());
+        version = Number(saved.version);
+      } else {
+        version = draftVersion;
+      }
+      const outcome = await api.publishRule(code, version);
+      if (!outcome.activated) {
+        notify(
+          `v${version} did not pass validation, so nothing went live: ` +
+            `${outcome.validation?.errors?.join("; ") ?? "see the rule page"}`,
+          { type: "warning" },
+        );
+        navigate(ruleShowPath(code, version));
+        return;
+      }
+      // The description of the version that is now live. Written here rather
+      // than left to a page visit, because a GET must not spend money at a model
+      // and a page that silently fell back to the code is the thing this avoids.
+      try {
+        await api.generateExplanation(code, version);
+      } catch (e: any) {
+        notify(
+          `${code} v${version} is live, but its description could not be written: ${e.message}`,
+          { type: "warning" },
+        );
+      }
+      notify(`${code} v${version} is live`, { type: "success" });
+      navigate(ruleShowPath(code, version));
+    } catch (e: any) {
+      notify(e.message, { type: "error" });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const trial = result?.trial;
+
   return (
     <Stack spacing={2}>
       <Alert severity="info">
-        Saving publishes <strong>version {nextVersion}</strong> of{" "}
-        <strong>{record.code}</strong> as a <strong>draft</strong> and resets its
-        validation. The current version stays live until this one is validated and
-        activated.
+        A change here creates <strong>draft version {nextVersion}</strong> of{" "}
+        <strong>{record.code}</strong> and resets its validation.{" "}
+        <strong>v{record.version} keeps running</strong> until the draft is
+        published.
+        {hasDraft && (
+          <>
+            {" "}Draft v{record.pending_version} is already waiting.
+          </>
+        )}
       </Alert>
+
+      {/* Read the control before changing it. Read-only: an old version's words
+          are a record, and these are the live version's. */}
+      {!loading && liveSource && (
+        <RuleExplainer
+          ruleCode={code}
+          version={record.version}
+          source={liveSource}
+          mayWrite={false}
+          mayReview={false}
+          readOnly
+        />
+      )}
+
+      <Card>
+        <CardContent>
+          <Stack spacing={2}>
+            <MuiTextField
+              label="Describe the change"
+              value={request}
+              onChange={(e) => setRequest(e.target.value)}
+              placeholder="e.g. also flag refunds over 500, and tighten the ticket window to one hour"
+              helperText="Plain language. The assistant rewrites the rule to match - change only what you ask, and it leaves the rest alone."
+              multiline
+              minRows={4}
+              fullWidth
+            />
+            <Stack direction="row" spacing={1.5} sx={{ alignItems: "center", flexWrap: "wrap" }}>
+              <Button
+                variant="contained"
+                onClick={rewrite}
+                disabled={busy || request.trim().length < 5 || selection.length === 0}
+                startIcon={
+                  busy && step === "working" ? (
+                    <CircularProgress size={16} color="inherit" />
+                  ) : (
+                    <AutoAwesomeIcon />
+                  )
+                }
+              >
+                {busy && step === "working" ? "Rewriting…" : "Rewrite with the assistant"}
+              </Button>
+              <Typography variant="caption" sx={{ color: "text.secondary" }}>
+                Reads the live data to settle anything the change depends on, then
+                runs the result before offering it.
+              </Typography>
+            </Stack>
+
+            {step === "review" && result && (
+              <Stack spacing={1.5}>
+                <Alert severity={trial?.outcome === "fail" ? "warning" : "success"}>
+                  {trial?.outcome === "fail" ? (
+                    <>
+                      The rewritten rule ran and found{" "}
+                      <strong>{trial.rows.length}</strong> exception row
+                      {trial.rows.length === 1 ? "" : "s"} on {result.data_date}.
+                    </>
+                  ) : (
+                    <>
+                      The rewritten rule ran and found nothing on {result.data_date}.
+                      That may be correct - but if the control should have caught
+                      something, the change is too loose.
+                    </>
+                  )}
+                </Alert>
+
+                {trial?.warnings?.length ? (
+                  <Alert severity="warning">
+                    <strong>The rule tests values the data does not hold.</strong>{" "}
+                    A wrong value matches nothing, so the control would find nothing
+                    and still look clean.
+                    <Box component="ul" sx={{ mt: 0.5, mb: 0, pl: 2 }}>
+                      {trial.warnings.map((w) => (
+                        <li key={w}>{w}</li>
+                      ))}
+                    </Box>
+                  </Alert>
+                ) : null}
+
+                {result.trace?.length ? (
+                  <Box>
+                    <Typography variant="caption" sx={{ fontWeight: 700 }}>
+                      WHAT THE ASSISTANT CHECKED
+                    </Typography>
+                    <Stack spacing={0.25} sx={{ mt: 0.5 }}>
+                      {result.trace.map((s, i) => (
+                        <Typography key={`${s.tool}-${i}`} variant="body2" sx={{ color: "text.secondary" }}>
+                          <Box component="span" sx={{ fontFamily: "monospace" }}>
+                            {s.tool}
+                          </Box>
+                          {s.summary ? ` — ${s.summary}` : ""}
+                        </Typography>
+                      ))}
+                    </Stack>
+                  </Box>
+                ) : null}
+              </Stack>
+            )}
+
+            {step === "failed" && (
+              <Alert severity="error">
+                <strong>No rewritten rule was produced.</strong>{" "}
+                {result?.error ?? "The assistant could not be reached."}{" "}
+                Nothing has changed - try a narrower request.
+              </Alert>
+            )}
+          </Stack>
+        </CardContent>
+      </Card>
+
+      {/* The binding is a decision; the code is the result. The picker writes
+          DATASOURCES into the candidate, so it changes without the assistant. */}
+      <Card>
+        <CardContent>
+          {loading ? (
+            <CircularProgress size={22} />
+          ) : (
+            <>
+              <DatasourcePicker
+                entity={record.entity}
+                source={working}
+                onChange={(next) => setWorking(next)}
+                disabled={busy}
+              />
+              <Typography variant="h6" sx={{ mt: 1, mb: 0.5 }}>
+                What changed
+              </Typography>
+              <RuleDiff before={liveSource} after={working} />
+            </>
+          )}
+        </CardContent>
+      </Card>
 
       <Card>
         <CardContent>
@@ -2131,92 +2526,30 @@ const RuleEditForm = () => {
               value={form.change_note}
               onChange={(e) => setForm({ ...form, change_note: e.target.value })}
               placeholder="e.g. tighten the last-hour limit"
-              helperText="Shown in the version history."
+              helperText="Shown in the version history. Left blank, the request above is used."
               fullWidth
             />
           </Stack>
         </CardContent>
       </Card>
 
-      {/* Which tables this rule reads, then the Python that reads them.
-          The order matters: the binding is a decision, the code is the detail. */}
-      <Card>
-        <CardContent>
-          {!loading ? (
-            <DatasourcePicker
-              entity={record.entity}
-              source={source}
-              onChange={setSource}
-              disabled={busy}
-            />
-          ) : (
-            <CircularProgress size={22} />
-          )}
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardContent>
-          <Stack
-            direction="row"
-            sx={{ mb: 1, justifyContent: "space-between", alignItems: "center" }}
-          >
-            <Typography variant="h6">Python source</Typography>
-            <Typography variant="caption" sx={{ color: "text.secondary" }}>
-              {record.source_file} &rarr; v{nextVersion} on save
-            </Typography>
-          </Stack>
-          {loading ? (
-            <CircularProgress size={24} />
-          ) : (
-            <Box
-              component="textarea"
-              value={source}
-              onChange={(e: any) => setSource(e.target.value)}
-              onKeyDown={(e: any) => {
-                if (e.key === "Tab") {
-                  e.preventDefault();
-                  const el = e.target;
-                  const { selectionStart, selectionEnd } = el;
-                  const next = `${source.slice(0, selectionStart)}    ${source.slice(selectionEnd)}`;
-                  setSource(next);
-                  requestAnimationFrame(() => el.setSelectionRange(selectionStart + 4, selectionStart + 4));
-                }
-              }}
-              spellCheck={false}
-              rows={26}
-              sx={{
-                width: "100%",
-                fontFamily: '"JetBrains Mono", Consolas, "Courier New", monospace',
-                fontSize: FONT.bodyAlt,
-                lineHeight: 1.6,
-                p: 2,
-                border: "1px solid #d9e0ea",
-                borderRadius: 2,
-                resize: "vertical",
-                outline: "none",
-                "&:focus": { borderColor: "primary.main" },
-              }}
-            />
-          )}
-        </CardContent>
-      </Card>
-
       <Stack direction="row" spacing={1} sx={{ justifyContent: "flex-end" }}>
-        <Button
-          onClick={() => navigate(ruleShowPath(record.code))}
-          disabled={busy}
-        >
+        <Button onClick={() => navigate(ruleShowPath(record.code))} disabled={busy}>
           Cancel
         </Button>
-        <Button
-          variant="contained"
-          onClick={save}
-          disabled={busy || !dirty || !form.name.trim()}
-          startIcon={busy ? <CircularProgress size={16} color="inherit" /> : undefined}
-        >
-          {busy ? "Publishing…" : `Publish v${nextVersion}`}
+        <Button onClick={save} disabled={busy || !changed}>
+          {busy ? "Saving…" : `Save as draft v${nextVersion}`}
         </Button>
+        {mayPublish && (
+          <Button
+            variant="contained"
+            onClick={publish}
+            disabled={busy || (!changed && !hasDraft)}
+            startIcon={busy ? <CircularProgress size={16} color="inherit" /> : undefined}
+          >
+            {busy ? "Publishing…" : "Publish"}
+          </Button>
+        )}
       </Stack>
     </Stack>
   );

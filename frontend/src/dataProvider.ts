@@ -738,6 +738,40 @@ export const api = {
       body: JSON.stringify(payload),
     }),
 
+  /**
+   * Rewrite an existing rule from a plain-language change request.
+   *
+   * The same agent as `generateRule`, given the rule's current source and told
+   * to change only what the request asks. Nothing is written: it returns a
+   * candidate and the verdict on it, and the candidate becomes a draft version
+   * when the admin saves it.
+   */
+  reviseRule: (
+    code: string,
+    payload: {
+      prompt: string;
+      datasources: string[];
+      lookback_days?: number;
+      data_date?: string;
+    },
+  ) =>
+    request<RuleGenerateResponse>(`/api/rules/${code}/revise`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+
+  /**
+   * Put a draft version on the air.
+   *
+   * The draft is validated first and only promoted if it passes, so a candidate
+   * that cannot read the estate cannot replace a working control.
+   */
+  publishRule: (code: string, version: number) =>
+    request<{ rule: any; validation: any; activated: boolean }>(
+      `/api/rules/${code}/publish`,
+      { method: "POST", body: JSON.stringify({ version }) },
+    ),
+
   createRule: (payload: {
     code: string;
     name: string;

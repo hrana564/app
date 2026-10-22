@@ -394,6 +394,10 @@ def main() -> int:
             ("rules.generate", "POST", "/api/rules/generate",
              {"prompt": "flag anything odd", "entity": FIRST,
               "datasources": ["__not_registered__"]}),
+            ("rules.write", "POST", "/api/rules/NOPE-99/revise",
+             {"prompt": "tighten the limit", "datasources": ["ipos_sales"]}),
+            ("rules.activate", "POST", "/api/rules/NOPE-99/publish",
+             {"version": 1}),
             ("rules.explain_review", "POST", "/api/rules/NOPE-99/explain/review",
              {"approved": True}),
             ("schedules.write", "POST", "/api/rule-schedules",
@@ -883,9 +887,21 @@ def main() -> int:
             check("probe file written to disk",
                   (RULES_DIR / f"{VCODE}_v{v0}.py").exists())
 
-            # An edit publishes the next version and moves the head flag. The new
-            # version records the NEW source. Copying the previous version's list
-            # left the recorded truth describing a file nobody was running.
+            # Activation is gated on validation, and the probe needs a LIVE
+            # version before the edit below can have a draft beside it.
+            a = c.put(f"/api/rules/{VCODE}/status", headers=ah, json={"status": "active"})
+            check("cannot activate before validating", a.status_code == 409,
+                  f"got {a.status_code}")
+            c.post(f"/api/rules/{VCODE}/validate", headers=ah)
+            a = c.put(f"/api/rules/{VCODE}/status", headers=ah, json={"status": "active"})
+            check("activates once validated", a.status_code == 200,
+                  f"{a.status_code} {a.text[:140]}")
+
+            # An edit publishes the next version as a DRAFT CANDIDATE. It does
+            # NOT become the head: the live version keeps running until the
+            # draft is published. Moving the head here is what used to take a
+            # control off the air the moment somebody saved an edit nobody had
+            # read - while the page promised the opposite.
             u = c.put(f"/api/rules/{VCODE}", headers=ah, json={
                 "source_code": "DATASOURCES = ['ipos_sales', 'hr_employees']\n\n\n"
                                "def run(ctx):\n    return {'status': 'no_rows_returned'}\n",
@@ -896,7 +912,12 @@ def main() -> int:
             check("new version records the NEW source's datasources",
                   u.json()["declared_datasources"] == ["hr_employees", "ipos_sales"],
                   str(u.json()["declared_datasources"]))
-            check("new version is the head", u.json()["is_version_active"])
+            check("the edit does NOT become the head",
+                  u.json()["is_version_active"] is False,
+                  f"active={u.json().get('is_version_active')}")
+            check("the draft reports its own version as the pending one",
+                  u.json()["pending_version"] == v0 + 1,
+                  str(u.json().get("pending_version")))
             check("new version starts as draft", u.json()["status"] == "draft",
                   u.json()["status"])
             check("validation reset on a new version",
@@ -908,11 +929,51 @@ def main() -> int:
             check("previous file still on disk",
                   (RULES_DIR / f"{VCODE}_v{v0}.py").exists())
 
+            # The control stays on the air: the live version keeps the head and
+            # keeps running, and the draft is announced beside it.
+            live = c.get(f"/api/rules/{VCODE}", headers=ud).json()
+            check("the live version is still the head while a draft waits",
+                  live["version"] == v0 and live["is_version_active"]
+                  and live["status"] == "active",
+                  f"v{live.get('version')} active={live.get('is_version_active')} "
+                  f"status={live.get('status')}")
+            check("the live version names the draft waiting to be published",
+                  live["pending_version"] == v0 + 1, str(live.get("pending_version")))
+
+            listed = c.get("/api/rules", headers=ud,
+                           params={"q": VCODE}).json()["data"]
+            row = next((r for r in listed if r["code"] == VCODE), None)
+            check("the list shows the live version, with the draft flagged",
+                  row is not None and row["version"] == v0
+                  and row.get("pending_version") == v0 + 1,
+                  f"{row.get('version') if row else None} "
+                  f"{row.get('pending_version') if row else None}")
+
             hist = c.get(f"/api/rules/{VCODE}/versions", headers=ud).json()
             check("history has both versions", len(hist) == 2, str(len(hist)))
             check("history newest first", hist[0]["version"] == v0 + 1)
-            check("exactly one head after the bump",
+            check("exactly one head after the edit",
                   sum(1 for x in hist if x["is_version_active"]) == 1)
+
+            # Publishing the draft validates it, and only then promotes it.
+            pub = c.post(f"/api/rules/{VCODE}/publish", headers=ah,
+                         json={"version": v0 + 1})
+            published = pub.json() if pub.status_code == 200 else {}
+            check("publishing a draft validates it and promotes it",
+                  pub.status_code == 200 and published.get("activated") is True
+                  and published.get("rule", {}).get("is_version_active") is True,
+                  f"{pub.status_code} {pub.text[:160]}")
+            check("the promoted version is active and validated",
+                  published.get("rule", {}).get("status") == "active"
+                  and published.get("rule", {}).get("validation_status") == "valid",
+                  f"status={published.get('rule', {}).get('status')} "
+                  f"validation={published.get('rule', {}).get('validation_status')}")
+            check("what was live is now a record, not the head",
+                  c.get(f"/api/rules/{VCODE}", headers=ud,
+                        params={"version": v0}).json()["is_version_active"] is False)
+            check("publishing it again is refused",
+                  c.post(f"/api/rules/{VCODE}/publish", headers=ah,
+                         json={"version": v0 + 1}).status_code == 409)
 
             # A rule page is a page about ONE version row, and the address says
             # which. Every read can be pointed at one version, and the answers
@@ -954,14 +1015,6 @@ def main() -> int:
                       and body["source_sha256"] == hashlib.sha256(
                           vsrc.encode("utf-8")).hexdigest(),
                       f"v{body['version']} {body['source_sha256'][:12]}")
-
-            a = c.put(f"/api/rules/{VCODE}/status", headers=ah, json={"status": "active"})
-            check("cannot activate before validating", a.status_code == 409,
-                  f"got {a.status_code}")
-            c.post(f"/api/rules/{VCODE}/validate", headers=ah)
-            a = c.put(f"/api/rules/{VCODE}/status", headers=ah, json={"status": "active"})
-            check("activates once validated", a.status_code == 200,
-                  f"{a.status_code} {a.text[:140]}")
 
             # Pausing must NOT burn a version.
             before_pause = c.get(f"/api/rules/{VCODE}", headers=ud).json()["version"]
@@ -1017,6 +1070,26 @@ def main() -> int:
                           params={"rule_code": VCODE}).json()["data"]
             check("schedules survive a version bump (keyed by code, not row id)",
                   len(still) == 1, f"{len(still)} after the bump")
+
+            # A draft that does not validate must not go live, and must not
+            # disturb the control that is running.
+            bad = c.put(f"/api/rules/{VCODE}", headers=ah, json={
+                "source_code": "import os\n\n\n"
+                               "def run(ctx):\n    return {'status': 'success'}\n",
+                "change_note": "smoke: broken candidate"})
+            check("a broken edit still creates a draft candidate",
+                  bad.status_code == 200 and bad.json()["is_version_active"] is False,
+                  f"{bad.status_code}")
+            refused = c.post(f"/api/rules/{VCODE}/publish", headers=ah,
+                             json={"version": bad.json()["version"]})
+            check("publishing an invalid draft activates nothing",
+                  refused.status_code == 200
+                  and refused.json().get("activated") is False,
+                  f"{refused.status_code} {refused.text[:140]}")
+            live_now = c.get(f"/api/rules/{VCODE}", headers=ud).json()
+            check("the live control is untouched by a failed publish",
+                  live_now["is_version_active"] and live_now["status"] == "active",
+                  f"v{live_now.get('version')} status={live_now.get('status')}")
 
             # A rule with no findings CAN be deleted, and its files go with it.
             r = c.delete(f"/api/rules/{VCODE}", headers=ah)
@@ -1953,6 +2026,50 @@ def main() -> int:
               any("code_error" in s["summary"] for s in agent.trace), str(agent.trace))
         check("the trace is the evidence behind the rule",
               [s["tool"] for s in agent.trace].count("run_rule") >= 2, str(agent.trace))
+
+        # A revision is the same loop with the rule in front of the model. The
+        # prompt has to carry the CURRENT SOURCE - the one input the model cannot
+        # get any other way - and the gate is that same real run.
+        from app.engine.rule_agent import run_revision
+
+        seen: list[list[dict]] = []
+
+        class _CapturingModel:
+            def __init__(self, script):
+                self.script = list(script)
+
+            def __call__(self, messages, tools):
+                seen.append(list(messages))
+                return self.script.pop(0)
+
+        revising = _CapturingModel([
+            ModelReply(tool_calls=[ToolCall(id="1", name="run_rule",
+                arguments={"source": good})]),
+            ModelReply(content=good),
+        ])
+        rev = run_revision(
+            catalog=catalog,
+            request="also flag the last hour twice over",
+            current_source=good,
+            entity=entity,
+            data_date=date.fromisoformat(test_day),
+            tables=["ipos_sales"],
+            allowed=["ipos_sales"],
+            llm=revising,
+        )
+        check("a revision is gated by a real run", rev.ok, str(rev.error))
+        system_text = seen[0][0]["content"] if seen else ""
+        prompt = seen[0][1]["content"] if seen and len(seen[0]) > 1 else ""
+        check("the revision prompt carries the current source",
+              "CURRENT SOURCE" in prompt and good.splitlines()[0] in prompt,
+              prompt[-240:] or "(no prompt)")
+        check("the revision prompt carries the change request",
+              "also flag the last hour twice over" in prompt, prompt[:160])
+        check("the revision method says to change only what was asked",
+              "Change only what the request asks" in system_text,
+              system_text[-200:])
+        check("the revised source is what was submitted",
+              rev.source == good, (rev.source or "")[:80])
 
         section("the plain-English description")
         # What a head of audit reads before the code. The structure is derived

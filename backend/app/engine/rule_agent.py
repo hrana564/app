@@ -152,15 +152,6 @@ def run_generation(
     selection = list(tables)
     permitted = list(allowed) if allowed is not None else list(tables)
 
-    toolbox = Toolbox(
-        entity=entity,
-        data_date=data_date,
-        lookback_days=lookback_days,
-        tables=selection,
-        catalog=catalog,
-        allowed=permitted,
-    )
-
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": gen.SYSTEM_PROMPT + "\n\n" + gen.AGENT_METHOD},
         {
@@ -175,10 +166,103 @@ def run_generation(
             ),
         },
     ]
+    return _run(
+        call=call,
+        messages=messages,
+        catalog=catalog,
+        entity=entity,
+        data_date=data_date,
+        lookback_days=lookback_days,
+        tables=selection,
+        allowed=permitted,
+    )
+
+
+def run_revision(
+    *,
+    catalog: Catalog,
+    request: str,
+    current_source: str,
+    entity: str,
+    data_date: date,
+    tables: list[str],
+    lookback_days: int = 1,
+    allowed: list[str] | None = None,
+    llm: ModelStep | None = None,
+) -> GenerationResult:
+    """Change an existing rule to do what a plain-language request asks.
+
+    Identical to `run_generation` from the loop onward - the same tools, the same
+    `run_rule` gate, the same final trial on the submitted source. What differs
+    is the prompt: the source being changed is put in front of the model, and the
+    method tells it to leave the rest of the rule alone.
+    """
+    call = llm or gen.chat
+    selection = list(tables)
+    permitted = list(allowed) if allowed is not None else list(tables)
+
+    messages: list[dict[str, Any]] = [
+        {
+            "role": "system",
+            "content": (
+                gen.SYSTEM_PROMPT + "\n\n" + gen.AGENT_METHOD
+                + "\n\n" + gen.REVISION_METHOD
+            ),
+        },
+        {
+            "role": "user",
+            "content": gen.build_revision_prompt(
+                catalog=catalog,
+                request=request,
+                current_source=current_source,
+                entity=entity,
+                data_date=data_date,
+                tables=selection,
+                lookback_days=lookback_days,
+            ),
+        },
+    ]
+    return _run(
+        call=call,
+        messages=messages,
+        catalog=catalog,
+        entity=entity,
+        data_date=data_date,
+        lookback_days=lookback_days,
+        tables=selection,
+        allowed=permitted,
+    )
+
+
+def _run(
+    *,
+    call: ModelStep,
+    messages: list[dict[str, Any]],
+    catalog: Catalog,
+    entity: str,
+    data_date: date,
+    lookback_days: int,
+    tables: list[str],
+    allowed: list[str],
+) -> GenerationResult:
+    """The half a generation and a revision share.
+
+    Both are the same thing after the prompt: the model asks, the tools answer,
+    and the source it finally submits is run once more as the gate. Keeping that
+    in one place is what makes "a revision is tested the same way a draft is" true
+    rather than a claim - there is only one gate to be tested by.
+    """
+    toolbox = Toolbox(
+        entity=entity,
+        data_date=data_date,
+        lookback_days=lookback_days,
+        tables=tables,
+        catalog=catalog,
+        allowed=allowed,
+    )
 
     trace: list[dict[str, Any]] = []
     attempts: list[dict[str, Any]] = []
-    source = ""
 
     def result(**overrides: Any) -> GenerationResult:
         base = {
@@ -197,57 +281,10 @@ def run_generation(
         return GenerationResult(**base)
 
     try:
-        previous: tuple[Any, ...] | None = None
-        while True:
-            reply = call(messages, TOOL_SCHEMAS)
-
-            assistant: dict[str, Any] = {
-                "role": "assistant",
-                "content": reply.content or "",
-            }
-            if reply.tool_calls:
-                assistant["tool_calls"] = [c.as_message() for c in reply.tool_calls]
-            messages.append(assistant)
-
-            if not reply.tool_calls:
-                source = gen.strip_fences(reply.content or "")
-                break
-
-            signature = tuple(
-                (c.name, json.dumps(c.arguments, sort_keys=True))
-                for c in reply.tool_calls
-            )
-            if signature == previous:
-                # The same look, twice. Nothing new is coming; stop rather than
-                # ask for it forever. This is a stuck-detector, not a budget.
-                source = gen.strip_fences(reply.content or "")
-                break
-            previous = signature
-
-            for tool_call in reply.tool_calls:
-                output = toolbox.call(tool_call.name, tool_call.arguments)
-                trace.append(
-                    {
-                        "tool": tool_call.name,
-                        "args": tool_call.arguments,
-                        "summary": _summarise(tool_call.name, output),
-                    }
-                )
-                if tool_call.name == "run_rule":
-                    attempts.append(
-                        {
-                            "n": len(attempts) + 1,
-                            "ok": bool(output.get("ok")),
-                            "error": output.get("error"),
-                        }
-                    )
-                messages.append(
-                    {
-                        "role": "tool",
-                        "tool_call_id": tool_call.id,
-                        "content": json.dumps(output, default=str),
-                    }
-                )
+        source = _run_loop(
+            call=call, messages=messages, toolbox=toolbox,
+            trace=trace, attempts=attempts,
+        )
     except Exception as exc:  # noqa: BLE001
         fatal = f"The model could not be reached: {type(exc).__name__}: {exc}"
         return result(error=fatal, fatal=fatal)
@@ -261,10 +298,10 @@ def run_generation(
     trial = run_trial(
         source,
         entity=entity,
-        tables=selection,
+        tables=tables,
         data_date=data_date,
         lookback_days=lookback_days,
-        allowed=permitted,
+        allowed=allowed,
     )
     attempts.append(
         {"n": len(attempts) + 1, "ok": trial.ok, "error": None if trial.ok else trial.error}
@@ -286,3 +323,67 @@ def run_generation(
         trial=trial,
         error=None if trial.ok else trial.error,
     )
+
+
+def _run_loop(
+    *,
+    call: ModelStep,
+    messages: list[dict[str, Any]],
+    toolbox: Toolbox,
+    trace: list[dict[str, Any]],
+    attempts: list[dict[str, Any]],
+) -> str:
+    """Ask the model, run whatever tools it asked for, and repeat.
+
+    Ends when the model answers with source instead of a tool call, or when it
+    asks for exactly the same thing twice in a row. That second ending is a
+    stuck-detector, not a budget: it stops the loop when nothing new is coming
+    rather than capping how much the model may look.
+    """
+    previous: tuple[Any, ...] | None = None
+    while True:
+        reply = call(messages, TOOL_SCHEMAS)
+
+        assistant: dict[str, Any] = {
+            "role": "assistant",
+            "content": reply.content or "",
+        }
+        if reply.tool_calls:
+            assistant["tool_calls"] = [c.as_message() for c in reply.tool_calls]
+        messages.append(assistant)
+
+        if not reply.tool_calls:
+            return gen.strip_fences(reply.content or "")
+
+        signature = tuple(
+            (c.name, json.dumps(c.arguments, sort_keys=True))
+            for c in reply.tool_calls
+        )
+        if signature == previous:
+            return gen.strip_fences(reply.content or "")
+        previous = signature
+
+        for tool_call in reply.tool_calls:
+            output = toolbox.call(tool_call.name, tool_call.arguments)
+            trace.append(
+                {
+                    "tool": tool_call.name,
+                    "args": tool_call.arguments,
+                    "summary": _summarise(tool_call.name, output),
+                }
+            )
+            if tool_call.name == "run_rule":
+                attempts.append(
+                    {
+                        "n": len(attempts) + 1,
+                        "ok": bool(output.get("ok")),
+                        "error": output.get("error"),
+                    }
+                )
+            messages.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": tool_call.id,
+                    "content": json.dumps(output, default=str),
+                }
+            )

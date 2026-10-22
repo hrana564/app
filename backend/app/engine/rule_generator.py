@@ -108,6 +108,29 @@ When the rule is ready, reply with the module source and nothing else - no tool
 call, no commentary, no markdown fences.
 """
 
+# The same method, plus the one thing that makes a revision different from a
+# first draft: most of the source is already right, and the job is to leave it
+# alone. Appended to AGENT_METHOD, not instead of it - "look before you write,
+# run before you submit" still holds.
+REVISION_METHOD = """\
+REVISING AN EXISTING RULE
+-------------------------
+You are changing a rule that already exists, not writing a new one.
+
+  1. Change only what the request asks. Everything else stays as it is: the same
+     columns, the same thresholds, the same style, the same structure.
+  2. Keep the module constants NAME and DESCRIPTION unless the change alters what
+     the control proves. If it does, say the new thing - do not leave a name that
+     describes the old one.
+  3. Re-check with the tools only what the change depends on: a value it now
+     compares against, a join, a threshold, a date format. Do not re-explore what
+     you are not touching.
+  4. The rule must still run. Run it with run_rule before you submit.
+  5. Your answer is the whole module and nothing else. The current source is
+     shown to you as plain text, not as a quoted sample - do not open or close a
+     triple-quoted block around your answer, and do not wrap it in fences.
+"""
+
 CONTRACT_INSTRUCTIONS = """\
 A rule is a single Python file. It MUST define exactly one function:
 
@@ -547,6 +570,48 @@ tables and columns listed above, never the ones in this example.)
 Build the rule described above. Use the tools to look at anything the pack
 above does not settle, then run it with run_rule. Emit only the module when it
 is ready.
+""".strip()
+
+
+def build_revision_prompt(
+    catalog: Catalog,
+    request: str,
+    current_source: str,
+    entity: str,
+    data_date: date,
+    tables: list[str],
+    lookback_days: int = 1,
+) -> str:
+    """The change request, with the rule it is changing in front of it.
+
+    The pack of the data comes along for the same reason it does on a first
+    draft: the agent should not have to ask for a table's columns before it can
+    judge the request. What differs is the source in the middle - a revision is a
+    change to a thing that exists, and the thing it is changing is the one input
+    the model cannot get any other way.
+    """
+    return f"""
+{request.strip()}
+
+---
+{_scope_block(entity, data_date, lookback_days)}
+
+---
+DATASOURCES THE RULE MAY USE (and only these)
+{sample_datasources(catalog, entity, data_date, tables)}
+
+---
+CURRENT SOURCE
+{current_source.strip()}
+
+---
+RULE CONTRACT
+{CONTRACT_INSTRUCTIONS}
+
+---
+Change the source above so it does what the request asks, and nothing else.
+Re-check with the tools anything the change depends on, then run it with
+run_rule. Emit only the module when it is ready.
 """.strip()
 
 

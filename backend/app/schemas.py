@@ -300,6 +300,11 @@ class RuleOut(BaseModel):
     origin: str
     created_at: datetime
     updated_at: datetime
+    # The newest version that is NOT the head - a draft waiting to be published.
+    # The page reads it to say "v3 is waiting" on the live version, and the draft
+    # row reads its own number here, which is how the page knows a non-head row
+    # is a candidate rather than a record of something that has been superseded.
+    pending_version: int | None = None
 
     model_config = {"from_attributes": True}
 
@@ -327,6 +332,38 @@ class RuleUpdate(BaseModel):
     status: RuleStatus | None = None
     source_code: str | None = None
     change_note: str = ""
+    # Who wrote this version's source. A revision by the agent is machine-written
+    # even though the rule may have started life by hand, so the caller says so
+    # rather than the new row silently inheriting the old one's answer.
+    origin: RuleOrigin | None = None
+
+
+class RulePublish(BaseModel):
+    """Put one draft version on the air."""
+
+    version: int = Field(ge=1)
+
+
+class PublishOut(BaseModel):
+    """What publishing a draft did.
+
+    `activated` is separate from the report for the same reason it is on a
+    rollback: a candidate can be published and fail validation, and a client that
+    assumed otherwise would tell the operator a control is live when it is not.
+    """
+
+    rule: RuleOut
+    validation: ValidationReport
+    activated: bool = False
+
+
+class RuleReviseRequest(BaseModel):
+    """A change to an existing rule, in plain language - and the scope it may read."""
+
+    prompt: str = Field(min_length=5)
+    datasources: list[str] = Field(min_length=1)
+    lookback_days: int | None = Field(default=None, ge=1, le=365)
+    data_date: date | None = None
 
 
 class ValidationReport(BaseModel):

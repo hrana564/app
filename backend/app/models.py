@@ -85,9 +85,11 @@ class Rule(Base, TimestampMixin):
     """A single version of a rule.
 
     `code` identifies the LOGICAL rule and repeats across versions.
-    `is_version_active` marks the head. The partial unique index
-    `uq_rules_master_active_version` guarantees one head per code in the
-    database, not just in application code.
+    `is_version_active` marks the head - the version the scheduler runs. The
+    partial unique index `uq_rules_master_active_version` guarantees one head per
+    code in the database, not just in application code. A draft that is NOT the
+    head is a candidate: it sits beside the live version without taking it off the
+    air, until it is published and the head moves to it.
     """
 
     __tablename__ = "rules_master"

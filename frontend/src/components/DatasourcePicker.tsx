@@ -96,14 +96,14 @@ export const DatasourcePicker = ({
       {binding.unreadable ? (
         <Alert severity="warning" sx={{ mb: 1.5 }}>
           This rule has no readable <code>DATASOURCES</code> declaration, so the
-          picker will not overwrite the file. It reads{" "}
+          picker cannot bind it. It reads{" "}
           {binding.referenced.length ? (
             <strong>{binding.referenced.join(", ")}</strong>
           ) : (
             "nothing yet"
           )}
-          . Edit the constant in the source, and the picker will take over from
-          there.
+          . Ask the assistant to rewrite the rule, and it will declare the tables
+          it reads.
         </Alert>
       ) : (
         <Autocomplete

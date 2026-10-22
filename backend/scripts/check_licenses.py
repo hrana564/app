@@ -1,166 +1,120 @@
-"""
-License gate for the Audit Portal backend.
+"""License gate for the whole product - backend Python and frontend npm.
 
-Policy (see README -> Licensing):
-    ALLOWED  : Apache-2.0, MIT, BSD-2/3-Clause, ISC, PSF
-    BLOCKED  : GPL, AGPL, LGPL, SSPL, BUSL, Elastic/SSPL variants, proprietary,
-               and anything source-available that has relicensed away from OSI.
-    REVIEW   : MPL-2.0 and anything we cannot classify - reported, not failed.
+Policy lives in `license_policy.py` and is imported, never restated here. Read
+that module for what PERMITTED / REVIEW / UNKNOWN / BLOCKED mean and why the
+matching is exact rather than by substring.
 
-Why not "Apache/MIT only": FastAPI requires Starlette (BSD-3) and uvicorn is
-BSD-3. BSD-3 sits in the same permissive tier as MIT (attribution only). The
-only material difference from Apache-2.0 is the absence of an explicit patent
-grant. This script enforces the practical rule: no copyleft, no relicensing.
+    python scripts/check_licenses.py
 
-Exit codes: 0 = pass (with optional warnings), 1 = a blocked license was found.
+Exit codes: 0 = pass (REVIEW is reported but allowed), 1 = a blocked licence is
+present, or a licence could not be classified at all. UNKNOWN fails on purpose:
+an unclassifiable licence is exactly what a release must not wave through.
 """
 
 from __future__ import annotations
 
-import re
+import importlib.metadata as md
+import json
 import sys
+from pathlib import Path
 
-# Licenses that are acceptable on their own.
-PERMISSIVE = {
-    "apache",
-    "apache-2.0",
-    "apache software license",
-    "mit",
-    "mit license",
-    "bsd",
-    "bsd-2-clause",
-    "bsd-3-clause",
-    "bsd license",
-    "isc",
-    "isc license (iscl)",
-    "psf-2.0",
-    "python software foundation license",
-    "zlib",
-    "unlicense",
-}
+# license_policy.py owns the policy. Imported, never re-declared.
+from license_policy import classify, classify_distribution, licence_string
 
-# Licenses that must never appear.
-BLOCKING = {
-    "gpl",
-    "agpl",
-    "lgpl",
-    "sspl",
-    "busl",
-    "elastic",
-    "epl",
-    "cpal",
-    "proprietary",
-    "commercial",
-}
+BACKEND_DIR = Path(__file__).resolve().parent.parent
+APP_ROOT = BACKEND_DIR.parent
 
-# Weak copyleft / unclear - surfaced loudly but not fatal.
-NEEDS_REVIEW = {"mpl", "cddl", "eclipse", "artistic", "rpl", "mspl", "eupl"}
+VERDICTS = ("BLOCKED", "UNKNOWN", "REVIEW", "PERMITTED")
 
 
-def normalise(raw: str) -> str:
-    """Collapse a raw license string to a comparable form."""
-    text = (raw or "").strip().lower()
-    text = re.sub(r"licen[cs]e", "", text)
-    text = re.sub(r"version\s+", "", text)
-    text = re.sub(r"[(),\[\]]", " ", text)
-    text = re.sub(r"\s+", " ", text)
-    return text.strip()
+def _short(raw: str, width: int = 44) -> str:
+    """One line, truncated, for the report."""
+    first = (raw or "").splitlines()[0].strip() or "(none)"
+    return first[:width]
 
 
-def classify(raw: str) -> tuple[str, str]:
-    """
-    Return (verdict, reason).
-
-    Dual/multi licensing such as "MPL-2.0 AND (Apache-2.0 OR MIT)" is treated as
-    PERMITTED because the consumer may elect the permissive option.
-    """
-    text = normalise(raw)
-    if not text:
-        return "UNKNOWN", "no license metadata"
-
-    has_permissive = any(token in text for token in PERMISSIVE)
-    has_blocking = any(re.search(rf"\b{re.escape(tok)}\b", text) for tok in BLOCKING)
-    has_review = any(re.search(rf"\b{re.escape(tok)}\b", text) for tok in NEEDS_REVIEW)
-
-    if has_permissive:
-        return "PERMITTED", "permissive license present"
-    if has_blocking:
-        return "BLOCKED", f"copyleft/source-available: {raw.strip()[:60]}"
-    if has_review:
-        return "REVIEW", f"weak copyleft or needs sign-off: {raw.strip()[:60]}"
-    return "UNKNOWN", f"could not classify: {raw.strip()[:60]}"
-
-
-def main() -> int:
-    import importlib.metadata as md
-
-    verdicts: dict[str, list[tuple[str, str, str]]] = {
-        "BLOCKED": [],
-        "REVIEW": [],
-        "UNKNOWN": [],
-        "PERMITTED": [],
-    }
-
+def python_entries() -> list[tuple[str, str, str, str, str, str]]:
+    """(ecosystem, name, version, licence, verdict, reason) per distribution."""
+    rows = []
     for dist in md.distributions():
         name = dist.metadata["Name"]
         if not name:
             continue
-        raw = dist.metadata.get("License-Expression") or dist.metadata.get("License") or ""
-        if not raw or normalise(raw) in {"", "unknown"}:
-            raw = _license_from_classifier(dist)
+        verdict, reason = classify_distribution(dist)
+        rows.append(("python", name, dist.version, _short(licence_string(dist)), verdict, reason))
+    return rows
+
+
+def npm_entries() -> list[tuple[str, str, str, str, str, str]]:
+    """The same, for every package in frontend/package-lock.json."""
+    lock = APP_ROOT / "frontend" / "package-lock.json"
+    if not lock.exists():
+        print(
+            "  note: frontend/package-lock.json not found - npm packages are NOT gated",
+            file=sys.stderr,
+        )
+        return []
+
+    data = json.loads(lock.read_text(encoding="utf-8"))
+    rows = []
+    seen: set[tuple[str, str]] = set()
+    for path, meta in (data.get("packages") or {}).items():
+        if not path or not meta.get("version"):
+            continue
+        name = meta.get("name") or path.split("node_modules/")[-1]
+        key = (name, meta["version"])
+        if key in seen:
+            continue
+        seen.add(key)
+        raw = meta.get("license") or ""
         verdict, reason = classify(raw)
-        if verdict == "UNKNOWN":
-            # Metadata can be vague ("Dual License"); the Trove classifier is
-            # authoritative, so consult it before giving up.
-            from_classifier = _license_from_classifier(dist)
-            if normalise(from_classifier) != "unknown":
-                verdict, reason = classify(from_classifier)
-        verdicts[verdict].append((name, str(raw).strip()[:70], reason))
+        rows.append(("npm", name, meta["version"], _short(raw), verdict, reason))
+    return rows
 
-    print("=" * 72)
-    print("LICENSE AUDIT - Audit Portal backend")
-    print("=" * 72)
-    print(f"  PERMITTED : {len(verdicts['PERMITTED']):>3}")
-    print(f"  REVIEW    : {len(verdicts['REVIEW']):>3}")
-    print(f"  UNKNOWN   : {len(verdicts['UNKNOWN']):>3}")
-    print(f"  BLOCKED   : {len(verdicts['BLOCKED']):>3}")
 
-    for bucket in ("BLOCKED", "REVIEW", "UNKNOWN"):
-        items = sorted(verdicts[bucket])
+def main() -> int:
+    python_rows = python_entries()
+    npm_rows = npm_entries()
+    rows = python_rows + npm_rows
+
+    buckets: dict[str, list] = {verdict: [] for verdict in VERDICTS}
+    for row in rows:
+        buckets[row[4]].append(row)
+
+    print("=" * 78)
+    print("LICENSE AUDIT - Audit Portal (backend Python + frontend npm)")
+    print("=" * 78)
+    print(f"  python distributions : {len(python_rows):>4}")
+    print(f"  npm packages         : {len(npm_rows):>4}")
+    print(f"  total checked        : {len(rows):>4}")
+    print()
+    print(f"  PERMITTED : {len(buckets['PERMITTED']):>4}")
+    print(f"  REVIEW    : {len(buckets['REVIEW']):>4}")
+    print(f"  UNKNOWN   : {len(buckets['UNKNOWN']):>4}")
+    print(f"  BLOCKED   : {len(buckets['BLOCKED']):>4}")
+
+    for verdict in ("BLOCKED", "UNKNOWN", "REVIEW"):
+        items = sorted(buckets[verdict], key=lambda r: (r[0], r[1].lower()))
         if not items:
             continue
         print()
-        print(f"--- {bucket} " + "-" * (64 - len(bucket)))
-        for name, raw, reason in items:
-            print(f"  {name:<32} {raw:<40} {reason}")
+        print(f"--- {verdict} " + "-" * (70 - len(verdict)))
+        for eco, name, version, licence, _v, reason in items:
+            print(f"  [{eco:<6}] {name:<34} {version:<12} {licence:<24} {reason}")
 
     print()
-    if verdicts["BLOCKED"]:
-        print("RESULT: FAIL - blocked licenses present.")
+    if buckets["BLOCKED"]:
+        print("RESULT: FAIL - blocked licences present.")
         return 1
-    print("RESULT: PASS - no copyleft or source-available licenses in the tree.")
+    if buckets["UNKNOWN"]:
+        print("RESULT: FAIL - licences that could not be classified (add them to")
+        print("        license_policy.py if they are acceptable).")
+        return 1
+
+    print("RESULT: PASS - every dependency is permitted or reviewed.")
+    if buckets["REVIEW"]:
+        print("        The REVIEW entries need a recorded sign-off before release.")
     return 0
-
-
-def _license_from_classifier(dist) -> str:
-    """Fall back to Trove classifiers (older metadata may lack License-Expression)."""
-    for classifier in dist.metadata.get_all("Classifier") or []:
-        if not classifier.startswith("License ::"):
-            continue
-        parts = [p.strip() for p in classifier.split("::")]
-        leaf = parts[-1].lower()
-        if "apache" in leaf:
-            return "Apache-2.0"
-        if leaf.startswith("mit"):
-            return "MIT"
-        if "bsd" in leaf:
-            return "BSD-3-Clause"
-        if "isc" in leaf:
-            return "ISC"
-        if "psf" in leaf:
-            return "PSF-2.0"
-        return leaf
-    return "unknown"
 
 
 if __name__ == "__main__":

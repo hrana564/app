@@ -702,6 +702,8 @@ try each role without being given accounts by hand. Set
 app/
 ├── README.md                          the product: what it is and how it works
 ├── AGENTS.md                          how to change it without breaking it
+├── THIRD_PARTY_NOTICES.txt            attribution for every bundled dependency
+├── licenses/                          canonical licence texts, one per SPDX id
 ├── mount/                           external data: read by the app, never owned
 │   ├── SourceData/                  <ENTITY>/<date>/<table>.csv (generated; gitignored)
 │   │   ├── CLIENT-A/2026-10-15/ipos_sales.csv ...
@@ -755,7 +757,8 @@ app/
 │       ├── make_sample_data.py     generate SourceData with planted breaches
 │       ├── smoke_test.py           end-to-end test suite
 │       ├── run_api.py              start the API on the port .env names
-│       ├── check_licenses.py       license gate
+│       ├── check_licenses.py       license gate (Python + npm)
+│       ├── license_policy.py       THE policy: allowed / review / blocked
 │       └── write_third_party_notice.py  writes THIRD_PARTY_NOTICES.txt
 ├── docs/
 │   └── CREATING_A_RULE.md          a guide for the people who write the controls
@@ -1135,13 +1138,22 @@ rule yourself - is in **[docs/CREATING_A_RULE.md](docs/CREATING_A_RULE.md)**.
 
 ## 13. Licensing
 
-Every dependency is permissively licensed and the rule is **enforced, not asserted**:
+Every dependency — backend **and** frontend — is checked by one gate, against one
+policy, and the rule is **enforced, not asserted**:
 
 ```bash
 .\.venv\Scripts\python.exe scripts\check_licenses.py
 ```
 
-Current result: **52 permitted, 1 review, 0 unknown, 0 blocked.**
+Current result: **286 permitted, 3 review, 0 unknown, 0 blocked** across 289
+packages (57 Python + 232 npm). The three reviews are `certifi` (MPL-2.0),
+`tqdm` (`MPL-2.0 AND MIT`) and `caniuse-lite` (CC-BY-4.0, build only) — see "The
+policy, honestly".
+
+The gate reads the installed Python distributions *and* `frontend/package-lock.json`,
+so an npm dependency is held to the same rule as a pip one. Exit code is 1 on any
+**blocked** licence, and also on any **unknown** one: a licence that cannot be
+classified is precisely what a release must not wave through.
 
 | Layer | Package | License |
 |---|---|---|
@@ -1154,13 +1166,13 @@ Current result: **52 permitted, 1 review, 0 unknown, 0 blocked.**
 | Auth | `pyjwt` | MIT |
 | | `bcrypt` | Apache-2.0 |
 | LLM | `openai` | Apache-2.0 |
-| Misc | `orjson` | Apache-2.0 **or** MIT |
-| | `croniter` | MIT |
+| Misc | `croniter` | MIT |
 | Rules | `polars` | MIT |
 | Dev | `faker` | MIT (sample data only) |
 | Frontend | `react`, `react-dom` | MIT |
 | | `react-admin` | MIT |
 | | `@mui/material` | MIT (core only) |
+| | `@mui/icons-material` | MIT; icon artwork is Apache-2.0 |
 | | `vite` | MIT |
 | | `typescript` | Apache-2.0 |
 
@@ -1175,10 +1187,25 @@ difference is that Apache-2.0 grants an explicit **patent** licence.
 
 So the enforced policy is:
 
-- **Allowed:** Apache-2.0, MIT, BSD-2/3, ISC, PSF, Zlib
-- **Blocked:** GPL, AGPL, LGPL, SSPL, BUSL, Elastic, proprietary
-- **Review (non-fatal):** MPL-2.0 and anything unclassifiable
+- **Allowed:** MIT, Apache-2.0, BSD-2/3, ISC, PSF, 0BSD, Zlib, Unlicense, CC0
+- **Blocked:** GPL, LGPL, AGPL, SSPL, BUSL, Elastic, CPAL, OSL, RPL, proprietary
+- **Review (non-fatal):** weak copyleft — MPL-2.0, EPL, CDDL, CC-BY and friends.
+  Ship-compatible, but each needs a recorded sign-off.
+- **Unknown is fatal:** a licence the policy cannot classify fails the gate, rather
+  than passing as "review". Better a red build than an unlicensed release.
 - **Blocked regardless:** anything that relicenses later — the Soda Core / Grafana / n8n trap
+
+The matching is deliberate about three things a naive checker gets wrong:
+
+- **Exact tokens, never substrings.** An earlier version read `Disclaimer of warranty`
+  as ISC and `permit` as MIT, because `isc` and `mit` sit inside those words.
+- **`AND` is not `OR`.** `MIT OR GPL-3.0` is permitted (elect MIT); `MIT AND GPL-3.0`
+  is blocked. The expression is parsed with correct precedence before it is judged.
+- **Spelled-out names count.** `GPLv3`, `GNU General Public License v3.0` and
+  `Affero General Public License` are all blocked, not silently "unknown".
+
+The policy itself is one file — `backend/scripts/license_policy.py` — imported by
+both the gate and the notice writer, so they cannot drift.
 
 This blocks every license that has actually bitten a project. Two real examples this avoids:
 
@@ -1188,6 +1215,42 @@ This blocks every license that has actually bitten a project. Two real examples 
   published RCE (CVE-2023-37271). It is excluded twice over.
 
 `psycopg` is **LGPL-3.0** and was replaced by `asyncpg` (Apache-2.0) purely to satisfy this policy.
+
+### Attribution — the obligation the gate does not discharge
+
+Permissive is not obligation-free. MIT, BSD-2/3, ISC and Apache-2.0 all require the
+copyright notice *and the licence text* to travel with the software, and Apache-2.0
+additionally requires any `NOTICE` file to be propagated. `check_licenses.py` proves
+none of the dependencies are copyleft; it does **not** produce that attribution.
+Without it you may use the dependency but you are not compliant with its licence.
+
+`write_third_party_notice.py` produces it:
+
+```bash
+.\.venv\Scripts\python.exe scripts\write_third_party_notice.py
+```
+
+It writes `THIRD_PARTY_NOTICES.txt`:
+
+- a table of every Python and npm package with its version, licence and copyright
+  holder;
+- the full text of every licence that appears in the tree, reproduced once each;
+- any package-specific notice file (a `NOTICE`, or a non-standard licence)
+  reproduced verbatim;
+- an **Additional attributions** section for a package that ships material licensed
+  separately from its own metadata. `@mui/icons-material` is MIT, but the icon
+  artwork it distributes is Google's Apache-2.0 Material Icons, so both texts travel
+  with it. That mapping lives in `EXTRA_ATTRIBUTION` in the generator.
+
+Most wheels ship no licence file at all, so the canonical text of each licence lives
+in `licenses/`, one file per SPDX id, downloaded verbatim from the SPDX
+license-list-data repository — see `licenses/README.md`. The script refuses to write
+if a copyleft dependency is present **or** if it cannot find a text for a licence in
+the tree, so a release notice can never silently understate the obligation. Licence
+texts are matched by exact SPDX token, not by substring, so `example` is not read as
+MPL and `limits` is not read as MIT.
+
+Re-run it alongside the gate whenever a dependency changes.
 
 ---
 
@@ -1274,10 +1337,11 @@ The suite is **idempotent** — run it twice and it still reports 226/226. The d
 assertions work on ticket *identity* rather than absolute counts, so a previous run's tickets don't
 make the next run fail.
 
-### License gate
+### License gate and notice
 
 ```bash
-.\.venv\Scripts\python.exe scripts\check_licenses.py   # exit 1 on any blocked license
+.\.venv\Scripts\python.exe scripts\check_licenses.py           # exit 1 on any blocked license
+.\.venv\Scripts\python.exe scripts\write_third_party_notice.py # exit 1, and refuses to write, on any blocked or unattributable license
 ```
 
 ### Frontend

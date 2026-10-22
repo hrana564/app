@@ -33,6 +33,15 @@ from app.api.assurance import (  # noqa: E402
 from app.engine.rules import scoped_code  # noqa: E402
 from app.settings import settings  # noqa: E402
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from make_sample_data import DAYS as FIXTURE_DAYS  # noqa: E402
+
+# The days the estate holds, taken from the generator rather than written out
+# here. A number written in two places is a number that will disagree the day
+# someone adds a day to the fixture - and the suite would then be asserting
+# that the estate is wrong, rather than that it changed.
+EXPECTED_DAYS = sorted(d.isoformat() for d in FIXTURE_DAYS)
+
 # Where the API is, unless told otherwise on the command line. The port comes
 # from the configuration, so the suite cannot end up testing a port the server
 # is not listening on.
@@ -590,7 +599,8 @@ def main() -> int:
         for ent in (FIRST, SECOND):
             d = c.get("/api/datasources/available-dates", headers=ud,
                       params={"entity": ent}).json()
-            check(f"{ent} day folders present", len(d["dates"]) == 6, str(d["dates"]))
+            check(f"{ent} day folders present",
+                  sorted(d["dates"]) == EXPECTED_DAYS, str(d["dates"]))
             check(f"{ent} reports a latest day", bool(d.get("latest")), str(d.get("latest")))
 
         # --- the admin's job: see what landed, register it, retire what we

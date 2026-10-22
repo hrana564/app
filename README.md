@@ -637,7 +637,7 @@ the API is.
 .\.venv\Scripts\python.exe scripts\make_sample_data.py
 ```
 
-Generates `mount/SourceData/` for both entities across 6 days, with **deliberately planted breaches**:
+Generates `mount/SourceData/` for both entities across 8 days, with **deliberately planted breaches**:
 
 | Date | Client A | Client B |
 |---|---|---|
@@ -647,8 +647,10 @@ Generates `mount/SourceData/` for both entities across 6 days, with **deliberate
 | 2026-10-18 | **both** + ex-staff POS activity (LAD-CA-06) | vendor/employee bank match |
 | 2026-10-19 | clean | vendor/employee bank match |
 | 2026-10-20 | clean | vendor/employee bank match |
+| 2026-10-21 | **last-hour spike** (LAD-CA-03) | vendor/employee bank match |
+| 2026-10-22 | **single-staff cash dominance** (LAD-CA-04) | vendor/employee bank match |
 
-And on **18 and 20 October**, in both estates, two more:
+And on **18, 20 and 22 October**, in both estates, two more:
 
 | Planted | What it looks like | Read by |
 |---|---|---|

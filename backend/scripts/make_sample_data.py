@@ -76,15 +76,17 @@ DAYS = [
     date(2026, 10, 18),
     date(2026, 10, 19),
     date(2026, 10, 20),
+    date(2026, 10, 21),
+    date(2026, 10, 22),
 ]
 
 A_STORES = ["LD-101", "LD-102", "LD-103", "LD-104", "LD-105", "LD-106"]
 B_STORES = ["ST-101", "ST-102", "ST-103", "ST-104", "ST-105"]
 
-# The days a planted exception lands on. Two of them, and never a day the
+# The days a planted exception lands on. Three of them, and never a day the
 # suite's "this control is quiet" assertions rely on - so a control has clean
 # days to stay quiet on, and a planted day to be loud on.
-PLANTED_DAYS = (date(2026, 10, 18), date(2026, 10, 20))
+PLANTED_DAYS = (date(2026, 10, 18), date(2026, 10, 20), date(2026, 10, 22))
 
 A_ITEM_GROUPS = ["RETAIL", "BAKERY", "BAR"]
 B_ITEM_GROUPS = ["RETAIL", "GROCERY", "ELECTRONICS"]
@@ -108,12 +110,16 @@ SCENARIO = {
     (_FIRST, date(2026, 10, 18)): "both_breaches",
     (_FIRST, date(2026, 10, 19)): "clean",
     (_FIRST, date(2026, 10, 20)): "clean",
+    (_FIRST, date(2026, 10, 21)): "last_hour_spike",
+    (_FIRST, date(2026, 10, 22)): "single_staff_cash",
     (_SECOND, date(2026, 10, 15)): "bank_match",
     (_SECOND, date(2026, 10, 16)): "bank_match",
     (_SECOND, date(2026, 10, 17)): "bank_match",
     (_SECOND, date(2026, 10, 18)): "bank_match",
     (_SECOND, date(2026, 10, 19)): "bank_match",
     (_SECOND, date(2026, 10, 20)): "bank_match",
+    (_SECOND, date(2026, 10, 21)): "bank_match",
+    (_SECOND, date(2026, 10, 22)): "bank_match",
 }
 
 
@@ -721,8 +727,14 @@ def _discounts(
 
 
 def _iban(rng: random.Random, seed: str) -> str:
+    """A bank account number, stable across processes.
+
+    `hash()` on a str is salted per interpreter, so it cannot be used here: the
+    fixture regenerated tomorrow would hand every employee a different account,
+    and the days in the estate would stop sharing one master file.
+    """
     body = "".join(str(rng.randrange(10)) for _ in range(14))
-    return f"AE{abs(hash(seed + body)) % 10**16:016d}"
+    return f"AE{_stable_seed(seed + body) % 10**16:016d}"
 
 
 def day_before(rng: random.Random) -> date:

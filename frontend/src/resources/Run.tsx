@@ -17,19 +17,6 @@ import { runOutcomeColor, runStatusColor } from "../theme";
 import { useEntityScope } from "../entityScope";
 import { can, usePermissions } from "../permissions";
 
-/**
- * A run summary is written for a detail page, so it runs to 160 characters and
- * wraps a list cell onto three lines - which is what turns a scannable table
- * into a scroll.
- *
- * Only the FIRST clause carries the finding. What follows it is commentary
- * ("Payments to these vendors require review") or a worked example ("Worst:
- * Garry Vaughan (1 txns, last active ...)"), and the row either way is decided
- * by the Result column beside it. So: cut at the first sentence, cut again at
- * the first dash if what remains is still substantial, and only truncate at a
- * word boundary as a last resort. The full text stays on the tooltip and on
- * the run page.
- */
 const shortenSummary = (text?: string | null, cap = 120): string => {
   if (!text) return "";
   let s = text.split(/\.\s+/)[0];
@@ -53,13 +40,6 @@ const TRIGGER_LABEL: Record<string, string> = {
   schedule: "scheduled",
 };
 
-/**
- * `pass` and `fail` are the values the engine stores; these are the words a
- * reader gets. Both mean the rule executed - the difference is what it found -
- * so neither is ever the word "fail", which read as a broken system. The
- * vocabulary matches the rest of the app: a run raises findings, it does not
- * "fail".
- */
 const OUTCOME_LABEL: Record<string, string> = {
   fail: "Findings raised",
   pass: "No findings",
@@ -111,14 +91,6 @@ const RerunButton = ({ label }: { label?: string }) => {
   );
 };
 
-/**
- * Did it run, and what did it find - as two columns.
- *
- * These were one column reading "Fail", which is why a runs list looked like a
- * wall of faults. A red `fail` here means the control worked and caught
- * something; it is not a broken system. Only `failed` is a broken system, and
- * it now sits in the column that actually answers that question.
- */
 export const RunStatusCell = ({ source }: { source: string; label?: string }) => {
   const record = useRecordContext<any>();
   const theme = useTheme();
@@ -190,12 +162,6 @@ const RunSummary = ({ source }: { source: string; label?: string }) => {
   );
 };
 
-/**
- * Fixed widths for the columns around the finding, so the finding absorbs
- * whatever width is left instead of the browser redistributing against the
- * longest cell in the row. Column 6 is deliberately absent - that is the one
- * that takes the remainder.
- */
 const FIXED_WIDTHS: Array<[number, number]> = [
   [1, 58], [2, 112], [3, 98], [4, 148], [5, 150], [7, 70], [8, 82], [9, 124], [10, 50],
 ];

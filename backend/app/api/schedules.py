@@ -1,11 +1,3 @@
-"""
-Rule schedules - friendly cadence only.
-
-Nothing here accepts or returns a user-typed cron as the primary interface.
-`cron` appears in the response for engineers debugging the scheduler, but the
-UI works entirely from `kind` + `config` + `cadence_label` + `upcoming_runs`.
-"""
-
 from __future__ import annotations
 
 import logging
@@ -53,7 +45,6 @@ ScheduleWriter = Annotated[User, Depends(require(SCHEDULES_WRITE))]
 
 
 def _to_out(schedule: RuleSchedule) -> ScheduleOut:
-    """Shape a row for the API, adding the human labels the UI needs."""
     cadence = Cadence.from_dict(schedule.config)
     upcoming: list[datetime] = []
     try:
@@ -111,11 +102,6 @@ async def cadence_preview(
 # Used by the rules API when a rule is activated or paused
 # ---------------------------------------------------------------------------
 async def sync_schedules_for_code(session, code: str) -> int:
-    """(Re)register or remove every schedule for a rule code.
-
-    `rules.status` is the switch, so changing it must be reflected in
-    APScheduler immediately - otherwise a paused rule keeps firing overnight.
-    """
     rows = (
         await session.execute(
             select(RuleSchedule).where(RuleSchedule.rule_code == code)

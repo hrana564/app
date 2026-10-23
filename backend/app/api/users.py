@@ -1,24 +1,3 @@
-"""Users: the accounts, and the roles that decide what they may do.
-
-Until this router existed the only way to have a user was to put one in the
-deployment's `.env` and restart. There was no way to add somebody, change a
-role, deactivate an account, or change a password - not even your own. A
-portal whose whole promise is that an auditor has a role to play cannot
-manage the people who hold those roles.
-
-WHAT A DELETE MEANS
--------------------
-`DELETE /api/users/{id}` removes the row. It does not deactivate it, because
-that would be a button that does not do what it says - the same fault that got
-the datasource `retire` action removed.
-
-The consequence is named here rather than discovered later: `created_by` and
-`acknowledged_by` are strings, not references, so the ledger keeps the
-username. A deleted username that is later reused makes those old entries
-ambiguous. That is the cost of removing a person, and it is why the refusals
-below exist rather than a redaction table.
-"""
-
 from __future__ import annotations
 
 import re
@@ -70,7 +49,6 @@ def _validate_role(role: str) -> str:
 
 
 async def _active_admins(session: SessionDep, *, excluding: int | None = None) -> int:
-    """How many enabled administrators exist, optionally ignoring one."""
     stmt = select(func.count()).select_from(User).where(
         User.role == ROLE_ADMIN, User.is_active.is_(True)
     )
@@ -82,13 +60,6 @@ async def _active_admins(session: SessionDep, *, excluding: int | None = None) -
 async def _require_not_last_admin(
     session: SessionDep, target: User, *, action: str
 ) -> None:
-    """Refuse an action that would leave the portal with no administrator.
-
-    The bootstrap in `main.py` only seeds a user that does not already exist,
-    so the only way back from "no administrators" is to edit the database by
-    hand. A portal that cannot be recovered through its own UI is a portal
-    somebody will have to recover the hard way.
-    """
     if target.role != ROLE_ADMIN or not target.is_active:
         return
     if await _active_admins(session, excluding=target.id) == 0:

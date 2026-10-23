@@ -1,20 +1,3 @@
-"""
-Friendly schedule configuration.
-
-Users never see or type cron. They pick a preset and fill in a few plain fields;
-this module is the only place that knows about cron expressions.
-
-Design constraints that come from being an auditing platform rather than a demo:
-
-  * MONTHLY is capped at day 28. A cron of "day 30" silently does not fire in
-    11 months of the year, and a month-end control that skips months is worse
-    than useless - it looks like it ran. True month-end needs rule-side logic.
-  * HOURLY only accepts intervals that divide 24, otherwise "every 7 hours"
-    drifts and some days get three runs and others get none.
-  * Everything is validated *before* it is stored, and the next fire times are
-    previewable, so nobody discovers a bad schedule by waiting a week for it.
-"""
-
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -88,8 +71,6 @@ PRESET_CHOICES: list[dict[str, Any]] = [
 
 @dataclass
 class Cadence:
-    """A user-friendly schedule. Cron is derived, never authored."""
-
     kind: str = KIND_DAILY
     time_of_day: str | None = DEFAULT_TIME
     interval_hours: int | None = None
@@ -128,19 +109,10 @@ class Cadence:
 
 
 class CadenceError(ValueError):
-    """Raised when a friendly config cannot be turned into a valid cron."""
-
+    pass
 
 @dataclass(frozen=True)
 class Clock:
-    """A parsed HH:MM.
-
-    Deliberately a named type rather than a tuple: an earlier version returned
-    `(hour, minute)` positionally and callers unpacked it as `(minute, hour)`,
-    which silently turned "Daily at 06:30" into the invalid cron `06 30`
-    (minute 6, hour 30). Names make that class of bug impossible.
-    """
-
     hour: int
     minute: int
 
@@ -165,11 +137,6 @@ def _split_time(value: str | None, default: str = DEFAULT_TIME) -> Clock:
 
 
 def assert_valid_cron(expr: str) -> str:
-    """Force croniter to actually parse the expression.
-
-    `croniter.is_valid` is lenient about some malformed input, so we construct
-    an iterator and demand a next value instead of trusting a boolean.
-    """
     text = (expr or "").strip()
     if not text:
         raise CadenceError("empty cron expression")
@@ -187,12 +154,6 @@ def assert_valid_cron(expr: str) -> str:
 
 
 def to_cron(cadence: Cadence) -> str:
-    """Derive the cron expression. The single place cron is produced.
-
-    The result is always round-tripped through `assert_valid_cron`, so a bug in
-    the mapping above cannot hand APScheduler an expression that silently never
-    fires.
-    """
     return assert_valid_cron(_build_cron(cadence))
 
 
@@ -254,7 +215,6 @@ def _build_cron(cadence: Cadence) -> str:
 
 
 def describe(cadence: Cadence) -> str:
-    """Human label for the UI. Never shows cron except for CUSTOM."""
     kind = cadence.kind.upper()
 
     if kind == KIND_CUSTOM:
@@ -291,7 +251,6 @@ def next_runs(
     count: int = 5,
     start: datetime | None = None,
 ) -> list[datetime]:
-    """Next `count` fire times, for the 'what will this do?' preview."""
     try:
         zone = ZoneInfo(timezone)
     except (ZoneInfoNotFoundError, ValueError, KeyError):
@@ -311,7 +270,6 @@ def next_runs(
 
 
 def relative_time(target: datetime, now: datetime | None = None) -> str:
-    """'in 14h' / 'in 2d 3h' - what the schedule list shows next to each cadence."""
     now = now or datetime.now(target.tzinfo)
     delta = target - now
     seconds = int(delta.total_seconds())

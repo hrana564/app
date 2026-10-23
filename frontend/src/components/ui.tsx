@@ -41,14 +41,6 @@ export const EntityChip = ({ value }: { value?: string }) => {
 /* ------------------------------------------------------------------ */
 /* Dot + text                                                          */
 /* ------------------------------------------------------------------ */
-/**
- * The rules screen used a filled Chip for severity, status and validation -
- * three coloured blocks per row, so the eye had nothing to land on. Colour
- * survives here as a small accent dot; the fill does not.
- *
- * `tone` is a palette key, so the colour comes from the theme rather than a
- * second hard-coded table that could drift out of step with it.
- */
 export const DotLabel = ({
   value,
   tone = "default",
@@ -91,7 +83,6 @@ export const DotLabel = ({
   );
 };
 
-/** Status on the first line, validation state as a quiet caption beneath. */
 export const RuleStateCell = ({ record }: { record: any }) => {
   const status = record?.status;
   return (
@@ -113,12 +104,6 @@ export const RuleStateCell = ({ record }: { record: any }) => {
 /* react-admin's TextField has no `render` prop - these read the row   */
 /* record from context instead.                                        */
 /* ------------------------------------------------------------------ */
-/**
- * Build a react-admin Datagrid cell that reads its value off the row record.
- *
- * `source` is still required on the element: the Datagrid inspects children's
- * `source` prop to decide which columns are sortable.
- */
 export const fieldFromRecord =
   (render: (value: any, record: any) => React.ReactNode) =>
   // eslint-disable-next-line react/display-name
@@ -128,15 +113,6 @@ export const fieldFromRecord =
     return <>{render(record?.[source], record)}</>;
   };
 
-/**
- * The same chip, two ways: as a `<Datagrid>` column, or handed a `record`
- * directly where there is no row to read from.
- *
- * The second path exists because a rule's detail page showed these chips in a
- * page header and not in a grid, and passing it an `EntityField` there was
- * refused at runtime - the field names its column through react-admin's
- * context, so without one the header threw.
- */
 const chipsFor =
   (render: (props: { value?: string }) => React.ReactElement) =>
   // eslint-disable-next-line react/display-name
@@ -151,12 +127,6 @@ export const EntityField = fieldFromRecord((v) => <EntityChip value={v} />);
 export const RowCountField = fieldFromRecord((v) => <RowCount value={v?.length} />);
 export const IdField = fieldFromRecord((v) => <RowCount value={v} />);
 
-/**
- * An icon action with a tooltip. Disabled actions stay in place and say why,
- * rather than disappearing - a missing button is a question a user has to ask.
- *
- * Give it `to` to navigate or `onClick` to act. It never accepts both.
- */
 export const ActionIcon = ({
   title,
   icon,
@@ -214,7 +184,6 @@ export const RowCount = ({ value }: { value?: number }) => (
   </Box>
 );
 
-/** Renders an arbitrary JSON object as a compact two-column key/value list. */
 export const JsonBlock = ({ value }: { value: Record<string, unknown> | undefined }) => {
   if (!value || Object.keys(value).length === 0) {
     return <Box sx={{ color: "text.secondary", fontStyle: "italic" }}>No metrics recorded.</Box>;
@@ -247,7 +216,6 @@ export const JsonBlock = ({ value }: { value: Record<string, unknown> | undefine
   );
 };
 
-/** Read-only Python source viewer. Deliberately not a full editor - keep it light. */
 export const CodeBlock = ({ code }: { code: string }) => (
   <Box
     component="pre"
@@ -296,14 +264,6 @@ const PY_COLOURS: Record<PyKind, string> = {
   text: "#e6edf3",
 };
 
-/**
- * Split source into coloured tokens, then into lines.
- *
- * A syntax highlighter would be a dependency, and this file needs six colours
- * and no error recovery: the worst it can do to a wrong guess is colour one
- * word strangely. Splitting on newlines *after* tokenising is what keeps a
- * multi-line docstring - which is where a rule explains itself - in one piece.
- */
 const pyLines = (code: string): { text: string; kind: PyKind }[][] => {
   const lines: { text: string; kind: PyKind }[][] = [[]];
   PY_TOKEN.lastIndex = 0;
@@ -325,14 +285,6 @@ const pyLines = (code: string): { text: string; kind: PyKind }[][] => {
   return lines;
 };
 
-/**
- * A rule's source, numbered, with one range lit up.
- *
- * The line numbers are not decoration: every step of the plain-English
- * description points at a range, and a reader checking the description against
- * the code needs to find line 73 quickly. `highlight` is that range, set by
- * whichever step the reader is looking at.
- */
 export const PythonBlock = ({
   code,
   highlight,
@@ -396,16 +348,6 @@ export const PythonBlock = ({
   );
 };
 
-/** Tabular viewer for the Exception lines attached to a ticket or run. */
-/**
- * A grid of records, scrollable in both directions with the header pinned.
- *
- * Shared by a run's Exception lines and a datasource preview, which want the same
- * thing from different data. The optional props exist because the defaults are
- * tuned for the first: a run's rows are the reason the user is on the page, so
- * they are capped and say so when empty, while a preview is for skimming and
- * should show every column the file has.
- */
 export const RowsTable = ({
   rows,
   emptyLabel = "No Exception lines.",
@@ -416,7 +358,6 @@ export const RowsTable = ({
   rows: Record<string, unknown>[];
   emptyLabel?: string;
   maxColumns?: number;
-  /** Column name -> type, shown under the header rather than beside it. */
   types?: Record<string, string>;
   caption?: React.ReactNode;
 }) => {

@@ -1,25 +1,8 @@
-/**
- * Data provider.
- *
- * This is the ONLY module that talks to the backend. Everything else in the UI
- * goes through react-admin. That matters for the Power Apps migration: the
- * connector will consume the same REST endpoints, so swapping this provider for
- * an OData one later does not touch a single screen.
- */
 import type { DataProvider, GetListParams, GetListResult } from "react-admin";
 
 const TOKEN_KEY = "audit.token";
 const USER_KEY = "audit.user";
 
-/**
- * Fired whenever the session changes - a sign-in, a sign-out, or a 401
- * anywhere in the app clearing it.
- *
- * A provider that reads the token once at mount would keep asking for
- * things as a stranger after the user signed out, and would keep waiting for
- * a list it can never get. The session is a moment, not a state, and this is
- * how the rest of the app hears about it.
- */
 export const SESSION_EVENT = "audit:session";
 
 export const getToken = () => localStorage.getItem(TOKEN_KEY);
@@ -32,14 +15,6 @@ export const storeSession = (token: string, user: unknown) => {
   localStorage.setItem(USER_KEY, JSON.stringify(user));
   window.dispatchEvent(new Event(SESSION_EVENT));
 };
-/**
- * Replace the cached user without touching the token.
- *
- * Used when the server tells us who the session belongs to - which is how a
- * role changed by an administrator reaches the browser that is holding the
- * old answer. The event fires because everything that reads the cached user
- * (the permission list, the identity) has to hear about it.
- */
 export const setStoredUser = (user: unknown) => {
   localStorage.setItem(USER_KEY, JSON.stringify(user));
   window.dispatchEvent(new Event(SESSION_EVENT));
@@ -50,17 +25,8 @@ export const clearSession = () => {
   window.dispatchEvent(new Event(SESSION_EVENT));
 };
 
-/**
- * Where to go once the visitor has signed in.
- *
- * A deep link is a link somebody was sent, and it is the reason the session
- * existed at all - so signing in should return to it rather than to the
- * dashboard. The app has to remember it itself, because it decides which
- * route to show before the sign-in has happened.
- */
 const RETURN_TO_KEY = "audit.returnTo";
 
-/** Remember the route the visitor was trying to reach, if it is worth returning to. */
 export const rememberReturnTo = (hash: string) => {
   const path = hash.replace(/^#/, "");
   if (!path || path.startsWith("/login")) return;
@@ -71,7 +37,6 @@ export const rememberReturnTo = (hash: string) => {
   }
 };
 
-/** The remembered route, and forget it - a destination is used once. */
 export const takeReturnTo = (): string | undefined => {
   try {
     const path = sessionStorage.getItem(RETURN_TO_KEY) ?? undefined;
@@ -82,22 +47,6 @@ export const takeReturnTo = (): string | undefined => {
   }
 };
 
-/**
- * Put the app on the login route.
- *
- * There is one rule here - no session means the login form is what should be
- * on screen - and it is enforced in two places, because it has to hold at two
- * moments: before the first render, and when the session goes away while the
- * app is open.
- *
- * It is worth being precise about why the app is put on the login route
- * rather than being left to bounce off the protected routes. react-admin
- * signs an anonymous visitor out of the protected branch, the sign-out clears
- * the query cache, clearing the cache re-runs the auth check, the check
- * fails, and the branch signs the visitor out again - fifty times over, which
- * is where React's "maximum update depth exceeded" comes from. The login route
- * is not that branch, so arriving on it is the one way in that does not loop.
- */
 export const goToLogin = () => {
   if (window.location.hash.includes("/login")) return;
   window.location.hash = "#/login";
@@ -111,41 +60,19 @@ export class ApiError extends Error {
   }
 }
 
-/**
- * A query-parameter bag. Numbers are allowed because a page size or a window is
- * genuinely numeric, and stringifying at the boundary beats casting at 12 call
- * sites.
- */
 type Query = Record<string, string | number | undefined>;
 
-/** Drop empty values so a filter object can be passed straight through. */
 const compact = (params: Query) => {
   const q = new URLSearchParams();
   for (const [k, v] of Object.entries(params)) if (v) q.set(k, String(v));
   return q.toString();
 };
 
-/**
- * The same, ready to append to a path.
- *
- * `compact` returns a bare query string with no leading `?`, so writing
- * `` `/api/dashboard${compact(...)}` `` produced `/api/dashboardentity=SCOPE` and a
- * 404 that looked like a routing problem. Everything here goes through this.
- */
 const qs = (params: Query) => {
   const s = compact(params);
   return s ? `?${s}` : "";
 };
 
-/**
- * One request, one answer.
- *
- * `unauthorizedIsAnAnswer` says that a 401 here is the response the caller
- * asked for rather than an expired session. The sign-in endpoint is the case
- * that matters: wrong credentials are what a 401 means there, and treating it
- * as an expiry would report "your session has expired" to somebody who never
- * had one, and clear a session they were trying to start.
- */
 async function request<T>(
   path: string,
   options: RequestInit = {},
@@ -188,16 +115,9 @@ const API_MAP: Record<string, string> = { runs: "rule-runs" };
 
 const base = (resource: string) => `/api/${API_MAP[resource] ?? resource}`;
 
-/**
- * Rules are addressed by their permanent `code`, not the numeric row id - a
- * row id identifies one VERSION, while the code identifies the rule. So for the
- * `rules` resource react-admin's `id` is set to the code, which makes every URL
- * (getOne, update, delete) resolve with no per-screen special-casing.
- */
 const identifyRules = (records: any[]) =>
   records.map((r) => ({ ...r, id: r.code }));
 
-/** react-admin list params -> query string. */
 function listQuery(resource: string, params: Partial<GetListParams>): string {
   const q = new URLSearchParams();
   const p = params.pagination as { page: number; perPage: number };
@@ -317,12 +237,6 @@ export interface EntityOut {
   systems: string[];
 }
 
-/**
- * One account the sign-in screen offers.
- *
- * The password is in it because the panel exists so a reviewer can try each
- * role without being given accounts by hand.
- */
 export interface DemoAccount {
   username: string;
   password: string;
@@ -330,32 +244,16 @@ export interface DemoAccount {
   blurb: string;
 }
 
-/**
- * One account.
- *
- * `permissions` is the resolved capability list, derived by the server from
- * the role. It travels with the user so the frontend never has to know what a
- * role is allowed to do - the role string is for display, the list is for
- * decisions.
- */
 export interface UserRow {
   id: number;
   username: string;
   full_name: string;
   role: string;
-  /** What that role is called, derived by the server. A label, not a value. */
   role_label: string;
   is_active: boolean;
   permissions: string[];
 }
 
-/**
- * One role, and what it holds.
- *
- * Served by the server, because the matrix that decides this is the server's.
- * The frontend asks "what roles are there, and what does each one do?" and is
- * answered - it does not keep its own copy of the answer.
- */
 export interface RoleOption {
   name: string;
   label: string;
@@ -363,7 +261,6 @@ export interface RoleOption {
   capabilities: string[];
 }
 
-/** One capability, named the way a screen shows it. */
 export interface CapabilityOption {
   name: string;
   label: string;
@@ -371,13 +268,11 @@ export interface CapabilityOption {
   group_label: string;
 }
 
-/** The whole matrix: the rows, the columns, and which crosses where. */
 export interface RoleMatrix {
   capabilities: CapabilityOption[];
   roles: RoleOption[];
 }
 
-/** One registered table, plus what we know about it right now. */
 export interface DatasourceRow {
   id: number;
   name: string;
@@ -387,28 +282,22 @@ export interface DatasourceRow {
   path_template: string;
   grain: string;
   columns: Record<string, string>;
-  /** Active rules that read this table. The answer to "what breaks if I remove it". */
   used_by: string[];
-  /** "landed" when the ETL delivered the file for the requested day, else "absent". */
   landing: "landed" | "absent";
   row_count: number | null;
   last_seen: string | null;
 }
 
-/** The first rows of one landed file. */
 export interface DatasourcePreview {
   entity: string;
   name: string;
   data_date: string;
-  /** Rows in the whole file, so the screen can say "10 of 4,318". */
   total_rows: number | null;
-  /** Column name -> type, read from the file. Shown under each header. */
   columns: Record<string, string>;
   rows: Record<string, string | null>[];
   limit: number;
 }
 
-/** One CSV on disk, described entirely by reading the file. */
 export interface DiscoveredFile {
   name: string;
   entity: string;
@@ -431,7 +320,6 @@ export interface DatasourceOverview {
   discovered: DiscoveredFile[];
 }
 
-/** One attempt at a working rule, and how it ended. */
 export interface GenerationAttempt {
   n: number;
   ok: boolean;
@@ -439,7 +327,23 @@ export interface GenerationAttempt {
   traceback: string | null;
 }
 
-/** What the trial found when the candidate was run against real data. */
+/**
+ * What a rule's source declares and reads.
+ *
+ * The server works this out with the AST, because the server is what decides
+ * whether a rule may be activated. The browser used to answer the same
+ * question with a regex, and the two could disagree about the same file.
+ */
+export interface SourceBinding {
+  declared: string[];
+  referenced: string[];
+  unreadable: boolean;
+  undeclared: string[];
+  unused: string[];
+  declaration: string;
+  source_code: string;
+}
+
 export interface TrialResult {
   status: string;
   ok: boolean;
@@ -449,7 +353,6 @@ export interface TrialResult {
   metrics: Record<string, any>;
   error: string | null;
   duration_ms: number;
-  /** Values the rule tests a column for that the data does not hold. */
   warnings: string[];
 }
 
@@ -466,51 +369,45 @@ export interface RuleGenerateResponse {
   attempts: GenerationAttempt[];
   suggested_code: string | null;
   error: string | null;
+  explanation: ExplanationDraft | null;
   trace: AgentStep[];
 }
 
-/** One tool the agent used, and what it learned. */
 export interface AgentStep {
   tool: string;
   args: Record<string, any>;
   summary: string;
 }
 
-/**
- * One step of a rule, in the words somebody wrote for it.
- *
- * `lines` always comes from the rule's own source, so the reference beside a
- * step lands on the code that step describes even after a model has rewritten
- * the sentence.
- */
 export interface ExplanationStep {
   n: number;
   text: string;
   lines: number[];
-  kind: string;
   explainable: boolean;
 }
 
-/** One check a description had to pass before it was shown. */
+export interface ExplanationDraft {
+  breach_condition: string;
+  steps: { n: number; text: string }[];
+  outputs: string[];
+  origin: string;
+  generated_by: string;
+  model: string;
+  prompt_version: string;
+}
+
 export interface ExplanationGate {
   name: string;
   ok: boolean;
   detail: string;
+  blocking: boolean;
 }
 
-/**
- * What a rule does, and who says so.
- *
- * `origin` is the question an auditor asks before trusting the words:
- * `derived` was read off the source, `ai` was written by a model and gated,
- * `edited` was written by a person. `stale` means the code has moved since -
- * the words are withheld rather than shown out of date.
- */
 export interface RuleExplanation {
   code: string;
   version: number;
   source_sha256: string;
-  origin: "derived" | "ai" | "edited";
+  origin: "none" | "ai" | "edited";
   stored: boolean;
   stale: boolean;
   llm_configured: boolean;
@@ -518,7 +415,6 @@ export interface RuleExplanation {
   breach_condition: string;
   steps: ExplanationStep[];
   outputs: string[];
-  cannot_explain: { n: number; reason: string }[];
   gates: ExplanationGate[];
   generated_by: string;
   model: string;
@@ -541,56 +437,22 @@ export const api = {
 
   me: () => request<any>("/api/auth/me"),
 
-  /**
-   * The accounts the sign-in screen offers, with their passwords.
-   *
-   * Served by the API rather than hardcoded here, because the screen and the
-   * seed are then one list rather than two - and two copies of a list of
-   * passwords drift the first time somebody changes one.
-   *
-   * Empty unless the deployment has opted in, which is why the panel is
-   * allowed to render nothing.
-   */
   demoAccounts: () => request<DemoAccount[]>("/api/auth/demo-accounts"),
 
-  /**
-   * The assurance read model behind the landing page.
-   *
-   * One payload, derived on read from the ledger - there is no summary table
-   * that can fall out of step with `rule_runs` and `tickets`.
-   */
   dashboard: (entity?: string, windowDays?: number) =>
     request<any>(`/api/dashboard${qs({ entity, window: windowDays })}`),
 
-  /**
-   * Flat ticket list, for the ungrouped inbox view.
-   *
-   * `/api/tickets/summary` and `/api/rule-runs/summary` are still served and
-   * still documented - they are what the Power Apps connector consumes - but no
-   * screen calls them. The landing page reads the assurance payload instead,
-   * and a wrapper nothing calls is a wrapper that quietly rots.
-   */
   listTickets: (params: Record<string, string | undefined>) =>
     request<{ data: any[]; total: number }>(
       `/api/tickets${qs({ ...params, sort: "created_at", order: "DESC" })}`,
     ),
 
-  /**
-   * Tickets grouped across the WHOLE filtered set, paginated by group.
-   *
-   * Grouping a page of tickets fragments a rule across pages, so its count on
-   * each page is wrong - and a bulk acknowledge behind that count then touches
-   * more tickets than the header said. Counts here are computed before paging.
-   */
   groupedTickets: (params: Record<string, string | undefined>) =>
     request<{
       groups: any[];
       total_groups: number;
-      /** The true number of tickets matching the filter, counted by the server. */
       total_tickets: number;
-      /** How many the scan actually read. Less than total_tickets when `truncated`. */
       scanned: number;
-      /** True when the server's scan ceiling hid older tickets from the groups. */
       truncated: boolean;
       scan_limit: number;
     }>(`/api/tickets/grouped${qs(params)}`),
@@ -603,14 +465,6 @@ export const api = {
       body: JSON.stringify({ status, note }),
     }),
 
-  /**
-   * Acknowledge every OPEN ticket matching the given filters, server-side.
-   *
-   * The filters are the ones the inbox is showing, so the action can never
-   * reach a ticket the auditor cannot see - `entity` included, because the app
-   * bar's client scope is part of what is on screen. Doing this from the
-   * browser would mean one request per ticket.
-   */
   acknowledgeAllTickets: (payload: {
     status?: "acknowledged" | "dismissed";
     note?: string;
@@ -628,14 +482,18 @@ export const api = {
     request<any>(`/api/tickets/${id}/reopen`, { method: "POST" }),
 
   // --- rules (addressed by code) ----------------------------------------
-  /**
-   * One version's source, or the head's when no version is named.
-   *
-   * The version is not a nicety: each row has its own file on disk, so this is
-   * what makes "the code pane is showing v1" true rather than hopeful.
-   */
   ruleSource: (code: string, version?: number | null) =>
     request<any>(`/api/rules/${code}/source${version ? `?version=${version}` : ""}`),
+
+  /**
+   * What a source declares and reads. With `names`, the source comes back
+   * with its DATASOURCES declaration set to them.
+   */
+  sourceBinding: (source_code: string, names?: string[]) =>
+    request<SourceBinding>("/api/source/binding", {
+      method: "POST",
+      body: JSON.stringify({ source_code, names: names ?? null }),
+    }),
 
   ruleVersions: (code: string) => request<any>(`/api/rules/${code}/versions`),
 
@@ -651,13 +509,6 @@ export const api = {
   deleteRule: (code: string) =>
     request<void>(`/api/rules/${code}`, { method: "DELETE" }),
 
-  /**
-   * Throw away the rule's working draft.
-   *
-   * A rule has at most one, and it is the version an edit rewrites. The
-   * published version is never touched - except when the draft is the only
-   * version, which means the rule was never published and goes with it.
-   */
   discardDraft: (code: string) =>
     request<void>(`/api/rules/${code}/draft`, { method: "DELETE" }),
 
@@ -684,26 +535,17 @@ export const api = {
       `/api/rules/${code}/validate-report${version ? `?version=${version}` : ""}`,
     ),
 
-  /**
-   * What this control does, in plain English.
-   *
-   * The structure comes from the rule's own source on every call, so a page
-   * that has been open since before an edit cannot describe code that is no
-   * longer there. Reading costs nothing - a GET never calls a model.
-   */
   explanation: (code: string, version?: number | null) =>
     request<RuleExplanation>(
       `/api/rules/${code}/explain${version ? `?version=${version}` : ""}`,
     ),
 
-  /** Write (or rewrite) the description. Costs a model call; stored on the rule. */
   generateExplanation: (code: string, version?: number | null) =>
     request<RuleExplanation>(
       `/api/rules/${code}/explain${version ? `?version=${version}` : ""}`,
       { method: "POST" },
     ),
 
-  /** A person's correction. The words are theirs from then on. */
   editExplanation: (
     code: string,
     payload: { breach_condition: string; steps: { n: number; text: string }[] },
@@ -714,7 +556,6 @@ export const api = {
       { method: "PUT", body: JSON.stringify(payload) },
     ),
 
-  /** Sign the description off, or withdraw the sign-off. */
   reviewExplanation: (
     code: string,
     approved: boolean,
@@ -731,14 +572,6 @@ export const api = {
 
   generateStatus: () => request<any>("/api/rules/generate/status"),
 
-  /**
-   * Ask for a rule, and get back one that has been run.
-   *
-   * The selection binds: the model is shown only `datasources`, and a rule
-   * that reads any other table is rejected before it executes. Nothing is
-   * created by this call - the rule row and the file are written when the
-   * admin presses Save, so nothing reaches the catalogue that nobody read.
-   */
   generateRule: (payload: {
     prompt: string;
     entity: string;
@@ -751,14 +584,6 @@ export const api = {
       body: JSON.stringify(payload),
     }),
 
-  /**
-   * Rewrite an existing rule from a plain-language change request.
-   *
-   * The same agent as `generateRule`, given the rule's current source and told
-   * to change only what the request asks. Nothing is written: it returns a
-   * candidate and the verdict on it, and the candidate becomes a draft version
-   * when the admin saves it.
-   */
   reviseRule: (
     code: string,
     payload: {
@@ -773,16 +598,6 @@ export const api = {
       body: JSON.stringify(payload),
     }),
 
-  /**
-   * Put a draft version on the air.
-   *
-   * The draft is validated first and only promoted if it passes, so a candidate
-   * that cannot read the estate cannot replace a working control.
-   *
-   * The version is required: sending none would reach the server as
-   * `{version: null}` and come back as a 422 that names the wrong problem, so it
-   * fails here with the real one.
-   */
   publishRule: (code: string, version: number) => {
     if (version == null) {
       throw new Error(`publishRule: no version given for ${code}`);
@@ -803,43 +618,19 @@ export const api = {
     source_code: string;
     status?: string;
     origin?: string;
+    explanation?: ExplanationDraft | null;
   }) =>
     request<any>("/api/rules", { method: "POST", body: JSON.stringify(payload) }),
 
-  /**
-   * The configured clients and the systems each one draws from.
-   *
-   * The endpoint wraps its list in `{ entities: [...] }`. The unwrap belongs
-   * here so a caller cannot treat the envelope as the list - which is how this
-   * read `entities.map is not a function`.
-   *
-   * How many there are is the deployment's business, not ours. It comes from
-   * CLIENT_ENTITIES via the API; the app bar and the entity scope both read
-   * this one call rather than keeping a list of their own.
-   */
   entities: () =>
     request<{ entities: EntityOut[] }>("/api/datasources/entities").then((d) => d.entities),
 
-  /**
-   * Everything the datasources screen shows, in ONE call: what is registered,
-   * what the ETL delivered today, and which rules read each table.
-   *
-   * One request rather than one per table - the same N+1 that used to make the
-   * rules screen issue a schedule fetch per row.
-   */
   datasourceOverview: (entity: string, dataDate?: string) =>
     request<DatasourceOverview>(
       `/api/datasources/overview?entity=${entity}` +
         (dataDate ? `&data_date=${dataDate}` : ""),
     ),
 
-  /**
-   * The first rows of one landed file.
-   *
-   * Read-only and catalogue-free: it works on any CSV the ETL dropped, including
-   * one nobody has registered, because deciding whether to register it is exactly
-   * when an admin needs to see what is in it.
-   */
   datasourcePreview: (entity: string, name: string, dataDate?: string, limit = 10) =>
     request<DatasourcePreview>(
       `/api/datasources/preview?entity=${encodeURIComponent(entity)}` +
@@ -861,11 +652,6 @@ export const api = {
       body: JSON.stringify(payload),
     }),
 
-  /**
-   * Remove a registration. Refused with 409 while an active rule still reads the
-   * table, naming the rules - the caller surfaces that, so the refusal is a
-   * decision rather than a surprise.
-   */
   deleteDatasource: (id: number) =>
     request<void>(`/api/datasources/${id}`, { method: "DELETE" }),
 
@@ -886,10 +672,6 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
-  /**
-   * Omit `ruleCode` to get every schedule in one call. The rules screen does
-   * exactly that - fetching per row meant one request per row.
-   */
   listSchedules: (ruleCode?: string) =>
     request<{ data: any[] }>(
       ruleCode ? `/api/rule-schedules?rule_code=${ruleCode}` : "/api/rule-schedules",
@@ -934,7 +716,6 @@ export const api = {
     }),
   deleteUser: (id: number) =>
     request<void>(`/api/users/${id}`, { method: "DELETE" }),
-  /** Change your own password. Nobody else can set it. */
   changeOwnPassword: (currentPassword: string, newPassword: string) =>
     request<UserRow>("/api/users/me/password", {
       method: "PATCH",
@@ -944,13 +725,5 @@ export const api = {
       }),
     }),
 
-  /**
-   * The role matrix: which role holds which capability.
-   *
-   * Read-only, and it is the SERVER's matrix rather than a copy of one. The
-   * settings screen draws it, and the account editor's role picker is built
-   * from the same list - so a role added on the server appears in both
-   * without anything here being edited.
-   */
   roleMatrix: () => request<RoleMatrix>("/api/roles"),
 };

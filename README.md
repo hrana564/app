@@ -467,6 +467,13 @@ Three things it tells you that a declaration alone would not:
 A rule whose declaration cannot be parsed is reported rather than rewritten: the
 picker shows what the code actually reads and leaves the file alone.
 
+Both the reading and the rewriting happen on the **server**, which parses
+Python with the AST. The browser used to answer the same question with a
+regex, and the two could disagree about the same file — a comment inside the
+declaration, say, which a regex reads as a table name and an AST does not. The
+server's answer is the one that decides whether a rule may be activated, so it
+is the only one there is now. See `POST /api/source/binding`.
+
 Declared dependencies are surfaced in the UI, so *"this rule needs `lad.last_hour_ratio`, which does
 not exist"* is a warning **before** a scheduled run silently defaults it.
 
@@ -637,6 +644,7 @@ the API is.
 .\.venv\Scripts\python.exe scripts\make_sample_data.py
 ```
 
+
 Generates `mount/SourceData/` for both entities across 8 days, with **deliberately planted breaches**:
 
 | Date | Client A | Client B |
@@ -696,6 +704,27 @@ All four are seeded from `.env` and offered on the sign-in screen, so you can
 try each role without being given accounts by hand. Set
 `SHOW_DEMO_ACCOUNTS=false` to hide that panel — the accounts still exist.
 
+### Step 7 — start again, from nothing
+
+There are no migrations on this project, on purpose: there is one disposable
+development database, so a model that has changed is answered by dropping the
+database and rebuilding it rather than by an `ALTER TABLE` script that would
+only ever run once.
+
+```bash
+# stop the API first - it holds connections to the database being dropped
+.\.venv\Scripts\python.exe scripts\reset_database.py
+```
+
+It drops the database, creates the tables from the models, seeds the accounts
+from `.env`, seeds the datasource catalogue, registers every demo rule in
+`backend/rules/`, and empties the run folders. The rule SOURCE files are the
+only thing it does not throw away, because they are code rather than data.
+
+Everything it produces is reproducible, so a reset is never a loss. Run it
+whenever a model changes, and whenever the accumulated test runs and tickets
+have made the estate hard to read.
+
 ---
 
 ## 8. Project layout
@@ -703,7 +732,6 @@ try each role without being given accounts by hand. Set
 ```
 app/
 ├── README.md                          the product: what it is and how it works
-├── AGENTS.md                          how to change it without breaking it
 ├── THIRD_PARTY_NOTICES.txt            attribution for every bundled dependency
 ├── licenses/                          canonical licence texts, one per SPDX id
 ├── mount/                           external data: read by the app, never owned
@@ -725,7 +753,11 @@ app/
 │   │   ├── permissions.py          THE MATRIX: what each role may do
 │   │   ├── api/
 │   │   │   ├── deps.py             auth + capability gating (require(*caps))
-│   │   │   ├── auth.py  rules.py  schedules.py  runs.py  tickets.py
+│   │   │   ├── auth.py  runs.py  tickets.py  schedules.py
+│   │   │   ├── rules.py            the rule's own lifecycle: read, edit, publish
+│   │   │   ├── rules_agent.py      ask for a rule, and revise one
+│   │   │   ├── rules_explain.py    what a rule does, in plain English
+│   │   │   ├── source.py           what a source declares and reads, and the rewrite
 │   │   │   ├── users.py            the accounts, and the roles they hold
 │   │   │   ├── roles.py            GET /api/roles: the whole permission model
 │   │   │   ├── assurance.py         the landing page's read model
@@ -744,8 +776,12 @@ app/
 │   │       ├── ticketing.py        run -> one ticket. Imports no Rule.
 │   │       ├── replay.py           re-run a captured folder. No DB, no network.
 │   │       ├── scheduler.py        APScheduler wiring
+│   │       ├── llm.py              THE MODEL CLIENT: one call, one place
 │   │       ├── rule_generator.py   the prompts: the connector contract + the data
 │   │       ├── rule_agent.py       the graph: write -> run -> repair
+│   │       ├── agent_tools.py      the tools the agent looks with, and their schemas
+│   │       ├── description.py      ONE owner of a rule's description: write, judge, store
+│   │       ├── explain.py          the structure of a rule, and the checks on a description
 │   │       └── trial.py            run a candidate rule without touching the ledger
 │   ├── rules/
 │   │   ├── _template.py
@@ -779,6 +815,7 @@ app/
         ├── components/RoleMatrix.tsx  the read-only roles table
         ├── pages/       Login.tsx  Dashboard.tsx  Settings.tsx
         └── resources/   Rule.tsx  Run.tsx  Ticket.tsx  Meta.tsx  User.tsx
+            └── rule/    the rule screen, split by job: one file per concern
 ```
 
 ---
@@ -849,7 +886,7 @@ datasource overview. Omit it and the endpoint answers for every client.
 
 Only `rules_master` carries the client. A run and a ticket inherit it from the
 rule that produced them, so those endpoints join to reach it — that join lives in
-`app/api/scope.py` and nowhere else. See AGENTS.md §2.
+`app/api/scope.py` and nowhere else.
 
 ### Auth
 | Method | Path | Capability | Description |
@@ -874,6 +911,7 @@ rule that produced them, so those endpoints join to reach it — that join lives
 | GET | `/api/rules/generate/status` | `rules.read` | Is the LLM configured? |
 | GET | `/api/rules/generate/context?entity=CLIENT-A` | `rules.read` | What the LLM would be shown |
 | POST | `/api/rules/generate` | `rules.generate` | Prompt + selection + lookback → a rule **that has been run**. Creates nothing |
+| POST | `/api/source/binding` | `rules.read` | What a source declares and reads, and — with `names` — the source with its `DATASOURCES` set to them. Nothing is saved |
 
 ### Schedules / Runs / Tickets / Params / Datasources
 | Method | Path | Capability | Description |
@@ -1362,7 +1400,7 @@ Honest list of what is **not** done yet:
 
 | Gap | Impact | Notes |
 |---|---|---|
-| **No schema versioning** | Tables come from `create_all` at startup | Deliberate while there is one disposable dev database — see **[AGENTS.md §1](AGENTS.md)**, which gives the reset recipe. Change a model, drop the database, reseed; do not write an `ALTER TABLE` script. Add Alembic the moment there is a **second environment** or data that cannot be regenerated. |
+| **No schema versioning** | Tables come from `create_all` at startup | Deliberate while there is one disposable dev database. Change a model, drop the database, reseed; do not write an `ALTER TABLE` script — run **`python backend/scripts/reset_database.py`** (see below). Add Alembic the moment there is a **second environment** or data that cannot be regenerated. |
 | **No process-level sandbox** | LLM-generated Python runs in-process | The AST gate blocks `os`/`subprocess`/`socket`/`open()` statically, but that is **not** a sandbox — a determined rule can still exhaust memory or spin a CPU. Acceptable while your devs write rules. **Mandatory hardening** if auditors type prompts and never read the diff: subprocess isolation, read-only mount, no network, rlimits. RestrictedPython is *not* a substitute — see §13. |
 | **No pagination beyond `perPage`** | Large tables return capped pages | Fine for dev volumes |
 | **No rule deletion from the UI** | API supports `DELETE` | Admin button not wired |

@@ -25,18 +25,6 @@ import { can, usePermissions } from "../permissions";
 
 /* ================= Datasources ================= */
 
-/**
- * What the ETL delivered, and what we consume.
- *
- * Two questions, two views, because conflating them is what made the previous
- * version useless: "did the file arrive" is not the same as "are we auditing it",
- * and an admin deciding what to switch off in the ETL needs to see the first
- * without hunting through the second.
- *
- * Every figure shown here is real. Row counts come from the file on disk,
- * columns from its header, and "used by" from the datasources each active rule
- * actually declared - none of it is decorative.
- */
 type View = "registered" | "landed";
 
 export const DatasourceList = () => {
@@ -231,13 +219,6 @@ const Stat = ({
 /* ------------------------------------------------------------------ */
 /* Registered                                                          */
 /* ------------------------------------------------------------------ */
-/**
- * One line per table, expand for the columns.
- *
- * The earlier version rendered every column as a chip, which put 138 chips on
- * one screen and gave the eye nothing to land on. A count plus an expansion is
- * the same information without the wall.
- */
 const RegisteredTable = ({
   rows, expanded, onToggle, onDelete, busy,
 }: {
@@ -396,17 +377,6 @@ const RegisteredTable = ({
 /* ------------------------------------------------------------------ */
 /* Data preview - the first rows of the file itself                     */
 /* ------------------------------------------------------------------ */
-/**
- * What the ETL actually sent, as a grid.
- *
- * Fetched when the row is opened rather than with the overview, because nine
- * previews nobody asked for is nine files read for nothing. The expanded row is
- * the only place a person decides whether this table looks right, so this is the
- * only place a preview is worth having.
- *
- * "10 of 400" is stated rather than left implied - a grid that stops at ten rows
- * and says nothing reads like the table has ten rows.
- */
 const PREVIEW_ROWS = 10;
 
 const DataPreview = ({ entity, name, day }: {
@@ -475,13 +445,6 @@ const DataPreview = ({ entity, name, day }: {
 /* ------------------------------------------------------------------ */
 /* Landed                                                              */
 /* ------------------------------------------------------------------ */
-/**
- * What the ETL actually delivered, read from the files.
- *
- * A file here that is not registered is not an error - it is a decision waiting
- * to be made. "New" means nothing reads it, which is exactly the signal the ETL
- * team needs to know a feed can be switched off.
- */
 const LandedTable = ({
   files, onRegister, busy,
 }: {
@@ -573,13 +536,6 @@ const LandedTable = ({
 /* ------------------------------------------------------------------ */
 /* Small pieces                                                        */
 /* ------------------------------------------------------------------ */
-/**
- * Dependent rules, capped so the row stays one line.
- *
- * ipos_sales is read by three rules and rendered them all, which made that one
- * row twice the height of every other. Two chips then "+1" with the full list on
- * hover - the count is the thing you scan for, the names are what you check.
- */
 const RuleUsers = ({ codes }: { codes: string[] }) => {
   if (!codes.length) {
     return (
@@ -630,16 +586,6 @@ const StateChip = ({ state }: { state: DiscoveredFile["state"] }) => {
   );
 };
 
-/**
- * Name and type side by side.
- *
- * Lives here, in the Register dialog, and nowhere else. A registered table
- * shows its types under the sample-data headers instead - drawing both meant
- * every expanded row listed its columns twice, one screen lower.
- *
- * A compact grid rather than one chip each: chip-per-column turned a
- * nine-column table into a paragraph and made a seventy-chip card unreadable.
- */
 const ColumnGrid = ({ columns }: { columns: Record<string, string> }) => {
   const entries = Object.entries(columns);
   if (!entries.length) return null;
@@ -676,11 +622,6 @@ const ColumnGrid = ({ columns }: { columns: Record<string, string> }) => {
 /* ------------------------------------------------------------------ */
 /* Register                                                            */
 /* ------------------------------------------------------------------ */
-/**
- * Columns arrive pre-filled from the CSV header. The admin confirms rather than
- * retypes, because a hand-typed column list is a second place for the truth to
- * go wrong.
- */
 const RegisterDialog = ({
   file, entity, busy, onClose, onDone,
 }: {
@@ -764,17 +705,6 @@ const RegisterDialog = ({
 /* ------------------------------------------------------------------ */
 /* Remove                                                              */
 /* ------------------------------------------------------------------ */
-/**
- * Removal is permanent, so the dialog says plainly what is lost.
- *
- * Reachable only for a table no rule reads - the button is replaced with a lock
- * on the row otherwise, so there is nothing to confirm away. The refusal is on
- * the server as well, because a client-side check is a suggestion.
- *
- * The file on disk is not touched. Removing a registration says "we no longer
- * consume this"; whether the ETL keeps producing it is a conversation with the
- * other team.
- */
 const DeleteDialog = ({
   row, busy, onClose, onDone,
 }: {

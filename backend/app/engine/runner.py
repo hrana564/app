@@ -1,24 +1,3 @@
-"""
-Rule runner - the entire execution engine.
-
-    fire (cron or manual)
-      -> insert a rule_runs row
-      -> stage the inputs into mount/Rules_Executions/<run_id>/
-      -> load rule .py
-      -> call run(ctx)
-      -> validate the returned dict against RuleResult
-      -> write result.json / error.txt into the run folder
-      -> if the rule returned rows, insert a ticket
-
-There is deliberately no more logic than that.
-
-THE RUN FOLDER IS THE ONLY READ PATH
-------------------------------------
-The rule reads the staged CSVs, never the mount. That is what makes the folder
-worth keeping: replaying it runs against the same bytes the original run read,
-so a failure you can reproduce is a failure you can fix.
-"""
-
 from __future__ import annotations
 
 import time
@@ -45,12 +24,6 @@ from app.settings import settings
 
 
 def json_safe(value: Any) -> Any:
-    """
-    Coerce a value into something the JSONB columns accept.
-
-    A rule that puts a datetime or a Decimal into `rows` or `metrics` would
-    otherwise fail at INSERT time with an opaque TypeError.
-    """
     if value is None or isinstance(value, (bool, int, float, str)):
         return value
     if isinstance(value, (datetime, date)):
@@ -76,7 +49,6 @@ async def execute_rule(
     schedule_id: int | None = None,
     triggered_by: str = "schedule",
 ) -> Run:
-    """Run one rule and persist the run (+ ticket when the rule fails)."""
     started = time.perf_counter()
     started_at = datetime.now(timezone.utc)
 

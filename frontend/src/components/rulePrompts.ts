@@ -1,37 +1,3 @@
-/**
- * Programme templates.
- *
- * A blank text box asks a user to be an engineer before they can be an
- * auditor. A template asks them the questions an engineer would ask, in the
- * order that matters, and answers the parts the catalogue already knows.
- *
- * THESE ARE CONTROLS, NOT SHAPES
- * -------------------------------
- * Each template is a control from the audit programme, in the programme's own
- * words - "Sales posted / settled after the store closing hours" - because a
- * control an auditor recognises is worth more than a shape they have to
- * imagine. The judgement stays with the user: the limit, the grace period, the
- * case that looks the same and is legitimate.
- *
- * WHAT THE CATALOGUE KNOWS, AND SO THE TEMPLATE KNOWS
- * ---------------------------------------------------
- * For every registered table we have its grain, its description and its
- * columns with their types. That is enough to write a prompt that names the
- * table and says what a row in it is. So the user is left filling in the only
- * part that is actually theirs: the judgement.
- *
- * The blanks are written as <angle brackets>. They are not placeholders the
- * product resolves - they are the questions the user has to answer, and the
- * prompt is not finished until they have.
- *
- * The prompt names the SYSTEMS, never the columns. "Join ipos_sales to
- * hr_employees on staff_id" is the model's job and it is better at it than we
- * are; and a column name written by hand is a guess that is wrong the moment
- * the ETL renames it. The one exception is the value column, and that is
- * because the catalogue has already worked out which one it is.
- *
- * Pure functions. No React, so the text can be checked without a browser.
- */
 
 export interface PromptTable {
   name: string;
@@ -48,15 +14,6 @@ const NUMERIC = new Set([
 
 const type = (t: string) => (t ?? "").toUpperCase();
 
-/**
- * The column a threshold would apply to.
- *
- * The first numeric column is the wrong answer more often than not: on a
- * sales table that is `guest_count`, and a control that checks a headcount
- * against a money limit is a control nobody wanted. So the column whose NAME
- * says it holds a quantity of money wins, and a float beats an integer
- * because money is not a count.
- */
 const VALUE_WORDS =
   /value|amount|total|sum|qty|quantity|price|cost|salary|balance|turnover|revenue/i;
 
@@ -71,21 +28,11 @@ const valueColumn = (t: PromptTable): string | undefined => {
   return numeric[0]?.[0];
 };
 
-/** "one row per invoice" -> "invoice". Used to phrase a finding's grain. */
 const grainNoun = (g: string): string => {
   const m = /one row per (.+)$/i.exec((g ?? "").trim());
   return m ? m[1].trim() : (g || "record");
 };
 
-/**
- * "ipos_sales holds Point-of-sale invoice header - one row per invoice."
- *
- * The catalogue's description is a noun phrase, so it needs a verb, and its
- * full stop needs removing or the sentence reads as two. Only the FIRST
- * sentence is used: descriptions often run to two ("Employee master. Drives
- * access reviews and payroll."), and the second is written for a human
- * reading the Data Sources screen, not for a prompt.
- */
 const holds = (t: PromptTable): string => {
   const first = (t.description || "the records").split(/(?<=\.)\s+/)[0];
   return `${t.name} holds ${first.replace(/\.\s*$/, "")} - ${t.grain}.`;
@@ -95,11 +42,8 @@ export type TemplateId = "after_closing" | "discount_limit";
 
 export interface ProgrammeTemplate {
   id: TemplateId;
-  /** The control, in the programme's own words. */
   label: string;
-  /** Where the control sits, and what kind of control it is. */
   programme: string;
-  /** The tables the control reads. */
   tables: string[];
   build: (tables: PromptTable[]) => string;
 }
@@ -157,15 +101,6 @@ export const TEMPLATES: ProgrammeTemplate[] = [
 const templateById = (id: TemplateId): ProgrammeTemplate =>
   TEMPLATES.find((t) => t.id === id) ?? TEMPLATES[0];
 
-/**
- * Build the prompt for a template.
- *
- * A template that wants two tables and has been given one still produces a
- * usable prompt - the missing half is named as a blank, because a prompt that
- * names the table it has and asks for the other is more use to a user than a
- * refusal. The dialog does not offer a template whose feeds the client does
- * not have, so this is the belt to that braces.
- */
 export const templatePrompt = (
   id: TemplateId,
   tables: PromptTable[],

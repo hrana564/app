@@ -16,8 +16,10 @@ Usage:  python scripts/smoke_test.py [base_url]
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 import sys
+import time
 from datetime import date, datetime
 from pathlib import Path
 
@@ -152,6 +154,37 @@ def check(label: str, ok: bool, detail: str = "") -> None:
 
 def section(title: str) -> None:
     print(f"\n[{title}]")
+
+
+def description_reply(messages: list[dict]) -> "object | None":
+    """Answer the plain-English call the way a model would, or None.
+
+    The description is a separate call with its own system prompt, made while
+    the rule is being written. It is asked for one sentence per step, and the
+    step count is in the prompt - so the answer can have the right shape
+    without a network, and the whole path is exercised offline.
+    """
+    from app.engine.llm import ModelReply
+
+    system = messages[0].get("content") if messages else ""
+    if "audit controls" not in system:
+        return None
+    user = messages[1].get("content") if len(messages) > 1 else ""
+    count = len(re.findall(r"^\s+\d+\. lines ", user, re.M)) or 1
+    return ModelReply(
+        content=json.dumps(
+            {
+                "breach_condition": (
+                    "The control raises an exception when the invoice time is missing."
+                ),
+                "steps": [
+                    {"n": n, "text": "A step of the control."}
+                    for n in range(1, count + 1)
+                ],
+                "outputs": ["invoice_ts"],
+            }
+        )
+    )
 
 
 def _run_folder_count() -> int:
@@ -986,6 +1019,20 @@ def main() -> int:
                   c.post(f"/api/rules/{VCODE}/publish", headers=ah,
                          json={"version": v0 + 1}).status_code == 409)
 
+            # Publishing must not cost a model call. It used to: the page wrote
+            # the plain-English description afterwards, so pressing Publish
+            # waited on a model for half a minute. The description is written
+            # when the rule is written now, so publishing is a state change and
+            # nothing else.
+            started = time.perf_counter()
+            again = c.post(f"/api/rules/{VCODE}/publish", headers=ah,
+                           json={"version": v0 + 1})
+            elapsed = time.perf_counter() - started
+            check("publishing does not wait for a model",
+                  elapsed < 5.0, f"{elapsed:.2f}s")
+            check("and the refusal is the refusal, not a slow answer",
+                  again.status_code == 409, str(again.status_code))
+
             # A rule page is a page about ONE version row, and the address says
             # which. Every read can be pointed at one version, and the answers
             # have to differ - otherwise the URL names a version the page is not
@@ -1132,6 +1179,90 @@ def main() -> int:
         # A rule that has never been published IS its own draft. Editing it must
         # rewrite that one version rather than spend a new number, and discarding
         # it must remove the rule - there is nothing live to fall back to.
+        section("the source's binding: one parser, on the server")
+        # The browser used to answer "what does this rule declare, and what
+        # does it read" with a regex, while the server answered the same
+        # question with the AST. Two answers to one question, and they could
+        # disagree about the same file. The server's is the one that decides
+        # whether a rule may be activated, so it is the only one left.
+
+        def bind(source_code, names=None):
+            return c.post("/api/source/binding", headers=ah,
+                          json={"source_code": source_code, "names": names})
+
+        b = bind('DATASOURCES = ["ipos_sales"]\n\n'
+                 'def run(ctx):\n    return ctx.table("ipos_sales")\n').json()
+        check("the server reads what the source declares",
+              b["declared"] == ["ipos_sales"], str(b["declared"]))
+        check("the server reads what the source calls",
+              b["referenced"] == ["ipos_sales"], str(b["referenced"]))
+        check("the declaration and the code agree",
+              not b["undeclared"] and not b["unused"] and not b["unreadable"], str(b))
+
+        # A comment inside the declaration is a comment, not a table name. The
+        # regex that used to answer this in the browser read it as one.
+        b = bind('DATASOURCES = [\n    "ipos_sales",  # the sales feed\n]\n').json()
+        check("a comment inside the declaration is not a table",
+              b["declared"] == ["ipos_sales"], str(b["declared"]))
+
+        # A docstring showing an old value is not the current declaration.
+        b = bind('"""DATASOURCES = ["not_a_table"]"""\n\n'
+                 'DATASOURCES = ["real_one"]\n').json()
+        check("a docstring example is not the declaration",
+              b["declared"] == ["real_one"], str(b["declared"]))
+
+        b = bind('import polars as pl\n\ndef run(ctx):\n    return {}\n').json()
+        check("a source with no declaration says so",
+              b["unreadable"] and b["declared"] == [], str(b))
+
+        b = bind('import polars as pl\n\n'
+                 'def run(ctx):\n    return ctx.table("read_one")\n').json()
+        check("a source with no declaration still says what it reads",
+              b["referenced"] == ["read_one"], str(b["referenced"]))
+        check("what it reads is undeclared when nothing is declared",
+              b["undeclared"] == ["read_one"], str(b["undeclared"]))
+
+        # The rewrite: the source comes back with a new declaration, and
+        # reading that back gives the new names.
+        r = bind('DATASOURCES = ["ipos_sales"]\n\ndef run(ctx):\n    return {}\n',
+                 ["hr_employees", "ipos_sales"]).json()
+        check("the rewrite sets the declaration",
+              r["declared"] == ["hr_employees", "ipos_sales"], str(r["declared"]))
+        check("the rewrite reads back",
+              'DATASOURCES = ["hr_employees", "ipos_sales"]' in r["source_code"],
+              r["source_code"][:120])
+
+        # A declaration that is not there is added where Python expects it.
+        r = bind('"""A rule."""\n\nimport polars as pl\n\n'
+                 'def run(ctx):\n    return {}\n',
+                 ["ipos_sales"]).json()
+        check("a missing declaration is added after the docstring and the imports",
+              r["source_code"].index('"""') < r["source_code"].index("DATASOURCES")
+              and r["source_code"].index("import polars")
+              < r["source_code"].index("DATASOURCES"),
+              r["source_code"][:160])
+
+        # The binding is the estate's business, so it is behind the same gate
+        # as reading the estate. The demo viewer is used here because the
+        # suite deletes its own temporary viewer account earlier on.
+        check("the binding needs a session",
+              c.post("/api/source/binding",
+                     json={"source_code": "x", "names": None}).status_code == 401)
+        dv = c.post("/api/auth/login",
+                    json={"username": DEMO_VIEWER[0], "password": DEMO_VIEWER[1]})
+        check("the demo viewer can sign in", dv.status_code == 200, dv.text[:140])
+        dvh = {"Authorization": f"Bearer {dv.json().get('access_token', '')}"}
+        check("a viewer may read the binding",
+              c.post("/api/source/binding", headers=dvh,
+                     json={"source_code": 'DATASOURCES = ["ipos_sales"]\n',
+                           "names": None}).status_code == 200)
+
+        for path in sorted(RULES_DIR.glob("*_v1.py")):
+            b = bind(path.read_text(encoding="utf-8")).json()
+            check(f"{path.name} declares what it reads",
+                  not b["undeclared"] and not b["unreadable"],
+                  f"undeclared={b['undeclared']} unreadable={b['unreadable']}")
+
         section("one draft per rule")
         DCODE = f"{ESTATE_CLIENT[ESTATE_RETAIL]}-SMOKE-DRAFT-PROBE"
         dsrc = ("DATASOURCES = ['ipos_sales']\n\n\n"
@@ -2126,7 +2257,7 @@ def main() -> int:
         from app.engine.agent_tools import Toolbox
         from app.engine.catalog import CatalogEntry, DatabaseCatalog
         from app.engine.rule_agent import run_generation
-        from app.engine.rule_generator import ModelReply, ToolCall
+        from app.engine.llm import ModelReply, ToolCall
 
         entries = [CatalogEntry(name=n, entity=entity, columns={}) for n in registered]
         catalog = DatabaseCatalog(entries)
@@ -2174,6 +2305,9 @@ def main() -> int:
 
             def __call__(self, messages, tools):
                 self.turns += 1
+                described = description_reply(messages)
+                if described is not None:
+                    return described
                 return self.script.pop(0)
 
         broken_agent = good.replace('pl.col("invoice_value")', 'pl.col("invoice_value_x")', 1)
@@ -2198,6 +2332,11 @@ def main() -> int:
               any("code_error" in s["summary"] for s in agent.trace), str(agent.trace))
         check("the trace is the evidence behind the rule",
               [s["tool"] for s in agent.trace].count("run_rule") >= 2, str(agent.trace))
+        # The description is written while the rule is being written, so a
+        # draft is born with it and publishing never has to ask a model.
+        check("the agent described the rule it wrote",
+              bool(agent.explanation) and bool(agent.explanation.steps),
+              str(agent.explanation)[:160])
 
         # A revision is the same loop with the rule in front of the model. The
         # prompt has to carry the CURRENT SOURCE - the one input the model cannot
@@ -2212,6 +2351,9 @@ def main() -> int:
 
             def __call__(self, messages, tools):
                 seen.append(list(messages))
+                described = description_reply(messages)
+                if described is not None:
+                    return described
                 return self.script.pop(0)
 
         revising = _CapturingModel([
@@ -2244,50 +2386,104 @@ def main() -> int:
               rev.source == good, (rev.source or "")[:80])
 
         section("the plain-English description")
-        # What a head of audit reads before the code. The structure is derived
-        # from the file on every request, so it is asserted with no model in the
-        # loop: the reading must be true even when generation is unavailable,
-        # switched off, or has just failed for the third time.
-        from app.engine.explain import source_hash
+        # The words are the model's, and the structure they sit on is ours.
+        # What the server guarantees is the structure: the steps a rule
+        # performs, and the lines each one occupies. Those come from the AST
+        # and are asserted here, without a model in the loop.
+        from app.engine.explain import derive, source_hash
 
         code = filed_code("CA-03")
         source = rule_source("CA-03").read_text(encoding="utf-8")
         lines = source.splitlines()
 
-        e = c.get(f"/api/rules/{code}/explain", headers=ah)
-        check("a rule describes itself", e.status_code == 200, e.text[:160])
-        got = e.json() if e.status_code == 200 else {}
-        steps = got.get("steps") or []
-        check("with steps to read", len(steps) >= 4, str(len(steps)))
-        check("and one thing that raises an exception",
-              bool((got.get("breach_condition") or "").strip()),
-              str(got.get("breach_condition")))
-        # A step whose range is wrong is worse than a step with no range: the
-        # reader is invited to check the words against the code and lands on
-        # somebody else's logic.
-        spans = [(s["lines"][0], s["lines"][1]) for s in steps]
+        outline = derive(source)
+        derived_steps = outline.steps
+        check("the derivation finds the steps", len(derived_steps) >= 4,
+              str(len(derived_steps)))
+        spans = [(s.lines[0], s.lines[1]) for s in derived_steps]
         check("every step points inside the file",
               all(1 <= a <= b <= len(lines) for a, b in spans), str(spans))
         check("and the steps run down the file, never back up",
               all(spans[i][0] <= spans[i + 1][0] for i in range(len(spans) - 1)),
               str(spans))
-        check("every step has words",
-              all((s.get("text") or "").strip() for s in steps))
+        check("the numbers a description may state are the code's own",
+              2.0 in outline.numbers, str(outline.numbers))
+
+        e = c.get(f"/api/rules/{code}/explain", headers=ah)
+        check("a rule can be asked what it does", e.status_code == 200, e.text[:160])
+        got = e.json() if e.status_code == 200 else {}
         check("the description is pinned to the code it describes",
               got.get("source_sha256") == source_hash(source),
               f"{got.get('source_sha256')} != {source_hash(source)}")
         check("nothing is called stale while it still matches",
               got.get("stale") is False, str(got.get("stale")))
 
-        # A control whose verdict is an exact match has no threshold to hang a
-        # sentence on, so the condition has to come from the comparison itself.
-        # This rule's page read "the score is at least 92" once — a number and a
-        # variable, naming neither of the two things being compared.
-        joined = c.get(f"/api/rules/{filed_code('CA-22')}/explain", headers=ah)
-        condition = (joined.json().get("breach_condition") or ""
-                     if joined.status_code == 200 else "")
-        check("an exact-match control says what it matches on",
-              bool(condition.strip()) and "iban" in condition.lower(), condition)
+        # A rule with no description says so. It does not show a machine-made
+        # paraphrase and call it a description.
+        DCODE = f"{ESTATE_CLIENT[ESTATE_RETAIL]}-SMOKE-DESCRIPTION-PROBE"
+        c.delete(f"/api/rules/{DCODE}", headers=ah)
+        dsrc = ("DATASOURCES = ['ipos_sales']\n\n\n"
+                "def run(ctx):\n"
+                "    df = ctx.table('ipos_sales')\n"
+                "    return {'rows': df.to_dicts(), 'summary': str(df.height)}\n")
+        dmade = c.post("/api/rules", headers=ah, json={
+            "code": DCODE, "name": "description probe", "source_code": dsrc,
+            "entity": ESTATE_CLIENT[ESTATE_RETAIL], "status": "draft"})
+        check("a fresh rule can be made", dmade.status_code == 201,
+              f"{dmade.status_code} {dmade.text[:140]}")
+        if dmade.status_code == 201:
+            dfresh = c.get(f"/api/rules/{DCODE}/explain", headers=ah).json()
+            check("a rule with no description says so",
+                  dfresh.get("origin") == "none" and not (dfresh.get("steps") or []),
+                  str(dfresh.get("origin")))
+
+            # A description saved WITH the rule is stored with it. The draft is
+            # born complete, and publishing it costs no model call.
+            doutline = derive(dsrc)
+            dmade2 = c.post("/api/rules", headers=ah, json={
+                "code": DCODE + "X", "name": "description probe 2",
+                "source_code": dsrc, "entity": ESTATE_CLIENT[ESTATE_RETAIL],
+                "status": "draft",
+                "explanation": {
+                    "breach_condition": "The control raises an exception when the day is empty.",
+                    "steps": [{"n": s.n, "text": "A step of the control."}
+                              for s in doutline.steps],
+                    "outputs": ["invoice_ts"],
+                }})
+            check("a rule can be saved with its description",
+                  dmade2.status_code == 201,
+                  f"{dmade2.status_code} {dmade2.text[:140]}")
+            if dmade2.status_code == 201:
+                dstored = c.get(f"/api/rules/{DCODE}X/explain", headers=ah).json()
+                check("and the description is there",
+                      dstored.get("origin") == "ai"
+                      and len(dstored.get("steps") or []) == len(doutline.steps),
+                      f"{dstored.get('origin')} "
+                      f"{len(dstored.get('steps') or [])}")
+                check("pointing at the lines the derivation found",
+                      [(s["lines"][0], s["lines"][1]) for s in dstored.get("steps") or []]
+                      == [(s.lines[0], s.lines[1]) for s in doutline.steps],
+                      str([(s["lines"][0], s["lines"][1])
+                           for s in dstored.get("steps") or []]))
+                # A description whose steps do not match the source is not
+                # stored. The server does not take a client's word for which
+                # lines a step covers.
+                dbad = c.post("/api/rules", headers=ah, json={
+                    "code": DCODE + "Y", "name": "description probe 3",
+                    "source_code": dsrc, "entity": ESTATE_CLIENT[ESTATE_RETAIL],
+                    "status": "draft",
+                    "explanation": {
+                        "breach_condition": "A condition.",
+                        "steps": [{"n": 999, "text": "A step that is not there."}],
+                    }})
+                if dbad.status_code == 201:
+                    dbadread = c.get(f"/api/rules/{DCODE}Y/explain", headers=ah).json()
+                    check("a description that does not match the source is not kept",
+                          dbadread.get("origin") == "none",
+                          str(dbadread.get("origin")))
+                    c.delete(f"/api/rules/{DCODE}Y", headers=ah)
+        c.delete(f"/api/rules/{DCODE}X", headers=ah)
+        c.delete(f"/api/rules/{DCODE}", headers=ah)
 
         # Reading costs nothing and must not write. A GET that quietly stored
         # its own answer would make the page's provenance line a fiction.
@@ -2309,7 +2505,7 @@ def main() -> int:
               invented.status_code == 422, f"{invented.status_code} {invented.text[:120]}")
         partial = c.put(f"/api/rules/{code}/explain", headers=ah, json={
             "breach_condition": "Something nobody's code does.",
-            "steps": [{"n": steps[0]["n"], "text": steps[0]["text"]}] if steps else [],
+            "steps": [{"n": derived_steps[0].n, "text": "A step."}],
         })
         check("and dropping the rest of the steps is refused too",
               partial.status_code == 422, f"{partial.status_code} {partial.text[:120]}")
@@ -2318,16 +2514,19 @@ def main() -> int:
               after.get("breach_condition") == before,
               f"{before!r} -> {after.get('breach_condition')!r}")
 
-        # An edit that keeps every step, in the derivation's own words, is
-        # stored - and it is what the sign-off below signs. A database built by
-        # the reset recipe holds no description until somebody writes one, and
-        # until then the review has nothing to approve.
+        # An edit that keeps every step is stored - and it is what the sign-off
+        # below signs.
         kept = c.put(f"/api/rules/{code}/explain", headers=ah, json={
-            "breach_condition": before,
-            "steps": [{"n": s["n"], "text": s["text"]} for s in steps],
+            "breach_condition": "The control raises an exception when the ratio is high.",
+            "steps": [{"n": s.n, "text": "A step of the control."} for s in derived_steps],
         })
         check("an edit that keeps every step is stored", kept.status_code == 200,
               f"{kept.status_code} {kept.text[:160]}")
+        if kept.status_code == 200:
+            stored_steps = kept.json().get("steps") or []
+            check("and the stored steps point at the real lines",
+                  [(s["lines"][0], s["lines"][1]) for s in stored_steps] == spans,
+                  str([(s["lines"][0], s["lines"][1]) for s in stored_steps]))
 
         # The person who signs the control off is not always the person who
         # wrote it, so the capability is its own. A viewer reads the estate but

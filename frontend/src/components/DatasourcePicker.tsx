@@ -3,29 +3,8 @@ import {
   Alert, Autocomplete, Box, Chip, CircularProgress, Stack, TextField,
   Typography,
 } from "@mui/material";
-import { api, type DatasourceRow } from "../dataProvider";
-import {
-  inspectBinding, renderDeclaration, writeDeclaredDatasources,
-} from "./ruleSource";
+import { api, type DatasourceRow, type SourceBinding } from "../dataProvider";
 
-/**
- * Binds a rule to the tables it reads, by editing the rule's own Python.
- *
- * WHY IT WRITES INTO THE SOURCE
- * -----------------------------
- * `DATASOURCES = [...]` is a module constant in the rule file, and the runner
- * reads that file. Storing the selection in a database column too would leave
- * two sources of truth that could disagree - and the runner would believe the
- * file while the screen believed the row. So this writes the constant and shows
- * the result in the editor below.
- *
- * WHY IT ALSO SHOWS WHAT THE CODE READS
- * -------------------------------------
- * A declaration is a claim; `ctx.table("x")` is the fact. They can disagree -
- * a rule can declare one table and read another, and that is precisely what the
- * static validator refuses to activate. Surfacing both means the admin sees the
- * gap before a run, not after.
- */
 export const DatasourcePicker = ({
   entity,
   source,
@@ -39,6 +18,8 @@ export const DatasourcePicker = ({
 }) => {
   const [rows, setRows] = useState<DatasourceRow[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [binding, setBinding] = useState<SourceBinding | null>(null);
+  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     let live = true;
@@ -49,12 +30,25 @@ export const DatasourcePicker = ({
     return () => { live = false; };
   }, [entity]);
 
-  const binding = useMemo(() => inspectBinding(source), [source]);
+  // The server owns the answer. It has the AST, and it is what decides whether
+  // a rule may be activated - so a second answer here could disagree with it.
+  useEffect(() => {
+    let live = true;
+    api
+      .sourceBinding(source)
+      .then((b) => live && setBinding(b))
+      .catch(() => live && setBinding(null));
+    return () => { live = false; };
+  }, [source]);
 
   // What the admin has picked: the declaration if readable, otherwise whatever
   // the code actually calls - so a rule that never declared anything still shows
   // its real dependencies rather than appearing unbound.
-  const selected = binding.unreadable ? binding.referenced : binding.declared;
+  const selected = binding
+    ? binding.unreadable
+      ? binding.referenced
+      : binding.declared
+    : [];
 
   const options = useMemo(() => rows ?? [], [rows]);
 
@@ -70,7 +64,7 @@ export const DatasourcePicker = ({
     );
   }
 
-  if (rows === null) {
+  if (rows === null || binding === null) {
     return (
       <Stack direction="row" spacing={1} sx={{ mb: 2, alignItems: "center" }}>
         <CircularProgress size={18} />
@@ -79,9 +73,16 @@ export const DatasourcePicker = ({
     );
   }
 
-  const apply = (names: string[]) => {
-    if (binding.unreadable) return; // never rewrite a file we cannot read
-    onChange(writeDeclaredDatasources(source, names).source);
+  const apply = async (names: string[]) => {
+    if (!binding || binding.unreadable) return; // never rewrite a file we cannot read
+    setSaving(true);
+    try {
+      const next = await api.sourceBinding(source, names);
+      setBinding(next);
+      onChange(next.source_code);
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
@@ -171,7 +172,6 @@ export const DatasourcePicker = ({
             Harmless, but usually left over from an earlier version.
           </Alert>
         )}
-
         {!unknown.length &&
           !binding.undeclared.length &&
           !binding.unused.length &&
@@ -189,7 +189,7 @@ export const DatasourcePicker = ({
           variant="caption"
           sx={{ display: "block", mt: 1.5, fontFamily: "monospace", color: "text.secondary" }}
         >
-          {renderDeclaration(selected)}
+          {binding.declaration}
         </Typography>
       )}
     </Box>

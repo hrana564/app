@@ -1,27 +1,5 @@
 import { createTheme } from "@mui/material/styles";
 
-/**
- * A deliberately restrained navy/teal palette. High contrast for the severity
- * chips, and generous spacing because the tables carry long audit summaries.
- */
-/**
- * Type scale, in rem.
- *
- * Measured on a 1920x1080 screen at 100% scaling, the app was rendering 12px
- * table headers, 12px captions and 14px body - so almost everything sat below
- * the sizes the accessibility guidance points at:
- *
- *   WCAG 2.1 has no hard minimum, but requires 200% resize without loss
- *   USWDS   "use at least an effective size of 16px" for body text
- *   508     15-16px typical for web
- *   Material 3 body runs 14-16px, with 12px as the floor for small labels
- *
- * So: body at 16px, secondary at 15px, and an absolute floor of 13px for
- * captions and table headers. Nothing in the app should render below that.
- *
- * Sizes are rem, not px, so the browser's own default-font-size and zoom
- * settings scale the whole interface instead of fighting them.
- */
 export const FONT = {
   body: "1rem", // 16px
   bodyAlt: "0.9375rem", // 15px
@@ -129,23 +107,9 @@ export const theme = createTheme({
   },
 });
 
-/**
- * Severity, worst first. The single list every screen sorts and filters by.
- *
- * It lived as three separate arrays - SEVERITY_OPTIONS in the rule editor,
- * SEVERITY_OPTIONS and severityOrder in the ticket inbox - and the ticket inbox
- * alone held two copies that had to agree with each other. They agreed only
- * because nothing had made them disagree yet. `assurance.py` orders the same
- * four values on the server.
- *
- * Worst-first rather than alphabetical: a picker that offers "critical" after
- * "medium" is asking the user to rank severity themselves, which is the one
- * judgement the scale already encodes.
- */
 export const SEVERITIES = ["critical", "high", "medium", "low"] as const;
 export type Severity = (typeof SEVERITIES)[number];
 
-/** Ascending order, for a dropdown where lowest is listed first. */
 export const SEVERITIES_ASC = [...SEVERITIES].reverse();
 
 export const severityColor: Record<string, "error" | "warning" | "info" | "success"> = {
@@ -169,40 +133,17 @@ export const statusColor: Record<string, "error" | "warning" | "info" | "success
   retired: "info",
 };
 
-/**
- * Did the rule RUN? Green means the script executed, whatever it then found.
- *
- * Kept separate from statusColor on purpose. `statusColor` is shared with rules
- * and tickets, and a run's status used to live in it - where "fail" meant a
- * breach and "error" meant a crash, on the same word. Two vocabularies that
- * answer different questions do not belong in one lookup table.
- */
 export const runStatusColor: Record<string, "error" | "warning" | "info" | "success"> = {
   success: "success",
   failed: "error",
   running: "info",
 };
 
-/**
- * What did the control FIND? Only ever reached by a run that executed.
- *
- * Red here is the product working: it found a breach. That is the same red a
- * genuine fault uses, which is why the two sit in different columns and are
- * never read together as one word.
- */
 export const runOutcomeColor: Record<string, "error" | "warning" | "info" | "success"> = {
   fail: "error",
   pass: "success",
 };
 
-/**
- * Colours for the client chips, picked by POSITION not by code.
- *
- * This used to be a map from client code to colour, which meant it only ever
- * coloured the two clients it was written for. Any deployment naming its clients
- * differently fell through to `primary` for both, so two clients looked
- * identical in a list - which is the one thing a chip is for.
- */
 export const ENTITY_COLOURS = ["secondary", "primary"] as const;
 
 export const entityColour = (index: number) =>

@@ -1,5 +1,3 @@
-"""Async SQLAlchemy engine and session wiring."""
-
 from __future__ import annotations
 
 import logging
@@ -32,12 +30,6 @@ class Base(DeclarativeBase):
 
 
 async def _stale_columns(conn) -> dict[str, list[str]]:
-    """Columns present in the database that the models no longer declare.
-
-    Read-only diagnosis. A leftover column cannot break the app - nothing selects
-    it - but it is the visible symptom of a database that predates a model
-    change, which is the condition AGENTS.md warns about.
-    """
     from app import models  # noqa: F401  (registers the mappers)
 
     declared = {
@@ -79,13 +71,11 @@ SessionLocal = async_sessionmaker(
 
 
 async def get_session() -> AsyncIterator[AsyncSession]:
-    """FastAPI dependency."""
     async with SessionLocal() as session:
         yield session
 
 
 async def init_models() -> None:
-    """Create any missing tables. Safe to call on every start."""
     from app import models  # noqa: F401  (registers the mappers)
 
     async with engine.begin() as conn:
@@ -117,7 +107,6 @@ async def init_models() -> None:
 
 
 async def table_names() -> list[str]:
-    """Tables currently present, for /health and diagnostics."""
     from sqlalchemy import text
 
     async with engine.connect() as conn:

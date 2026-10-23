@@ -1,28 +1,3 @@
-"""
-What the ETL actually landed.
-
-Reads the CSV landing zone and reports it. That is the whole job. This module
-touches no database and imports no model, so it can be pointed at a folder and
-exercised without the app running.
-
-    mount/SourceData/CLIENT-A/2026-10-19/
-        hr_employees.csv
-        ipos_sales.csv
-        ...
-
-The ETL belongs to another team and knows nothing about this app. The only
-thing shared is the folder convention above, and that is deliberately small:
-entity, date, filename. Everything an admin needs to decide whether to register
-a table is derived from the file itself - the header gives the columns, and the
-first rows give the types.
-
-TWO KINDS OF ABSENCE
---------------------
-A day folder that does not exist is normal: a public holiday, or a date before
-the feed started. A file missing from a day folder that DOES exist is a landing
-failure, and it is reported separately because it means the opposite thing.
-"""
-
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -40,8 +15,6 @@ _TYPE_SAMPLE_ROWS = 200
 
 @dataclass(frozen=True)
 class DiscoveredFile:
-    """One CSV that landed, described entirely by reading the file."""
-
     name: str
     entity: str
     data_date: str
@@ -61,7 +34,6 @@ def entity_root(entity: str, sourcedata_dir: Path | None = None) -> Path:
 
 
 def available_dates(entity: str, sourcedata_dir: Path | None = None) -> list[str]:
-    """Days that have a folder at all, oldest first. Unparseable names are ignored."""
     root = entity_root(entity, sourcedata_dir)
     if not root.exists():
         return []
@@ -83,7 +55,6 @@ def latest_date(entity: str, sourcedata_dir: Path | None = None) -> str | None:
 
 
 def describe_csv(path: Path, entity: str, data_date: str) -> DiscoveredFile | None:
-    """Read one CSV and report what is in it. None if it cannot be read at all."""
     try:
         sample = pl.read_csv(path, n_rows=_TYPE_SAMPLE_ROWS)
         # Counting by scanning rather than reading: the whole point is to report
@@ -108,25 +79,11 @@ def describe_csv(path: Path, entity: str, data_date: str) -> DiscoveredFile | No
 
 @dataclass(frozen=True)
 class Preview:
-    """A sample of one file: what its columns are, and a few rows of it."""
-
     columns: dict[str, str]
     rows: list[dict[str, str | None]]
 
 
 def read_preview(path: Path, limit: int = 10) -> Preview:
-    """The first `limit` rows and the file's column types, in one read.
-
-    A preview exists so an admin can see what the ETL actually sent before
-    trusting a table with a rule. The types come back with the rows because the
-    screen shows them in the same header - one list of columns, not two.
-
-    Values are strings because this crosses JSON: a Polars timestamp or a NaN is
-    not serialisable, and a column that renders as `NaN` down its length is
-    itself worth seeing.
-
-    Reading is bounded by `limit`, so the cost does not grow with the file.
-    """
     try:
         frame = pl.read_csv(path, n_rows=limit)
     except Exception:  # noqa: BLE001 - a malformed file is a finding, not a crash
@@ -142,7 +99,6 @@ def read_preview(path: Path, limit: int = 10) -> Preview:
 
 
 def _as_text(value: object) -> str:
-    """Render one cell the way someone reading the CSV would have written it."""
     if isinstance(value, bool):
         return "true" if value else "false"
     if isinstance(value, float):
@@ -158,7 +114,6 @@ def discover(
     data_date: str,
     sourcedata_dir: Path | None = None,
 ) -> list[DiscoveredFile]:
-    """Every readable CSV in one day's folder, by name."""
     folder = entity_root(entity, sourcedata_dir) / data_date
     if not folder.is_dir():
         return []

@@ -1,11 +1,3 @@
-/**
- * Friendly frequency picker.
- *
- * The user never sees a cron expression. They pick a cadence kind, fill in the
- * obvious fields, and read back a plain-English label plus the real fire times.
- * The derived cron is shown only as a secondary, muted line for engineers
- * debugging the scheduler.
- */
 import { useEffect, useMemo, useState } from "react";
 import {
   Alert, Box, Button, Checkbox, CircularProgress, FormControlLabel, Grid,

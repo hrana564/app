@@ -27,14 +27,6 @@ import { FONT } from "./theme";
 /* The sidebar                                                         */
 /* ------------------------------------------------------------------ */
 
-/**
- * A heading over a group of menu items.
- *
- * Rendered as an `<li>`, because the menu is a `<ul>` and a heading that is
- * not a list item makes it invalid. It carries `RaMenuGroup` so the CSS can
- * take it away when the sidebar is collapsed - a two-line label in a 56px
- * column overflows onto the icon beneath it.
- */
 const GroupHeading = ({ children }: { children: ReactNode }) => (
   <Typography
     component="li"
@@ -56,7 +48,6 @@ const GroupHeading = ({ children }: { children: ReactNode }) => (
   </Typography>
 );
 
-/** The rule between two groups, collapsed with the headings above it. */
 const GroupRule = () => (
   <Box
     component="li"
@@ -71,20 +62,6 @@ const GroupRule = () => (
   />
 );
 
-/**
- * The sidebar, in two groups.
- *
- * The estate was a flat list of five, and the account work had been bolted
- * onto the end of it as a sixth - so anything else that configures the portal
- * would have been a seventh, sitting between Data Sources and whatever came
- * next. Settings is now one destination with the tabs inside it, and the
- * group heading is where those tabs are announced.
- *
- * `Menu.ResourceItem` rather than a hand-written link, because the resource
- * already knows its own icon and label - and it already asks `canAccess`, so
- * a capability that is withdrawn takes the menu item with it rather than
- * leaving a link to a screen that will refuse.
- */
 const PortalMenu = () => (
   <RaMenu
     sx={{
@@ -115,17 +92,6 @@ const PortalMenu = () => (
 /* Which client the portal is looking at                               */
 /* ------------------------------------------------------------------ */
 
-/**
- * The entity switch sits immediately before the refresh indicator because that
- * is where a person already looks for the state of the page. It is the only
- * place the client is chosen - no screen carries its own copy, so the ticket
- * inbox can never be showing one client while the rule list above it shows
- * another.
- *
- * Drawn as a control rather than as loose text. It used to be a bare value
- * with a caret hanging off it, which read as a label with a smudge beside it -
- * and a control nobody recognises as one is a control nobody presses.
- */
 const EntitySwitch = () => {
   const { entity, setEntity, entities } = useEntityScope();
   const current = entities.find((e) => e.code === entity);
@@ -194,28 +160,6 @@ const EntitySwitch = () => {
 /* Who is signed in                                                    */
 /* ------------------------------------------------------------------ */
 
-/**
- * The account, and the way out.
- *
- * There was no sign-out anywhere before this: the auth provider had a logout
- * method and nothing called it. With roles in play that matters twice over -
- * a shared machine kept one person's session, and an administrator checking
- * what a viewer can see had no way to become a viewer without a private
- * window.
- *
- * ONE BUTTON, NOT TWO
- * --------------------
- * react-admin ships its own `UserMenu` and renders it by default beside
- * whatever the layout puts in the bar - so there were two profile buttons side
- * by side, each opening its own menu, each knowing half of the picture. Its
- * own knew the name; this one knew the role and could change a password.
- * Neither of them won. `userMenu={false}` on the AppBar silences the default,
- * and this is the single profile control that is left.
- *
- * The role is shown because it is what the buttons on the screen are about.
- * A person who cannot tell why a button is disabled cannot ask the right
- * question about it.
- */
 const AccountMenu = () => {
   const user = useCurrentUser();
   const logout = useLogout();
@@ -357,13 +301,6 @@ const AccountMenu = () => {
   );
 };
 
-/**
- * Change your own password.
- *
- * The current password is required, so a session left open on a shared
- * machine cannot quietly take the account over. Nobody else can set it - the
- * administrator's route is a reset, and that is a different thing.
- */
 const PasswordDialog = ({
   open, onClose, onDone,
 }: { open: boolean; onClose: () => void; onDone: () => void }) => {
@@ -414,30 +351,6 @@ const PasswordDialog = ({
   );
 };
 
-/**
- * A fixed title, deliberately not the current page name.
- *
- * The per-page title appeared on the rules list and nowhere else, so the bar
- * read as an accident on four screens out of five. The sidebar already says
- * which screen you are on and highlights it.
- *
- * The name is a child, not the AppBar's `title` prop: that prop is ignored the
- * moment you pass children of your own, which is how the bar ended up nameless.
- *
- * `color="primary"` rather than the teal the AppBar defaults to. The teal is an
- * accent, and on a surface that size it put white 15px text at 4.06:1 - short
- * of the 4.5:1 the body text is set at. The navy behind it is 11.6:1, and it
- * is the same navy the sign-in screen is built on, so the two finally agree.
- *
- * `userMenu={false}` removes react-admin's own profile button, which was the
- * second of the two. See `AccountMenu`.
- *
- * `toolbar={null}` because the default one ends in its own LoadingIndicator -
- * the refresh icon - and supplying one adds a second. The refresh belongs
- * immediately after the switch, so it is placed here rather than left to the
- * slot's position, and the spacer is explicit instead of leaning on the
- * toolbar's own justify-content, which does not spread these children.
- */
 const AuditAppBar = ({ alwaysOn, title: _title, ...props }: AppBarProps) => (
   <AppBar
     {...props}
@@ -460,14 +373,6 @@ const AuditAppBar = ({ alwaysOn, title: _title, ...props }: AppBarProps) => (
   </AppBar>
 );
 
-/**
- * react-admin leaves the content area flush against the bottom edge of the app
- * bar, which is fine for a list and wrong for anything that starts with a
- * floating label: the Data Sources entity picker had its label drawn underneath
- * the bar. One gap, applied once, for every screen.
- *
- * `menu={PortalMenu}` supplies the grouped sidebar above.
- */
 export const Layout = ({ children }: { children: ReactNode }) => (
   <RaLayout
     appBar={AuditAppBar}

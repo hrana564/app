@@ -16,22 +16,6 @@ import { api, type RuleExplanation } from "../dataProvider";
 import { PythonBlock } from "./ui";
 import { FONT } from "../theme";
 
-/**
- * What a rule does, for the person who is answerable for it.
- *
- * The page used to open with sixty lines of Python and a row of chips naming
- * `manual`, `T-1 to T` and `anchor day`. This replaces that with the two things
- * a head of audit actually needs, side by side:
- *
- *   left   what the control checks, in sentences, and the condition that
- *          raises an exception - stated first, because that is the control;
- *   right  the code, collapsed, so it is available for checking a claim and
- *          not in the way of reading one.
- *
- * The words are derived from the file on every request, and a model may reword
- * them only after the server's gates have passed. So the page can say where a
- * sentence came from, which is the difference between a summary and a claim.
- */
 export const RuleExplainer = ({
   ruleCode,
   version,
@@ -42,12 +26,10 @@ export const RuleExplainer = ({
   onChanged,
 }: {
   ruleCode: string;
-  /** The version row being read. Every call below is about that one row. */
   version?: number;
   source: string;
   mayWrite: boolean;
   mayReview: boolean;
-  /** An older version: its words are a record, not something to change. */
   readOnly?: boolean;
   onChanged?: () => void;
 }) => {
@@ -203,6 +185,15 @@ export const RuleExplainer = ({
               <Typography sx={{ fontSize: "1.0625rem", lineHeight: 1.55, fontWeight: 500, mb: 1.5 }}>
                 {data.purpose}
               </Typography>
+            )}
+
+            {data.steps.length === 0 && (
+              <Alert severity="info" sx={{ mb: 1.5 }}>
+                This version has no step-by-step description yet. The code below
+                is the whole truth - press{" "}
+                <strong>Write in plain English</strong> below to have one
+                written for it.
+              </Alert>
             )}
 
             {/* The one sentence that matters most, given the most weight: what
@@ -405,15 +396,6 @@ const stripLead = (text: string) =>
     // employee", while "VAT" and "IBAN" are left exactly as written.
     .replace(/^([A-Z][a-z])/, (m) => m.toLowerCase());
 
-/**
- * Three states, said out loud.
- *
- * "AI generated" on its own tells a reviewer nothing about whether anybody has
- * looked at it, and an unreviewed machine-written account of a control is the
- * one thing an auditor must not mistake for a signed-off one. So the page says
- * which of the three it is, and a model change resets the sign-off rather than
- * inheriting it.
- */
 const Provenance = ({ data }: { data: RuleExplanation }) => {
   const when = data.generated_at ? new Date(data.generated_at).toLocaleDateString() : "";
   const reviewed = data.reviewed_at ? new Date(data.reviewed_at).toLocaleDateString() : "";
@@ -426,10 +408,11 @@ const Provenance = ({ data }: { data: RuleExplanation }) => {
       "The code has changed since this was written, so these words are a fresh " +
       "reading of the code rather than the stored description.";
     tone = "warn";
-  } else if (!data.stored && data.origin === "derived") {
+  } else if (!data.stored && data.origin === "none") {
     text =
-      "Read directly from the code. No model was used and nobody has signed " +
-      "this off.";
+      "No description has been written for this version. The code below is " +
+      "the whole truth until somebody writes one.";
+    tone = "plain";
   } else if (data.origin === "ai" && data.reviewed_by) {
     text = `Written by an AI model${data.model ? ` (${data.model})` : ""} and signed off by ${data.reviewed_by} on ${reviewed}.`;
     tone = "ok";
@@ -454,7 +437,6 @@ const Provenance = ({ data }: { data: RuleExplanation }) => {
         </Typography>
         {data.gates.some((g) => !g.ok) && (
           <Typography variant="caption" sx={{ color: "text.secondary", display: "block", mt: 0.25 }}>
-            The last machine-written attempt was not used:{" "}
             {data.gates.filter((g) => !g.ok).map((g) => `${g.name} (${g.detail})`).join("; ")}
           </Typography>
         )}

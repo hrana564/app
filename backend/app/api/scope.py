@@ -1,22 +1,3 @@
-"""Which client entity a query is about, derived in exactly one place.
-
-Every screen in the portal is scoped to one client, and only `rules_master`
-actually knows which client a thing belongs to. A run and a ticket each point at
-a rule and inherit its entity from there.
-
-Writing that join in the runs endpoint, the tickets endpoint and the dashboard
-separately is how a dashboard ends up counting one client while the ticket inbox
-beside it shows another - the two disagree silently and every number still looks plausible.
-So the join lives here, once.
-
-    stmt = scoped(stmt, Run, entity)
-
-An absent or empty entity means "every client", which is what the scheduler and
-the replay tool want. Callers pass the result to BOTH the page query and its
-count query; narrowing one and not the other is how `total` starts lying about
-what the page holds.
-"""
-
 from __future__ import annotations
 
 from typing import Any
@@ -34,11 +15,6 @@ _JOIN: dict[type, tuple[Any, Any] | None] = {
 
 
 def scoped(stmt: Any, model: type, entity: str | None) -> Any:
-    """Narrow `stmt` to one client entity.
-
-    Returns the statement untouched when there is no entity, so callers never
-    have to branch on it themselves.
-    """
     if not entity:
         return stmt
     join = _JOIN[model]

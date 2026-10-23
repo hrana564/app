@@ -1,20 +1,3 @@
-"""
-Per-rule scheduling.
-
-A rule has many RuleSchedule rows; each becomes one APScheduler job keyed by
-`rule_schedule_<id>`. The friendly `kind`/`config` pair is converted to cron by
-app.engine.frequency, so this module never sees a user-typed expression.
-
-Two rules that were wrong before and are deliberate now:
-
-1. There is no separate "enabled" switch. `rules.status` decides whether a job
-   runs; a schedule row only says *when*. Two switches that could disagree
-   were the original defect.
-2. `next_run_at` is stored as a proper timezone-aware timestamp. The previous
-   code did `.replace(tzinfo=None)`, which silently dropped the offset and made
-   a 06:30 Dubai job look like 06:30 UTC.
-"""
-
 from __future__ import annotations
 
 import logging
@@ -46,18 +29,10 @@ def cadence_of(schedule: RuleSchedule) -> Cadence:
 
 
 def cron_for(schedule: RuleSchedule) -> str:
-    """Derive the cron for a schedule row, raising CadenceError if invalid."""
     return to_cron(cadence_of(schedule))
 
 
 async def head_of(session, code: str) -> Rule | None:
-    """Resolve a rule code to its live version row.
-
-    A schedule references `rule_code`, not a row id, so publishing a new version
-    can never orphan it. Resolution happens at fire time, which also means a
-    version published between the schedule firing and execution is the one that
-    runs.
-    """
     return (
         await session.execute(
             select(Rule).where(Rule.code == code, Rule.is_version_active.is_(True))
@@ -66,12 +41,6 @@ async def head_of(session, code: str) -> Rule | None:
 
 
 def default_data_date(lag_days: int = 1) -> date:
-    """The day folder a schedule should audit.
-
-    A day's CSVs are usually still landing when a 06:30 job fires, so lag=1
-    (yesterday) is the sane default. Clamped to the newest folder that exists
-    so a missing day does not silently audit a week-old date.
-    """
     base = settings.sourcedata_dir
     target = datetime.now(timezone.utc).date() - timedelta(days=max(0, lag_days))
 
@@ -94,8 +63,6 @@ def default_data_date(lag_days: int = 1) -> date:
 
 
 async def run_schedule_job(schedule_id: int) -> None:
-    """APScheduler entry point. Never raises - a failing schedule must not
-    kill the scheduler process."""
     from app.engine.runner import execute_rule
 
     try:
@@ -137,11 +104,6 @@ async def run_schedule_job(schedule_id: int) -> None:
 
 
 async def sync_schedule(schedule: RuleSchedule) -> str | None:
-    """Add or replace the live job for one schedule row.
-
-    Returns the derived cron, or None if the schedule was not registered
-    because its rule has no live, active version.
-    """
     jid = job_id(schedule.id)
     try:
         scheduler.remove_job(jid)
@@ -194,13 +156,6 @@ async def remove_schedule(schedule_id: int) -> None:
 
 
 async def load_all() -> dict:
-    """Rehydrate every schedule, resolving rule_code -> live version.
-
-    Returns a summary. `unresolved` lists schedules whose rule_code matched no
-    live version. Since `code` is write-once and validated, this should stay
-    empty - but reporting it at startup means a mismatch is visible rather than
-    being a schedule that silently never fires.
-    """
     async with SessionLocal() as session:
         rows = (
             await session.execute(select(RuleSchedule).order_by(RuleSchedule.id))

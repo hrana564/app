@@ -1,40 +1,8 @@
-"""
-The prompt side of rule generation.
-
-The model is told three things, and only three:
-
-    HOW TO CONNECT   ctx.table("x") gives a polars DataFrame of the rows this
-                     run staged. There is no path, no query, no engine handle.
-    HOW TO RUN       one function, def run(ctx) -> dict
-    HOW TO PARSE     the dict it returns: status, error_message, summary,
-                     metrics, rows
-
-and it is shown the data: the selected datasources, their real columns, and a
-few real rows from each. The sample rows are there so the model cannot invent
-a field, and they are labelled untrusted, because a CSV is input and input can
-contain anything.
-
-SCOPE
------
-The model is shown the tables the admin selected, and only those. A selector
-the model may wander outside of is a selector that does not select anything -
-and the trial would catch it after the model had already written a rule around
-a table nobody chose.
-
-THE RULE DOES NOT NAME ITS CLIENT
----------------------------------
-Which client a rule belongs to is a property of the rule's ROW, chosen when
-the rule is registered. So the model is not asked for an ENTITY constant: a
-file that named one would carry a client's identity into the source, and would
-be wrong the moment the same file was registered for a different client.
-"""
-
 from __future__ import annotations
 
 import csv
-import json
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import date
 from itertools import islice
 from pathlib import Path
@@ -42,6 +10,7 @@ from typing import Any
 
 from app.engine.catalog import Catalog
 from app.engine.datasources import ENTITIES, SYSTEMS_BY_ENTITY
+from app.engine.llm import is_configured
 from app.settings import settings
 
 log = logging.getLogger("abm.generator")
@@ -279,13 +248,8 @@ def run(ctx) -> dict:
 """
 
 
-def is_configured() -> bool:
-    return bool(settings.llm_base_url and settings.llm_model)
-
-
 @dataclass(frozen=True)
 class TableSample:
-    """One CSV, read once: the rows worth showing and the values worth naming."""
 
     header: list[str]
     rows: list[list[str]]
@@ -294,24 +258,16 @@ class TableSample:
 
 
 def _is_vocabulary_column(declared_type: str | None) -> bool:
-    """Is this column's declared type one that carries a list of values?"""
     base = (declared_type or "").split("(")[0].strip().upper()
     return base in _VOCABULARY_TYPES
 
 
 def _is_datetime_column(declared_type: str | None) -> bool:
-    """Is this column's declared type a date or a timestamp?"""
     base = (declared_type or "").split("(")[0].strip().upper()
     return base in _DATETIME_TYPES
 
 
 def _clean_value(raw: str) -> str:
-    """One cell as a single, bounded line.
-
-    The values are untrusted CSV bytes. Collapsing whitespace keeps a value from
-    adding a line to the prompt, and the cap keeps one long value from crowding
-    out the rest of the block.
-    """
     return " ".join(str(raw).split())[:VALUE_MAX_LENGTH]
 
 
@@ -321,19 +277,6 @@ def value_vocabulary(
     declared: dict[str, str] | None = None,
     limit: int = VALUE_CARDINALITY_LIMIT,
 ) -> dict[str, list[str]]:
-    """The distinct values of the columns where a list is worth showing.
-
-    The model is shown three sample rows, so an enum that does not happen to be
-    in them - `employment_status="exited"`, `discount_type="PROMOTION"` - can
-    only be guessed. A wrong guess still runs and reports a clean result, so the
-    control is dead and nothing says so. Naming the values removes the guess.
-
-    Only a string column, and only one with few enough distinct values: past
-    `limit` it is an identifier or free text. Sorted, so the same data gives the
-    same prompt.
-
-    Pure: header, rows and declared types in; a dict out. No file, no database.
-    """
     declared = declared or {}
     values: dict[str, list[str]] = {}
     for index, name in enumerate(header):
@@ -363,15 +306,6 @@ def column_examples(
     declared: dict[str, str] | None = None,
     sample_rows: list[list[str]] | None = None,
 ) -> dict[str, str]:
-    """One real value for a date or timestamp column the sample leaves blank.
-
-    The sample rows exist so the model cannot invent a field, but a column that
-    is empty in those rows hides its format as well - and the format is then a
-    guess. Only for a column blank across the sampled rows, so a column the
-    reader can already see is left alone.
-
-    Pure: header, rows and declared types in; a dict out. No file, no database.
-    """
     declared = declared or {}
     sample_rows = sample_rows or []
     examples: dict[str, str] = {}
@@ -398,11 +332,6 @@ def _read_csv(
     sample_limit: int = 3,
     scan_rows: int = VALUE_SCAN_ROWS,
 ) -> TableSample | None:
-    """Read one CSV once and answer both questions the prompt asks of it.
-
-    The sample rows and the value vocabulary come from the same read. Two reads
-    would be two chances for the block to describe different files.
-    """
     if not path.exists():
         return None
     try:
@@ -429,7 +358,6 @@ def _read_csv(
 
 
 def _render_sample(sample: TableSample) -> str:
-    """The first few rows, as an aligned table."""
     header, data = sample.header, sample.rows
     if not header or not data:
         return ""
@@ -449,7 +377,6 @@ def _render_sample(sample: TableSample) -> str:
 
 
 def _render_values(values: dict[str, list[str]], examples: dict[str, str]) -> str:
-    """The value lists and the format examples, one block each."""
     blocks: list[str] = []
     if values:
         lines = [f"  {name}: {' | '.join(found)}" for name, found in values.items()]
@@ -467,12 +394,6 @@ def sample_datasources(
     tables: list[str] | None = None,
     limit: int = 3,
 ) -> str:
-    """Render declared columns, real sample rows and value lists so the LLM
-    cannot invent a field or guess a value.
-
-    `tables` narrows the block to the admin's selection. Everything the model
-    is shown is something it is allowed to use.
-    """
     base = settings.sourcedata_dir / entity.upper()
     if not base.exists():
         return "(SourceData not generated yet - run scripts/make_sample_data.py)"
@@ -540,12 +461,6 @@ def build_prompt(
     tables: list[str],
     lookback_days: int = 1,
 ) -> str:
-    """The task, with a compact pack of the data rendered up front.
-
-    A blank request asks a user to be an engineer; this asks with the shape of
-    the tables already in hand. The agent still explores with the tools, but it
-    starts from the columns, the small value lists and a few rows.
-    """
     return f"""
 {natural_language.strip()}
 
@@ -582,14 +497,6 @@ def build_revision_prompt(
     tables: list[str],
     lookback_days: int = 1,
 ) -> str:
-    """The change request, with the rule it is changing in front of it.
-
-    The pack of the data comes along for the same reason it does on a first
-    draft: the agent should not have to ask for a table's columns before it can
-    judge the request. What differs is the source in the middle - a revision is a
-    change to a thing that exists, and the thing it is changing is the one input
-    the model cannot get any other way.
-    """
     return f"""
 {request.strip()}
 
@@ -615,131 +522,9 @@ run_rule. Emit only the module when it is ready.
 """.strip()
 
 
-@dataclass
-class ToolCall:
-    """One tool the model asked for."""
-
-    id: str
-    name: str
-    arguments: dict[str, Any] = field(default_factory=dict)
-
-    def as_message(self) -> dict[str, Any]:
-        return {
-            "id": self.id,
-            "type": "function",
-            "function": {"name": self.name, "arguments": json.dumps(self.arguments)},
-        }
-
-
-@dataclass
-class ModelReply:
-    """One turn of the model: text, tool calls, or both."""
-
-    content: str = ""
-    tool_calls: list[ToolCall] = field(default_factory=list)
-
-
-def _reply(message: Any) -> ModelReply:
-    """Read one assistant message into a ModelReply."""
-    calls: list[ToolCall] = []
-    for call in getattr(message, "tool_calls", None) or []:
-        try:
-            arguments = json.loads(call.function.arguments or "{}")
-        except (json.JSONDecodeError, TypeError):
-            arguments = {}
-        if not isinstance(arguments, dict):
-            arguments = {}
-        calls.append(ToolCall(id=call.id, name=call.function.name, arguments=arguments))
-    return ModelReply(content=message.content or "", tool_calls=calls)
-
-
-def chat(
-    messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None = None
-) -> ModelReply:
-    """One call to the model, optionally with tools. Returns its turn.
-
-    `LLM_EXTRA_PARAMS` is the deployment's own knob for its provider - the
-    reasoning budget, the thinking toggle, whatever that endpoint calls it.
-    It is optional because the parameter is not standard: an endpoint that has
-    never heard of it answers 400, and a rule that cannot be generated because
-    of a performance flag is worse than a slow one. So a rejection is retried
-    once without it, and the deployment is left working.
-    """
-    if not is_configured():
-        raise RuntimeError(
-            "LLM not configured. Set LLM_BASE_URL, LLM_API_KEY and LLM_MODEL in backend/.env"
-        )
-
-    from openai import OpenAI
-
-    client = OpenAI(
-        base_url=settings.llm_base_url,
-        api_key=settings.llm_api_key or "not-needed",
-        timeout=float(settings.llm_timeout_seconds),
-    )
-
-    extra = dict(settings.llm_extra_params or {})
-    kwargs: dict[str, Any] = {
-        "model": settings.llm_model,
-        "temperature": 0.1,
-        "messages": messages,
-    }
-    if tools:
-        kwargs["tools"] = tools
-        kwargs["tool_choice"] = "auto"
-    if extra:
-        kwargs["extra_body"] = extra
-
-    try:
-        response = client.chat.completions.create(**kwargs)
-    except Exception as exc:  # noqa: BLE001
-        if not extra or not _rejected_the_extra_params(exc):
-            raise
-        log.warning("the model endpoint rejected %s; retrying without it", extra)
-        kwargs.pop("extra_body", None)
-        response = client.chat.completions.create(**kwargs)
-
-    return _reply(response.choices[0].message)
-
-
-def complete(system: str, user: str) -> str:
-    """One call, no tools. Kept for the plain-English explainer."""
-    reply = chat(
-        [{"role": "system", "content": system}, {"role": "user", "content": user}]
-    )
-    return (reply.content or "").strip()
-
-
-def _rejected_the_extra_params(exc: Exception) -> bool:
-    """Did the endpoint refuse because of the extra parameters?
-
-    Only then is it worth retrying without them. A rate limit or an auth
-    failure is not the parameter's fault, and retrying would hide it.
-    """
-    text = str(exc).lower()
-    if "400" not in text and "bad_request" not in text:
-        return False
-    keys = [k.lower() for k in (settings.llm_extra_params or {})]
-    return any(k in text for k in keys) or "invalid params" in text
-
-
-def strip_fences(text: str) -> str:
-    """The model wraps code in markdown more often than not."""
-    text = (text or "").strip()
-    if not text.startswith("```"):
-        return text
-    lines = text.splitlines()
-    if lines and lines[0].startswith("```"):
-        lines = lines[1:]
-    if lines and lines[-1].strip() == "```":
-        lines = lines[:-1]
-    return "\n".join(lines).strip()
-
-
 def _table_values(
     entity: str, name: str, data_date: date, declared: dict[str, str]
 ) -> tuple[dict[str, list[str]], dict[str, str]]:
-    """The value lists and format examples the prompt would show for a table."""
     path = (
         settings.sourcedata_dir / entity.upper() / data_date.isoformat()
         / f"{name}.csv"
@@ -756,7 +541,6 @@ def _table_values(
 def preview_context(
     catalog: Catalog, entity: str, data_date: date, tables: list[str] | None = None
 ) -> dict[str, Any]:
-    """What the LLM will be shown - also handy for debugging in the UI."""
     chosen = set(tables) if tables is not None else None
 
     datasources: dict[str, Any] = {}

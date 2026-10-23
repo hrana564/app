@@ -3,26 +3,6 @@ import { Alert, Box, Card, CardContent, Chip, Collapse, Stack, TextField, Typogr
 import LockOutlinedIcon from "@mui/icons-material/LockOutlined";
 import { api, storeSession, takeReturnTo, type DemoAccount } from "../dataProvider";
 
-/**
- * The sign-in form.
- *
- * It stands on its own: with no session there is no react-admin admin around
- * it, so it cannot use react-admin's `useLogin` or `useNotify`. It signs in
- * through the same data provider everything else uses, and reports a refusal
- * in the page rather than in a snackbar - a snackbar needs the admin too.
- *
- * THE DEMO PANEL
- * --------------
- * One account per role, offered with its password so a reviewer can try each
- * one without being given accounts by hand. The list comes from the API
- * rather than living here, because the panel and the seed would otherwise be
- * two copies of the same list - and two copies of a list of passwords drift
- * the first time somebody changes one.
- *
- * The API answers with nothing unless the deployment has opted in, so the
- * panel simply is not there for a deployment that does not want its
- * passwords advertised.
- */
 export const Login = () => {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");

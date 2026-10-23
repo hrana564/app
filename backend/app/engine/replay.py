@@ -1,26 +1,3 @@
-"""
-Replay a captured run.
-
-    python -m app.engine.replay 123
-    python -m app.engine.replay mount/Rules_Executions/000123
-    python -m app.engine.replay 123 --save fixed.py
-
-Runs the rule copy and the CSV copies frozen in the run folder. No database, no
-network, no scheduler - which is the point: a failure you can reproduce is a
-failure you can fix, and this runs while you fix it.
-
-REPRODUCIBILITY IS THE POINT
-----------------------------
-If the folder has a `result.json` from the original run, this compares the
-replayed outcome against it and says plainly whether they agree. A mismatch is
-not noise - it means either the rule was edited after that run (in which case
-the folder is doing its job and you are looking at a deliberate difference) or
-something non-deterministic crept into the rule.
-
-`--save` copies the folder's rule.py out to a working file, so the fix can be
-made on the exact code that failed and then published as a new version.
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -63,7 +40,6 @@ def _load_result(folder: Path) -> dict | None:
 
 
 def _compare(recorded: dict | None, fresh: dict) -> str | None:
-    """Describe how the replay differs from the recorded run, or None."""
     if recorded is None:
         return None
 

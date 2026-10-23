@@ -14,25 +14,6 @@ import { api, type RoleOption, type UserRow } from "../dataProvider";
 import { can, usePermissions } from "../permissions";
 import { FONT } from "../theme";
 
-/**
- * The accounts, and the roles that decide what they may do.
- *
- * There was no screen here, and no endpoint either: the only two accounts a
- * deployment ever had were the two in its `.env`. A portal whose whole promise
- * is that an auditor has a role to play could not add an auditor.
- *
- * The role column is the important one. Everything else on this screen -
- * the name, the password - is bookkeeping; the role is what the person is
- * actually here to do, and it is the thing worth reading down the column.
- *
- * THE LIST OF ROLES IS HANDED IN
- * -------------------------------
- * It comes from `GET /api/roles`, fetched once by the Settings page. The
- * picker used to carry its own list of three, and it was missing one: a role
- * that existed on the server and could not be assigned through the screen
- * because nobody had remembered to add it here. Two copies of a list are two
- * things that have to agree, and only one of them is checked.
- */
 
 const labelFor = (roles: RoleOption[], role: string) =>
   roles.find((r) => r.name === role)?.label ?? role;
@@ -464,14 +445,6 @@ const ResetDialog = ({
 /* ------------------------------------------------------------------ */
 /* Remove                                                             */
 /* ------------------------------------------------------------------ */
-/**
- * Removal is permanent, so the dialog says plainly what is lost.
- *
- * The ledger keeps the username as text, so the records of what this person
- * did survive - but the account does not, and the name can be reused, which
- * makes those older entries ambiguous. Deactivating is the softer path, and
- * it is on the edit dialog.
- */
 const DeleteDialog = ({
   user, busy, onClose, onDone,
 }: {

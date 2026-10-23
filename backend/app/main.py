@@ -1,5 +1,3 @@
-"""Audit Portal - FastAPI application."""
-
 from __future__ import annotations
 
 import logging
@@ -9,7 +7,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api import (
-    assurance, auth, datasources, roles, rules, runs, schedules, tickets, users,
+    assurance, auth, datasources, roles, rules, rules_agent, rules_explain, runs,
+    schedules, source, tickets, users,
 )
 from app.db import SessionLocal, init_models, table_names
 from app.engine import scheduler
@@ -43,7 +42,6 @@ async def lifespan(app: FastAPI):
 
 
 async def _bootstrap() -> None:
-    """Seed the bootstrap users and any missing baseline parameters."""
     from sqlalchemy import select
 
     from app.models import User
@@ -130,7 +128,10 @@ app.add_middleware(
 app.include_router(auth.router)
 app.include_router(users.router)
 app.include_router(roles.router)
+app.include_router(rules_agent.router)
+app.include_router(rules_explain.router)
 app.include_router(rules.router)
+app.include_router(source.router)
 app.include_router(schedules.router)
 app.include_router(runs.router)
 app.include_router(tickets.router)

@@ -1,39 +1,20 @@
-"""
-Rules, keyed by their permanent `code`.
-
-A rule is a chain of version rows in `rules_master`; exactly one is flagged
-`is_version_active` (the head). Rules are therefore addressed by code, not by
-row id - the code is what schedules reference and what filenames derive from.
-
-Two different kinds of change, kept on separate endpoints on purpose:
-
-    PUT /api/rules/{code}            content edit -> rewrites the working draft
-    PUT /api/rules/{code}/status     pause / activate / retire -> no new version
-
-Pausing a rule is not a logic change, so it must not burn a version number.
-"""
-
 from __future__ import annotations
 
 import logging
 import shutil
 from datetime import date
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
-from starlette.concurrency import run_in_threadpool
 
 from app.api.deps import SessionDep, require
-from app.engine import explain_llm
-from app.engine.catalog import database_catalog
+from app.engine import description
 from app.engine.datasources import default_entity
 from app.engine.discovery import latest_date
-from app.engine.explain import check, derive, derived_prose, source_hash
 from app.engine.loader import read_source, write_source
-from app.engine.rule_generator import is_configured, preview_context
 from app.engine.rules import CodeError, scoped_code, validate_code, versioned_filename
 from app.engine.runner import execute_rule
 from app.engine.validation import RuleValidator, declared_tables, now
@@ -41,34 +22,21 @@ from app.models import Rule, RuleExplanation, RuleSchedule, Run, Ticket, User
 from app.permissions import (
     RULES_ACTIVATE,
     RULES_DELETE,
-    RULES_EXPLAIN_REVIEW,
-    RULES_GENERATE,
     RULES_READ,
     RULES_TEST,
     RULES_WRITE,
 )
 from app.schemas import (
-    AgentStep,
-    ExplanationEdit,
-    ExplanationOut,
-    ExplanationReview,
-    ExplanationStepOut,
-    GateOut,
-    GenerationAttempt,
     PublishOut,
     RollbackOut,
     RuleCreate,
-    RuleGenerateRequest,
-    RuleGenerateResponse,
     RuleOut,
     RulePublish,
-    RuleReviseRequest,
     RuleStatusUpdate,
     RuleTestResponse,
     RuleUpdate,
     RuleVersionOut,
     RunRequest,
-    TrialOut,
     ValidationReport,
 )
 from app.settings import settings
@@ -84,20 +52,16 @@ RulesTester = Annotated[User, Depends(require(RULES_TEST))]
 RulesWriter = Annotated[User, Depends(require(RULES_WRITE))]
 RulesActivator = Annotated[User, Depends(require(RULES_ACTIVATE))]
 RulesDeleter = Annotated[User, Depends(require(RULES_DELETE))]
-RulesGenerator = Annotated[User, Depends(require(RULES_GENERATE))]
-ExplanationReviewer = Annotated[User, Depends(require(RULES_EXPLAIN_REVIEW))]
 
 # Fields copied forward when a new version is created.
 CARRIED_FIELDS = (
     "name", "entity", "description", "severity", "lookback_days",
 )
 
-
 # ---------------------------------------------------------------------------
 # helpers
 # ---------------------------------------------------------------------------
 async def head(session, code: str) -> Rule | None:
-    """The live version of a rule, or None."""
     return (
         await session.execute(
             select(Rule).where(Rule.code == code, Rule.is_version_active.is_(True))
@@ -113,22 +77,6 @@ async def require_head(session, code: str) -> Rule:
 
 
 async def working_draft(session, code: str) -> Rule | None:
-    """The one draft an edit rewrites - the newest version still in draft.
-
-    A rule has at most one, and it is one of two things:
-
-      * the head itself, when the rule has never been published: the first
-        version is created as a draft and there is no live control for it to
-        sit beside; or
-      * the single non-head draft candidate, when a published rule is being
-        rewritten before its replacement goes on the air.
-
-    `status == "draft"` is what identifies it; a version that has ever run
-    keeps `active`, `paused` or `retired`, so a demoted history row is never
-    mistaken for a draft. Taking the NEWEST draft - rather than the head - also
-    keeps the working copy the one with the latest edits when an older build
-    left a rule with more than one draft.
-    """
     return (
         await session.execute(
             select(Rule)
@@ -140,13 +88,6 @@ async def working_draft(session, code: str) -> Rule | None:
 
 
 async def row_for(session, code: str, version: int | None = None) -> Rule:
-    """The version asked for, or the head when none is asked for.
-
-    Every read that can be pointed at one version goes through here, so the
-    page showing v1 and the endpoints serving it cannot disagree about which
-    row that is. A version row carries its own source file, so the source, the
-    explanation and the hash that pins them all follow from this one lookup.
-    """
     if version is None:
         return await require_head(session, code)
 
@@ -186,22 +127,6 @@ async def publish_version(
     origin: str | None = None,
     promote: bool = True,
 ) -> Rule:
-    """
-    Create the next version.
-
-    `promote` is the whole of the difference between a candidate and a release:
-
-      promote=True   the new version becomes the head, so the scheduler runs it.
-                     The previous head is demoted. This is a rollback, and a
-                     first version.
-      promote=False  the new version is a DRAFT CANDIDATE. The live version keeps
-                     the head and keeps running until this one is published. This
-                     is an edit, so the control is never off the air while its
-                     replacement is written and read.
-
-    Either way the new row starts as `draft` with validation reset - a candidate
-    must be validated, and published, before it runs.
-    """
     version = await max_version(session, code) + 1
     filename = versioned_filename(code, version)
     write_source(filename, new_source, settings.rules_dir)
@@ -236,17 +161,6 @@ async def publish_version(
 
 
 async def pending_version(session, code: str) -> int | None:
-    """The newest DRAFT that is not the head - a candidate waiting to publish.
-
-    One number answers the question on both ends of it: the live version's page
-    says "v3 is waiting", and v3's own page reads the same number and knows it is
-    a candidate rather than a record of something already superseded.
-
-    The `status == "draft"` filter is load-bearing. Without it, publishing a
-    draft leaves the version it just replaced as the newest non-head row - and
-    the live page announces that demoted history as a draft waiting to be
-    published, which is the opposite of what happened.
-    """
     value = (
         await session.execute(
             select(func.max(Rule.version)).where(
@@ -257,8 +171,6 @@ async def pending_version(session, code: str) -> int | None:
         )
     ).scalar_one()
     return int(value) if value else None
-
-
 # ---------------------------------------------------------------------------
 # read
 # ---------------------------------------------------------------------------
@@ -326,251 +238,6 @@ async def list_rules(
         out.pending_version = pending.get(r.code)
         data.append(out.model_dump(mode="json"))
     return {"data": data, "total": total}
-
-
-@router.get("/generate/status")
-async def generate_status(_user: RulesReader) -> dict:
-    return {"configured": is_configured(), "model": settings.llm_model or None}
-
-
-@router.get("/generate/context")
-async def generate_context(
-    session: SessionDep,
-    _user: RulesReader,
-    entity: str | None = None,
-    data_date: date | None = None,
-) -> dict:
-    code = (entity or default_entity()).upper()
-    catalog = await database_catalog(session)
-    return preview_context(catalog, code, data_date or _latest_data_date(code))
-
-
-@router.post("/generate", response_model=RuleGenerateResponse)
-async def generate(
-    payload: RuleGenerateRequest, session: SessionDep, admin: RulesGenerator
-) -> RuleGenerateResponse:
-    """Ask for a rule, and get back one that has been run.
-
-    Nothing is created here. The agent writes a rule, runs it against the
-    bytes the estate actually holds, and repairs it if it does not run - and
-    what comes back is a piece of source and the verdict on it. The rule row
-    and the file are written when the admin presses Save, so a rule that has
-    never been reviewed never reaches the catalogue.
-    """
-    entity = (payload.entity or default_entity()).upper()
-    target = payload.data_date or _latest_data_date(entity)
-
-    catalog = await database_catalog(session)
-    await _check_registered(catalog, entity, payload.datasources)
-
-    result = await run_in_threadpool(
-        _run_agent,
-        catalog,
-        payload.prompt,
-        entity,
-        target,
-        payload.datasources,
-        payload.lookback_days,
-    )
-
-    return _agent_response(
-        result,
-        entity=entity,
-        data_date=target,
-        lookback_days=payload.lookback_days,
-        suggested_code=await _next_generated_code(session, entity),
-    )
-
-
-@router.post("/{code}/revise", response_model=RuleGenerateResponse)
-async def revise(
-    code: str, payload: RuleReviseRequest, session: SessionDep, admin: RulesWriter
-) -> RuleGenerateResponse:
-    """Rewrite an existing rule from a plain-language change request.
-
-    Nothing is created. The agent is given the rule's current source - the draft
-    being worked on if there is one, otherwise the live version - and told to
-    change only what the request asks. It proves the result runs, and what comes
-    back is a candidate and the verdict on it. It becomes a version when the
-    admin saves it, which is what keeps an unreviewed rule out of the catalogue.
-    """
-    current = await require_head(session, code)
-    base = await _revision_base(session, code, current)
-    source = _source_or_409(base)
-
-    entity = base.entity
-    target = payload.data_date or _latest_data_date(entity)
-    lookback = payload.lookback_days or base.lookback_days
-
-    catalog = await database_catalog(session)
-    await _check_registered(catalog, entity, payload.datasources)
-
-    result = await run_in_threadpool(
-        _run_revision,
-        catalog,
-        payload.prompt,
-        source,
-        entity,
-        target,
-        payload.datasources,
-        lookback,
-    )
-    return _agent_response(
-        result, entity=entity, data_date=target, lookback_days=lookback
-    )
-
-
-async def _check_registered(catalog, entity: str, datasources: list[str]) -> None:
-    """Refuse a selection the client does not have registered.
-
-    The selection binds. A rule that reads a table outside it is rejected before
-    it runs, so saying so here names the table and the client rather than leaving
-    the agent to discover it.
-    """
-    registered = sorted(catalog.names_for(entity))
-    unknown = [t for t in datasources if t not in registered]
-    if unknown:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                f"{', '.join(unknown)} is not registered for {entity}. "
-                f"Registered: {', '.join(registered) or '(none)'}"
-            ),
-        )
-
-
-def _agent_response(
-    result,
-    *,
-    entity: str,
-    data_date: date,
-    lookback_days: int,
-    suggested_code: str | None = None,
-) -> RuleGenerateResponse:
-    """The agent's answer, on the wire. Shared by generate and revise - the two
-    differ in the prompt they build, not in what they hand back."""
-    trial = None
-    if result.trial is not None:
-        t = result.trial
-        trial = TrialOut(
-            status=t.status,
-            ok=t.ok,
-            outcome=t.outcome,
-            summary=t.summary,
-            rows=t.rows,
-            metrics=t.metrics,
-            error=t.error,
-            duration_ms=t.duration_ms,
-            warnings=t.warnings,
-        )
-
-    return RuleGenerateResponse(
-        ok=result.ok,
-        entity=entity,
-        data_date=data_date,
-        lookback_days=lookback_days,
-        source_code=result.source,
-        name=result.name,
-        description=result.description,
-        datasources_used=result.datasources_used,
-        trial=trial,
-        attempts=[
-            GenerationAttempt(
-                n=a["n"], ok=a["ok"], error=a.get("error"), traceback=a.get("traceback")
-            )
-            for a in result.attempts
-        ],
-        suggested_code=suggested_code,
-        error=result.error,
-        trace=[
-            AgentStep(
-                tool=step["tool"],
-                args=step.get("args") or {},
-                summary=step.get("summary", ""),
-            )
-            for step in result.trace
-        ],
-    )
-
-
-async def _revision_base(session, code: str, current: Rule) -> Rule:
-    """The version a revision starts from.
-
-    A pending draft is the thing being worked on, so a revision continues it
-    rather than starting again from the live code. With no draft it is the live
-    version.
-    """
-    newest = (
-        await session.execute(
-            select(Rule)
-            .where(Rule.code == code)
-            .order_by(Rule.version.desc())
-            .limit(1)
-        )
-    ).scalar_one_or_none()
-    return newest or current
-
-
-def _run_revision(catalog, prompt, current_source, entity, data_date, tables, lookback_days):
-    """Run a revision in a worker thread, for the same reason as `_run_agent`."""
-    from app.engine.rule_agent import run_revision
-
-    return run_revision(
-        catalog=catalog,
-        request=prompt,
-        current_source=current_source,
-        entity=entity,
-        data_date=data_date,
-        tables=tables,
-        lookback_days=lookback_days,
-        allowed=tables,
-    )
-
-
-def _run_agent(catalog, prompt, entity, data_date, tables, lookback_days):
-    """Run the agent in a worker thread.
-
-    The model calls and the trials are all blocking, so the whole loop runs in
-    this thread and the endpoint awaits it. The bound comes from the model
-    client's own timeout, not from here: a request that gives up early leaves a
-    thread mid-thought, which is worse than one that waits.
-    """
-    from app.engine.rule_agent import run_generation
-
-    return run_generation(
-        catalog=catalog,
-        prompt=prompt,
-        entity=entity,
-        data_date=data_date,
-        tables=tables,
-        lookback_days=lookback_days,
-        allowed=tables,
-    )
-
-
-async def _next_generated_code(session, entity: str) -> str:
-    """The next free `<CLIENT>-GEN-nn`.
-
-    Generated rules are numbered separately from the audit programme's own
-    codes (`LAD-CA-03`), because a generated rule has not been through the
-    programme's numbering and must not look as though it has. The number
-    counts per client, so each client's generated rules run 01, 02, 03.
-    """
-    rows = (
-        await session.execute(
-            select(Rule.code).where(
-                Rule.entity == entity, Rule.code.like("%-GEN-%")
-            )
-        )
-    ).scalars().all()
-    numbers = []
-    for code in rows:
-        tail = str(code).split("-")[-1]
-        if tail.isdigit():
-            numbers.append(int(tail))
-    return scoped_code(f"GEN-{(max(numbers) + 1) if numbers else 1:02d}", entity)
-
-
 @router.get("/{code}")
 async def get_rule(
     code: str, session: SessionDep, _user: RulesReader, version: int | None = None
@@ -639,283 +306,7 @@ async def list_versions(
             )
         )
     return out
-
-
-# ---------------------------------------------------------------------------
-# the plain-English explanation
-# ---------------------------------------------------------------------------
-def _step_out(step: dict[str, Any], derived: dict[int, Any]) -> ExplanationStepOut:
-    n = int(step.get("n", 0))
-    source = derived.get(n)
-    return ExplanationStepOut(
-        n=n,
-        text=str(step.get("text") or ""),
-        lines=list(step.get("lines") or (source.lines if source else [])),
-        kind=source.kind if source else "",
-        explainable=source.explainable if source else True,
-    )
-
-
-async def _stored(session, rule: Rule) -> RuleExplanation | None:
-    return (
-        await session.execute(
-            select(RuleExplanation).where(RuleExplanation.rule_id == rule.id)
-        )
-    ).scalar_one_or_none()
-
-
-def _explanation_out(
-    rule: Rule,
-    outline,
-    source: str,
-    row: RuleExplanation | None,
-    *,
-    stale: bool,
-    digest: str | None = None,
-) -> ExplanationOut:
-    """What the page is shown: always something true, and never stale words.
-
-    The derivation runs on every read, so the steps and their line ranges are
-    current even when the stored prose is not. Stale prose is dropped rather
-    than shown - a description of the previous version sitting under this
-    version's code is the failure this whole design exists to prevent.
-    """
-    from app.engine.explain import derived_prose
-
-    prose = derived_prose(outline)
-    origin = "derived"
-    gates: list[GateOut] = []
-    meta = {
-        "generated_by": "",
-        "model": "",
-        "prompt_version": "",
-        "generated_at": None,
-        "reviewed_by": None,
-        "reviewed_at": None,
-    }
-
-    if row is not None and not stale:
-        prose = {
-            "breach_condition": row.breach_condition,
-            "steps": row.steps,
-            "cannot_explain": row.cannot_explain,
-            "outputs": row.outputs,
-        }
-        origin = row.origin
-        gates = [GateOut(**g) for g in (row.gates or [])]
-        meta = {
-            "generated_by": row.generated_by,
-            "model": row.model,
-            "prompt_version": row.prompt_version,
-            "generated_at": row.created_at,
-            "reviewed_by": row.reviewed_by,
-            "reviewed_at": row.reviewed_at,
-        }
-
-    derived = {s.n: s for s in outline.steps}
-    return ExplanationOut(
-        code=rule.code,
-        version=rule.version,
-        source_sha256=digest or source_hash(source),
-        origin=origin,
-        stored=row is not None and not stale,
-        stale=stale,
-        llm_configured=is_configured(),
-        purpose=outline.purpose,
-        breach_condition=prose.get("breach_condition") or outline.purpose,
-        steps=[_step_out(s, derived) for s in prose.get("steps") or []],
-        outputs=list(prose.get("outputs") or []),
-        cannot_explain=list(prose.get("cannot_explain") or []),
-        gates=gates,
-        **meta,
-    )
-
-
-@router.get("/{code}/explain", response_model=ExplanationOut)
-async def get_explanation(
-    code: str, session: SessionDep, _user: RulesReader, version: int | None = None
-) -> ExplanationOut:
-    """What this version does, in plain English.
-
-    Cheap and safe to call: the structure is derived from the version's own file
-    on every request, so the page never shows a description of code that has
-    moved on. Nothing is generated here - a GET does not spend money at a model.
-    """
-    rule = await row_for(session, code, version)
-    source = _source_or_409(rule)
-    outline = derive(source)
-    row = await _stored(session, rule)
-    digest = source_hash(source)
-    stale = row is not None and row.source_sha256 != digest
-    return _explanation_out(rule, outline, source, row, stale=stale, digest=digest)
-
-
-@router.post("/{code}/explain", response_model=ExplanationOut)
-async def generate_explanation(
-    code: str, session: SessionDep, user: RulesWriter, version: int | None = None
-) -> ExplanationOut:
-    """Write (or rewrite) the description with the model, and store it.
-
-    Every answer is gated before it is stored, and a model that fails twice is
-    not stored at all - the derived wording is, marked as such. With no model
-    configured this endpoint still works: it stores the derived description,
-    which is the whole point of the derivation being the substrate.
-    """
-    rule = await row_for(session, code, version)
-    source = _source_or_409(rule)
-    outline = derive(source)
-    digest = source_hash(source)
-
-    prose, gates, model = await run_in_threadpool(
-        explain_llm.write,
-        outline,
-        source,
-        {"code": rule.code, "name": rule.name, "severity": rule.severity,
-         "lookback_days": rule.lookback_days},
-    )
-
-    if prose is None:
-        prose = derived_prose(outline)
-        origin = "derived"
-    else:
-        origin = "ai"
-
-    values: dict[str, Any] = {
-        "rule_code": rule.code,
-        "version": rule.version,
-        "source_sha256": digest,
-        "breach_condition": prose.get("breach_condition") or "",
-        "steps": prose.get("steps") or [],
-        "cannot_explain": prose.get("cannot_explain") or outline.cannot_explain,
-        "outputs": prose.get("outputs") or outline.outputs,
-        "origin": origin,
-        "model": model,
-        "prompt_version": explain_llm.PROMPT_VERSION if origin == "ai" else "",
-        "generated_by": user.username,
-        "gates": [g.as_dict() for g in gates],
-        # A new description has not been signed off, whatever the old one had.
-        "reviewed_by": None,
-        "reviewed_at": None,
-    }
-    row = await _upsert(session, rule, values)
-    return _explanation_out(rule, outline, source, row, stale=False, digest=digest)
-
-
-@router.put("/{code}/explain", response_model=ExplanationOut)
-async def edit_explanation(
-    code: str, payload: ExplanationEdit, session: SessionDep, user: RulesWriter,
-    version: int | None = None,
-) -> ExplanationOut:
-    """A person correcting the words.
-
-    The text is theirs: it is stored as written and marked `edited`, because a
-    description a human has changed is a different kind of evidence from one a
-    model wrote. The line ranges are still the derivation's - those are links
-    into the file, and a link that does not land where it says is worse than no
-    link.
-    """
-    rule = await row_for(session, code, version)
-    source = _source_or_409(rule)
-    outline = derive(source)
-    spans = {s.n: list(s.lines) for s in outline.steps}
-
-    steps: list[dict[str, Any]] = []
-    for step in payload.steps:
-        try:
-            n = int(step.get("n", 0))
-        except (TypeError, ValueError):
-            continue
-        if n not in spans:
-            raise HTTPException(
-                status_code=422,
-                detail=f"Step {n} is not in this rule's source; it has "
-                       f"{len(spans)} steps.",
-            )
-        steps.append({"n": n, "text": str(step.get("text") or "").strip(), "lines": spans[n]})
-
-    missing = sorted(set(spans) - {s["n"] for s in steps})
-    if missing:
-        raise HTTPException(
-            status_code=422,
-            detail="Every step needs words: " + ", ".join(str(n) for n in missing),
-        )
-
-    prose = {"breach_condition": payload.breach_condition, "steps": steps}
-    gates = check(outline, prose, len(source.splitlines()))
-    digest = source_hash(source)
-
-    values: dict[str, Any] = {
-        "rule_code": rule.code,
-        "version": rule.version,
-        "source_sha256": digest,
-        "breach_condition": payload.breach_condition,
-        "steps": steps,
-        "cannot_explain": outline.cannot_explain,
-        "outputs": outline.outputs,
-        "origin": "edited",
-        "model": "",
-        "prompt_version": "",
-        "generated_by": user.username,
-        "gates": [g.as_dict() for g in gates],
-        "reviewed_by": None,
-        "reviewed_at": None,
-    }
-    row = await _upsert(session, rule, values)
-    return _explanation_out(rule, outline, source, row, stale=False, digest=digest)
-
-
-@router.post("/{code}/explain/review", response_model=ExplanationOut)
-async def review_explanation(
-    code: str, payload: ExplanationReview, session: SessionDep,
-    user: ExplanationReviewer, version: int | None = None,
-) -> ExplanationOut:
-    """Sign the description off, or withdraw the sign-off.
-
-    A distinct capability from editing the rule: the reviewer is the person
-    answerable for the control, and they are usually not the person who wrote
-    it. Withdrawing is the same call with `approved: false`, because a
-    rejection that cannot be recorded leaves the page claiming a review that
-    did not happen.
-    """
-    rule = await row_for(session, code, version)
-    source = _source_or_409(rule)
-    outline = derive(source)
-    row = await _stored(session, rule)
-    if row is None:
-        raise HTTPException(
-            status_code=404,
-            detail="This rule has no description to sign off yet.",
-        )
-    digest = source_hash(source)
-    if row.source_sha256 != digest:
-        raise HTTPException(
-            status_code=409,
-            detail="The description is older than the code. Regenerate it, then "
-                   "sign it off.",
-        )
-
-    row.reviewed_by = user.username if payload.approved else None
-    row.reviewed_at = now() if payload.approved else None
-    await session.commit()
-    await session.refresh(row)
-    return _explanation_out(rule, outline, source, row, stale=False, digest=digest)
-
-
-async def _upsert(
-    session, rule: Rule, values: dict[str, Any]
-) -> RuleExplanation:
-    row = await _stored(session, rule)
-    if row is None:
-        row = RuleExplanation(rule_id=rule.id, rule_code=rule.code, version=rule.version)
-        session.add(row)
-    for key, value in values.items():
-        setattr(row, key, value)
-    await session.commit()
-    await session.refresh(row)
-    return row
-
-
-def _source_or_409(rule: Rule) -> str:
+def source_or_409(rule: Rule) -> str:
     try:
         return read_source(rule.source_file, settings.rules_dir)
     except FileNotFoundError as exc:
@@ -923,8 +314,6 @@ def _source_or_409(rule: Rule) -> str:
             status_code=409,
             detail=f"Source file {rule.source_file} is missing on disk",
         ) from exc
-
-
 # ---------------------------------------------------------------------------
 # create
 # ---------------------------------------------------------------------------
@@ -977,9 +366,16 @@ async def create_rule(
         await session.rollback()
         raise HTTPException(status_code=409, detail=f"Rule {code} already exists") from exc
     await session.refresh(rule)
+
+    # The description came with the rule, so it is stored with it. The draft
+    # is born complete: a reviewer can read what the control does before
+    # deciding whether it goes live.
+    if payload.explanation is not None:
+        await description.store(
+            session, rule, payload.source_code, payload.explanation
+        )
+
     return RuleOut.model_validate(rule)
-
-
 # ---------------------------------------------------------------------------
 # update - a content edit rewrites the working draft
 # ---------------------------------------------------------------------------
@@ -1048,11 +444,18 @@ async def update_rule(
 
     await session.commit()
     await session.refresh(nxt)
+
+    # The description of the draft. A revision by the agent brings its own,
+    # so the words always match the code they were written about. An edit that
+    # did not bring one leaves the old words against the old code - and the
+    # reader withholds a description whose source has changed, so a stale
+    # description can never be shown against the wrong code.
+    if payload.explanation is not None:
+        await description.store(session, nxt, source, payload.explanation)
+
     out = RuleOut.model_validate(nxt)
     out.pending_version = await pending_version(session, code)
     return out
-
-
 @router.put("/{code}/status", response_model=RuleOut)
 async def set_status(
     code: str, payload: RuleStatusUpdate, session: SessionDep, admin: RulesActivator
@@ -1081,8 +484,6 @@ async def set_status(
     await session.commit()
     await session.refresh(rule)
     return RuleOut.model_validate(rule)
-
-
 # ---------------------------------------------------------------------------
 # validation
 # ---------------------------------------------------------------------------
@@ -1156,8 +557,6 @@ async def _validate_and_store(session, rule: Rule, *, username: str | None) -> V
         description=meta.get("description"),
         can_activate=result.ok,
     )
-
-
 # ---------------------------------------------------------------------------
 # rollback / delete / test
 # ---------------------------------------------------------------------------
@@ -1211,6 +610,12 @@ async def rollback(
         origin=target.origin,
     )
     await session.flush()
+
+    # The description of the version being restored travels with it. The
+    # source is the same bytes that were described before, so the words are
+    # copied rather than paid for again - and the copy is made against the
+    # hash of the source, so it cannot be about the wrong code.
+    await description.copy_forward(session, nxt, source)
 
     report = await _validate_and_store(session, nxt, username=admin.username)
     activated = report.status == "valid"
@@ -1288,8 +693,6 @@ async def publish_rule(
     out = RuleOut.model_validate(rule)
     out.pending_version = await pending_version(session, code)
     return PublishOut(rule=out, validation=report, activated=activated)
-
-
 @router.delete("/{code}/draft", status_code=204)
 async def discard_draft(code: str, session: SessionDep, _user: RulesWriter) -> None:
     """Throw away the rule's working draft.
@@ -1381,8 +784,6 @@ async def discard_draft(code: str, session: SessionDep, _user: RulesWriter) -> N
         except OSError as exc:
             # A stray file is untidy, not dangerous - never fail the discard.
             log.warning("could not remove %s: %s", name, exc)
-
-
 @router.delete("/{code}", status_code=204)
 async def delete_rule(code: str, session: SessionDep, admin: RulesDeleter) -> None:
     """
@@ -1461,14 +862,10 @@ async def delete_rule(code: str, session: SessionDep, admin: RulesDeleter) -> No
                 shutil.rmtree(folder)
             except OSError as exc:
                 log.warning("could not remove run folder %s: %s", folder, exc)
-
-
 async def scheduler_remove(schedule_id: int) -> None:
     from app.engine import scheduler
 
     await scheduler.remove_schedule(schedule_id)
-
-
 @router.post("/{code}/test", response_model=RuleTestResponse)
 async def test_rule(
     code: str, payload: RunRequest, session: SessionDep, _user: RulesTester
@@ -1481,7 +878,7 @@ async def test_rule(
     run = await execute_rule(
         session,
         rule=rule,
-        data_date=payload.data_date or _latest_data_date(rule.entity),
+        data_date=payload.data_date or data_date_for(rule.entity),
         triggered_by="manual_test",
     )
     return RuleTestResponse(
@@ -1494,14 +891,6 @@ async def test_rule(
         error_detail=run.error_detail,
         duration_ms=run.duration_ms,
     )
-
-
-def _latest_data_date(entity: str | None = None) -> date:
-    """The newest day we hold for a client, or today when we hold none.
-
-    The scan itself lives in `discovery.available_dates()`. Two implementations
-    of "which days exist" is how an endpoint and the Data Sources screen come to
-    disagree about the day they are showing.
-    """
+def data_date_for(entity: str | None = None) -> date:
     found = latest_date(entity or default_entity())
     return date.fromisoformat(found) if found else date.today()

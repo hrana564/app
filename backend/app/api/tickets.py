@@ -1,5 +1,3 @@
-"""Tickets: the alert an auditor acknowledges."""
-
 from __future__ import annotations
 
 from datetime import datetime, timezone
@@ -35,20 +33,6 @@ MAX_GROUP_SCAN = 5000
 
 
 def _filtered(stmt, count_stmt, *, status, rule_code, severity, q, entity=None):
-    """Narrow the page query and the count query identically.
-
-    Both always join rule_runs: the ticket's summary is the run's summary, and
-    free-text search needs it too. Keeping the join here means the two queries
-    can never disagree about which rows match - and `total` is what pagination
-    trusts.
-
-    `entity` narrows to one client. It is a parameter of this function rather
-    than something the bulk endpoint adds afterwards, because "acknowledge
-    everything on screen" must mean the same rows the screen showed - and that
-    includes the client the app bar is currently scoped to.
-
-    count_stmt is unused by the bulk endpoint, which passes a throwaway.
-    """
     stmt = stmt.join(Run, Ticket.run_id == Run.id)
     count_stmt = count_stmt.join(Run, Ticket.run_id == Run.id)
 
@@ -254,7 +238,6 @@ def _mix(items: list[dict], field: str) -> dict[str, int]:
 
 
 def _group_sort(key: str, group_by: str):
-    """Most alarming group first, rather than alphabetical."""
     if group_by == "severity":
         # The order is SEVERITY_ORDER, not a copy of it. Two lists of "what is
         # severe" will drift, and a drifted one puts medium above critical in

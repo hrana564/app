@@ -1,43 +1,3 @@
-"""
-Per-run execution folder.
-
-A rule run answers a question about a specific day, using a specific version of
-the code, reading specific bytes. None of those three stay still: the CSVs keep
-landing, the rule keeps getting edited. So a failure you cannot reproduce is a
-failure you cannot fix.
-
-Every run therefore gets a folder that freezes all three:
-
-    mount/Rules_Executions/000123/
-        metadata.json    what was staged, with a SHA-256 per file
-        rule.py          byte-identical copy of the source that ran
-        data/CLIENT-A/2026-10-16/hr_employees.csv
-        data/CLIENT-A/2026-10-16/ipos_sales.csv
-        result.json      written after the rule returns
-        error.txt        written only when it raises
-
-`metadata.json` is the contract. `app.engine.ctx` reads it to build frames, and
-nothing else - the reader never globs a directory or guesses a path, so a run
-can only ever see the files listed here.
-
-MISSING INPUT IS AN ERROR
--------------------------
-A source file that failed to land must not read as "no breach". A rule handed
-nothing returns zero rows, the run reports `pass`, and no ticket opens - so the
-audit record claims a clean day that was never actually checked. `blocking_problem`
-turns that into an explicit error naming the file.
-
-TWO KINDS OF MISSING
---------------------
-A day folder that does not exist is normal (a lookback reaching back before the
-data starts, or a public holiday). A file missing from a day folder that *does*
-exist is a landing failure and blocks the run. They are reported separately
-because they mean opposite things.
-
-This module imports no ORM and reads no database. Plain arguments in, a folder
-and a `Snapshot` out.
-"""
-
 from __future__ import annotations
 
 import hashlib
@@ -61,21 +21,11 @@ _DATA_DIR = "data"
 
 
 def days_for(anchor: date, lookback_days: int) -> list[date]:
-    """The days a run reads, oldest first.
-
-    lookback_days=1 is the anchor day alone; 5 is T-4..T. Never returns an
-    empty list, so a misconfigured 0 still audits something rather than nothing.
-    """
     span = max(1, int(lookback_days))
     return [anchor - timedelta(days=offset) for offset in range(span - 1, -1, -1)]
 
 
 def _copy_counting(src: Path, dst: Path) -> tuple[int, int, str]:
-    """Copy a file, returning (data_rows, bytes, sha256).
-
-    Read once. The hash and the row count fall out of the same pass that writes
-    the copy, so integrity costs nothing beyond the copy itself.
-    """
     digest = hashlib.sha256()
     size = 0
     newlines = 0
@@ -110,8 +60,6 @@ class StagedFile:
 
 @dataclass
 class Snapshot:
-    """A frozen run folder on disk."""
-
     run_id: int
     root: Path
     entity: str
@@ -130,7 +78,6 @@ class Snapshot:
 
     # -- reading ---------------------------------------------------------
     def paths_for(self, table: str) -> list[Path]:
-        """Absolute paths of the files staged for one table."""
         return [self.root / f.rel for f in self.tables.get(table, [])]
 
     @property
@@ -138,12 +85,6 @@ class Snapshot:
         return str(self.data_date) not in self.missing_days
 
     def blocking_problem(self) -> str | None:
-        """Why this run must not execute, or None if it is safe to run.
-
-        A missing file inside a day that exists means the landing failed. The
-        anchor day being absent means there is nothing to audit at all. Either
-        way the run must record `error` - never `pass`.
-        """
         if not self.anchor_day_present:
             return (
                 f"no data folder for the anchor date {self.data_date} "
@@ -158,7 +99,6 @@ class Snapshot:
 
     # -- writing ---------------------------------------------------------
     def manifest(self) -> dict[str, Any]:
-        """The contract a reader (or a person) reads to understand this run."""
         return {
             "run_id": self.run_id,
             "captured_at": self.captured_at.isoformat(),
@@ -203,11 +143,6 @@ class Snapshot:
         return path
 
     def reload(self) -> Snapshot:
-        """Rebuild a Snapshot from an existing folder, for replay.
-
-        Fails loudly on a folder with no manifest: an incomplete snapshot must
-        never be replayed as though it were complete.
-        """
         path = self.root / MANIFEST_NAME
         if not path.exists():
             raise FileNotFoundError(
@@ -258,13 +193,6 @@ def capture(
     sourcedata_dir: Path | None = None,
     rules_dir: Path | None = None,
 ) -> Snapshot:
-    """Stage the exact inputs for one run, then publish the folder atomically.
-
-    Everything is written into `<run_id>.staging` and renamed into place only
-    once the manifest is on disk. A process that dies mid-copy leaves a staging
-    directory and no run folder, so a half-built snapshot can never be mistaken
-    for a replayable one.
-    """
     from app.settings import settings
 
     base = Path(runs_dir or settings.runs_dir)

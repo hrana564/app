@@ -1,16 +1,3 @@
-"""Authentication: login, current user, and the demo accounts.
-
-The demo accounts are a development convenience, and they are served from
-here rather than hardcoded in the login screen - because the screen and the
-seed would then be two copies of the same list, and two copies drift the
-first time somebody changes a password.
-
-The endpoint is unauthenticated, which is the whole point of it: it is read
-before anybody has signed in. So it answers with nothing unless the
-deployment has opted in with `SHOW_DEMO_ACCOUNTS`. A live deployment that
-leaves it on is advertising working passwords on its front door.
-"""
-
 from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, status

@@ -1,40 +1,3 @@
-"""
-Rule execution context.
-
-A rule receives one of these and returns a dict matching app.schemas.RuleResult.
-
-WHAT ctx GIVES YOU
-------------------
-    ctx.table("ipos_sales")   a polars DataFrame built from the files this run
-                              staged for that table - nothing else is reachable
-    ctx.date                  the anchor date being audited
-    ctx.lookback_days         how far back this rule reads (1 = that day)
-    ctx.log("...")            appends a note to the run summary
-
-That is the whole surface. Three methods and two attributes.
-
-WHY DATAFRAMES, NOT SQL
------------------------
-An earlier version exposed `ctx.sql()` and needed a query engine behind it. The
-rules did not want SQL - they wanted to compute a number and hand back the rows
-that failed it:
-
-    hourly = base.group_by("hour").agg(pl.col("invoice_value").sum())
-    baseline = hourly.filter(pl.col("hour") < LAST_HOUR)["value"].mean()
-
-reads as the audit step it performs. The SQL equivalent needed
-`sum(...) FILTER (WHERE hour < 23) / nullif(count(DISTINCT hour) FILTER (...), 0)`
-and could not be explained to an auditor without a paragraph.
-
-WHAT ctx DOES NOT GIVE YOU
---------------------------
-No file paths, no query strings, no engine handle. A rule cannot read the mount
-directly, so the run folder is genuinely a record of what was read rather than a
-copy made afterwards.
-
-    import polars as pl   # the only third-party import a rule needs
-"""
-
 from __future__ import annotations
 
 from datetime import date
@@ -44,8 +7,6 @@ import polars as pl
 
 
 class RuleContext:
-    """Everything a rule is allowed to touch."""
-
     def __init__(
         self,
         *,
@@ -64,13 +25,6 @@ class RuleContext:
 
     # -- data access ----------------------------------------------------
     def table(self, name: str) -> pl.DataFrame:
-        """The rows this run staged for `name`.
-
-        Reads happen once per table per run; the frame is cached so a rule that
-        uses the same data twice pays for one read. Column types are inferred
-        from the CSV, so `invoice_value` arrives as a float and `is_void` as a
-        bool rather than as text.
-        """
         if name in self._cache:
             return self._cache[name]
 
@@ -107,7 +61,6 @@ class RuleContext:
         return list(self._snapshot.tables.keys())
 
     def count_rows(self, name: str) -> int:
-        """Rows available in a table."""
         return self.table(name).height
 
     # -- diagnostics ----------------------------------------------------
@@ -127,13 +80,6 @@ def invoke_rule(
     registered: list[str] | None = None,
     snapshot: Any = None,
 ) -> tuple[dict[str, Any], list[str]]:
-    """Call a rule's `run(ctx)` and hand back what it returned and what it logged.
-
-    One call, used by the runner and by the trial that runs a candidate before
-    it is saved. Two implementations of "build the context and call the rule"
-    would be two different execution paths, and a trial that tests a different
-    path from production is not a trial at all.
-    """
     ctx = RuleContext(
         data_date=data_date,
         lookback_days=lookback_days,

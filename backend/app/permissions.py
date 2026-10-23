@@ -1,24 +1,3 @@
-"""What each role may do, expressed once.
-
-An endpoint asks for the capability it needs, not the role it assumes:
-
-    admin:  AdminUser      ->  write: Annotated[User, Depends(require("rules.write"))]
-
-Eleven endpoints asking "may I?" is eleven mappings, and they drift the first
-time a third role exists. A role here is a named bundle of capabilities, so
-granting one capability to one role is a visible edit in this file rather than
-a hunt through the routers.
-
-Two rules make this hold:
-
-- **An unknown role grants nothing.** A typo in the `users.role` column
-  produces a user who can read nothing, not one who can do everything. Failing
-  closed means a mistake is a locked door rather than an open one.
-- **The matrix is the only answer.** If a second module decides what a role
-  can do, the two drift invisibly: the server still enforces correctly while
-  the screen beside it shows an action the user may not take.
-"""
-
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
@@ -118,33 +97,14 @@ KNOWN_ROLES: tuple[str, ...] = tuple(ROLE_CAPABILITIES)
 
 
 def capabilities_for(role: str) -> frozenset[str]:
-    """The capabilities a role holds.
-
-    An unrecognised role holds none. The alternative - treating an unknown
-    role as the most privileged one - would make a typo in a database column
-    into a security hole, and a typo that silently grants nothing is a locked
-    door somebody notices and fixes.
-    """
     return ROLE_CAPABILITIES.get(role, frozenset())
 
 
 def capabilities_for_user(user: "User") -> frozenset[str]:
-    """The capabilities one user holds.
-
-    The role is the only thing that decides it today. When a user is confined
-    to particular clients, that restriction is applied here and nowhere else -
-    so there is one answer to "what may this user see" rather than one per
-    endpoint.
-    """
     return capabilities_for(user.role)
 
 
 def permissions_list(role: str) -> list[str]:
-    """The capabilities a role holds, sorted, for the wire.
-
-    Sorted so the list is stable: two calls with the same role produce the
-    same bytes, which is what lets a client cache it and compare it.
-    """
     return sorted(capabilities_for(role))
 
 
@@ -219,25 +179,20 @@ CAPABILITY_GROUPS: dict[str, str] = {
 
 
 def capability_group(capability: str) -> str:
-    """The group a capability belongs to: the part before its first dot."""
     return capability.split(".", 1)[0]
 
 
 def capability_label(capability: str) -> str:
-    """What a capability is called on a screen."""
     return CAPABILITY_LABELS.get(capability, capability)
 
 
 def group_label(group: str) -> str:
-    """What a group of capabilities is called on a screen."""
     return CAPABILITY_GROUPS.get(group, group)
 
 
 def role_label(role: str) -> str:
-    """What a role is called on a screen."""
     return ROLE_LABELS.get(role, role)
 
 
 def role_description(role: str) -> str:
-    """What a role is for, in one sentence."""
     return ROLE_DESCRIPTIONS.get(role, "")

@@ -2,41 +2,30 @@ import { useMemo } from "react";
 import { Box, Typography } from "@mui/material";
 import { FONT } from "../theme";
 
-/**
- * What a revision changed, line by line.
- *
- * The editor no longer shows an editable textarea, so this is the only view of
- * the change - which makes it the thing a person reads before publishing. It is
- * a real diff rather than "here is the new file": two files side by side ask the
- * reader to do the comparing, and the whole point of reviewing a machine-written
- * change is to check the specific lines it touched, not to re-read the rule.
- *
- * No dependency. The job is which lines were added and which were removed, and
- * a diff library would be a licence, a bundle and a version to track for the
- * forty lines of LCS below.
- */
 
 export type DiffLine = {
   kind: "same" | "add" | "del";
   text: string;
-  /** The line number in the old file, when the line is not an addition. */
   left?: number;
-  /** The line number in the new file, when the line is not a deletion. */
   right?: number;
 };
 
-/**
- * A line diff, longest-common-subsequence.
- *
- * Deletions come before additions at the same position, so a changed block reads
- * as "this went, that came" rather than interleaved. The tie-break in the walk
- * is what decides that.
- */
+// The LCS table is n by m, so a runaway file would cost a browser tab its
+// memory rather than show a diff. A rule is a hundred lines; anything past
+// this is not a rule anybody is going to read a diff of.
+const MAX_DIFF_LINES = 2000;
+
+export const tooBigToDiff = (before: string, after: string): boolean =>
+  (before ?? "").split("\n").length > MAX_DIFF_LINES ||
+  (after ?? "").split("\n").length > MAX_DIFF_LINES;
+
 export const diffLines = (before: string, after: string): DiffLine[] => {
   const a = (before ?? "").split("\n");
   const b = (after ?? "").split("\n");
   const n = a.length;
   const m = b.length;
+
+  if (n > MAX_DIFF_LINES || m > MAX_DIFF_LINES) return [];
 
   // dp[i][j] = the length of the LCS of a[i:] and b[j:].
   const dp: number[][] = Array.from({ length: n + 1 }, () => new Array(m + 1).fill(0));
@@ -86,6 +75,15 @@ export const RuleDiff = ({
 }) => {
   const lines = useMemo(() => diffLines(before, after), [before, after]);
   const { added, removed } = countChanges(lines);
+
+  if (tooBigToDiff(before, after)) {
+    return (
+      <Typography variant="body2" sx={{ color: "text.secondary" }}>
+        This file is too large to show a difference. The source is still saved
+        in full.
+      </Typography>
+    );
+  }
 
   if (added === 0 && removed === 0) {
     return (

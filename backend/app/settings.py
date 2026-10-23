@@ -1,5 +1,3 @@
-"""Application settings, loaded from environment / .env."""
-
 from __future__ import annotations
 
 import secrets
@@ -15,18 +13,13 @@ APP_ROOT = BACKEND_DIR.parent
 
 
 class ClientEntity(BaseModel):
-    """One audited business.
-
-    `code` is what a rule run, a ticket and a run folder carry, so it is
-    uppercase and hyphen-safe rather than pretty. `name` is what a human reads
-    in the app bar and on the Data Sources screen. `systems` is which upstream
-    systems this client draws from - descriptive only, and it changes without a
-    rule or a datasource changing, which is why it is configuration.
-    """
-
     code: str
     name: str
     systems: list[str] = Field(default_factory=list)
+
+
+def _under(path: Path, base: Path) -> Path:
+    return path if path.is_absolute() else (base / path).resolve()
 
 
 class Settings(BaseSettings):
@@ -143,6 +136,14 @@ class Settings(BaseSettings):
     # --- cors (frontend dev server) -------------------------------------
     cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
 
+    @model_validator(mode="after")
+    def _paths_are_absolute(self) -> "Settings":
+        self.sourcedata_dir = _under(self.sourcedata_dir, BACKEND_DIR)
+        self.runs_dir = _under(self.runs_dir, BACKEND_DIR)
+        self.trials_dir = _under(self.trials_dir, BACKEND_DIR)
+        self.rules_dir = _under(self.rules_dir, BACKEND_DIR)
+        return self
+
     @property
     def database_url(self) -> str:
         return (
@@ -156,12 +157,6 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _entities_are_usable(self) -> "Settings":
-        """A bad entity code is a scope that matches nothing, quietly.
-
-        The app bar offers it, the user picks it, and every list comes back
-        empty - which looks exactly like a portal with no data. Catching a
-        duplicate or a lowercase code here turns that into a refusal to start.
-        """
         codes = [e.code for e in self.client_entities]
         if not codes:
             raise ValueError("client_entities must name at least one client")
@@ -177,7 +172,6 @@ class Settings(BaseSettings):
         return self
 
     def resolved_jwt_secret(self) -> str:
-        """Generate an ephemeral secret if none is configured (dev convenience)."""
         if self.jwt_secret:
             return self.jwt_secret
         generated = secrets.token_urlsafe(48)

@@ -1,49 +1,3 @@
-"""
-Running a candidate rule before it is saved.
-
-A rule that has never executed is not a rule. It is a guess: it may name a
-column that does not exist, join on a key that was never there, or read a table
-that was never registered. The only way to know is to run it - and the only
-honest way to run it is against the same staged bytes production will stage.
-
-WHAT A TRIAL IS NOT
--------------------
-A trial is not a run. It writes:
-
-    no `rule_runs` row      the ledger records work the estate did
-    no ticket               a trial finding is not a finding
-    no `Rules_Executions/` folder   those are numbered from the run counter
-
-It stages into a scratch folder of its own and deletes it afterwards. That is
-not tidiness - a run folder is numbered from the same counter as `rule_runs`,
-so a trial that took one would collide with the next real run and every run
-after it would fail with `FileExistsError`.
-
-THE SAME CODE, THE SAME BYTES
------------------------------
-The trial stages with `capture()` - the production staging path - and then runs
-the copy of the rule that `capture()` froze into the folder. So the trial runs
-the same bytes, through the same `ctx`, that a scheduled run would run. A
-separate "test mode" would be a different path, and a rule that passes a
-different path has not been tested.
-
-FAILURES ARE CLASSIFIED, BECAUSE ONLY ONE OF THEM CAN BE REPAIRED
------------------------------------------------------------------
-    code_error     the rule raised, or returned failed while data existed
-    data_missing   the ETL did not land a file, or the anchor day is absent
-    not_allowed    the rule reads a table outside the selection
-    banned         the static gate refused the file
-
-`code_error` and `not_allowed` are the agent's to fix. `data_missing` is not:
-no amount of rewriting fixes a CSV that did not arrive, and an agent that
-believes otherwise will rewrite working code until it has nothing left. So the
-classification is the difference between "try again" and "stop and tell the
-user".
-
-This module imports no ORM and reads no database. Plain arguments in, a verdict
-out.
-"""
-
 from __future__ import annotations
 
 import logging
@@ -86,8 +40,6 @@ LITERAL_SCAN_ROWS = 5000
 
 @dataclass
 class TrialResult:
-    """What happened when a candidate was run."""
-
     status: str
     ok: bool = False
     outcome: str | None = None  # pass | fail - what the control FOUND
@@ -133,14 +85,6 @@ def _scratch_dir() -> Path:
 
 
 def _run_within(module, *, data_date, lookback_days, registered, snapshot, timeout):
-    """Call the rule, bounded in time.
-
-    A thread cannot be cancelled on Windows, so the bound is enforced by
-    refusing to wait for it: the worker is abandoned and may keep burning a
-    core until it finishes on its own. That is the cost of running untrusted
-    code in-process, and it is why the timeout is generous and the endpoint
-    that calls this is admin-only.
-    """
     executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="trial")
     future = executor.submit(
         invoke_rule,
@@ -157,11 +101,6 @@ def _run_within(module, *, data_date, lookback_days, registered, snapshot, timeo
 
 
 def _staged_values(snap, tables: list[str]) -> tuple[dict[str, set[str]], set[str]]:
-    """The values each column holds in the staged data, and every column seen.
-
-    Read from the frozen copy the rule itself ran against, so the check answers
-    about the same bytes. Bounded, because this is a signal and not a proof.
-    """
     values: dict[str, set[str]] = {}
     columns: set[str] = set()
     for table in tables:
@@ -184,13 +123,6 @@ def _staged_values(snap, tables: list[str]) -> tuple[dict[str, set[str]], set[st
 
 
 def _literal_warnings(source: str, snap, tables: list[str]) -> list[str]:
-    """Values the rule tests a column for that the column does not hold.
-
-    A wrong literal still runs: the filter matches nothing, the rule reports a
-    clean day, and the trial says it passed. Nothing in the execution path can
-    see it, so it is said here instead - as a warning, because a value that is
-    genuinely absent can be the point of a correctly-written rule.
-    """
     pairs = compared_literals(source)
     if not pairs:
         return []
@@ -219,12 +151,6 @@ def run_trial(
     allowed: list[str] | None = None,
     timeout: int | None = None,
 ) -> TrialResult:
-    """Run a candidate rule against real data and report what happened.
-
-    `tables` is the selection the admin made. `allowed` is everything the
-    client has registered - a rule may not read outside its selection, and a
-    rule that tries is rejected before it executes.
-    """
     import time
 
     started = time.perf_counter()

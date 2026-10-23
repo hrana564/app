@@ -754,7 +754,7 @@ def _write(entity: str, day: date, table: str, rows: list[dict]) -> None:
         writer.writerows(rows)
 
 
-def seed_catalog(verbose: bool = True) -> int:
+async def seed_catalog_async(verbose: bool = True) -> int:
     """Write the starting datasource catalogue into the database.
 
     The catalogue is DATA now - an admin owns it from the Data Sources screen -
@@ -765,9 +765,11 @@ def seed_catalog(verbose: bool = True) -> int:
     Idempotent. An existing row is left exactly as the admin left it, including
     a retirement, so re-running the generator never resurrects a table somebody
     deliberately switched off.
-    """
-    import asyncio
 
+    The async half, because the reset recipe runs inside an event loop of its
+    own and cannot start a second one. `seed_catalog` below is the same thing
+    for a command line.
+    """
     from sqlalchemy import select
 
     from app.db import SessionLocal, init_models
@@ -775,43 +777,51 @@ def seed_catalog(verbose: bool = True) -> int:
 
     from seed_datasources import SEED_SOURCES
 
-    async def run() -> int:
-        await init_models()
-        async with SessionLocal() as session:
-            existing = {
-                (entity, name)
-                for entity, name in (
-                    await session.execute(select(Datasource.entity, Datasource.name))
-                ).all()
-            }
-            added = 0
-            for src in SEED_SOURCES:
-                if (src["entity"], src["name"]) in existing:
-                    continue
-                session.add(
-                    Datasource(
-                        name=src["name"],
-                        entity=src["entity"],
-                        system=src["system"],
-                        description=src["description"],
-                        path_template=(
-                            f"mount/SourceData/{src['entity']}/{{date}}/{src['name']}.csv"
-                        ),
-                        grain=src["grain"],
-                        columns=dict(src["columns"]),
-                    )
+    await init_models()
+    async with SessionLocal() as session:
+        existing = {
+            (entity, name)
+            for entity, name in (
+                await session.execute(select(Datasource.entity, Datasource.name))
+            ).all()
+        }
+        added = 0
+        for src in SEED_SOURCES:
+            if (src["entity"], src["name"]) in existing:
+                continue
+            session.add(
+                Datasource(
+                    name=src["name"],
+                    entity=src["entity"],
+                    system=src["system"],
+                    description=src["description"],
+                    path_template=(
+                        f"mount/SourceData/{src['entity']}/{{date}}/{src['name']}.csv"
+                    ),
+                    grain=src["grain"],
+                    columns=dict(src["columns"]),
                 )
-                added += 1
-            if added:
-                await session.commit()
-            total = (
-                await session.execute(select(Datasource))
-            ).scalars().all()
-        if verbose:
-            print(f"  Datasource catalogue: {added} added, {len(total)} registered")
-        return 0
+            )
+            added += 1
+        if added:
+            await session.commit()
+        total = (
+            await session.execute(select(Datasource))
+        ).scalars().all()
+    if verbose:
+        print(f"  Datasource catalogue: {added} added, {len(total)} registered")
+    return 0
 
-    return asyncio.run(run())
+
+def seed_catalog(verbose: bool = True) -> int:
+    """The catalogue seeding, for a command line.
+
+    A thin wrapper over `seed_catalog_async`, so there is one implementation of
+    the seeding rather than one here and one there.
+    """
+    import asyncio
+
+    return asyncio.run(seed_catalog_async(verbose))
 
 
 def main() -> int:

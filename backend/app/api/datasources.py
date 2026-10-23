@@ -1,35 +1,3 @@
-"""
-Datasources - the boundary between "the ETL landed files" and "rules may read
-these tables".
-
-    GET    /entities          the two client entities
-    GET    /                  registered tables, flat
-    GET    /overview          registered + what landed today, in ONE call
-    GET    /discovered        just what is on disk, read from the CSV headers
-    GET    /preview           the first rows of one landed file
-    GET    /available-dates   days that have a folder
-    POST   /                  register a table the ETL delivered
-    DELETE /{id}              remove a registration
-
-The overview endpoint exists so the screen never fans out into one request per
-table. Everything it returns is read in the same pass.
-
-REMOVE, AND NOTHING ELSE
-------------------------
-A table is either registered or it is not. There is no third state.
-
-An earlier version had `retire` - reversible, and refused while live rules read
-the table. It was removed because it did not mean what its dialog claimed. The
-dialog said the rules "keep running" and would fail only once the ETL stopped
-sending the file. They do not: `ctx.table()` consults the catalogue, so a
-retired table is refused on the very next run, while the file is still sitting
-on disk. Retire and delete broke the same rules in the same way, so retire only
-added a second state and a reassuring message that was not true.
-
-Removal is refused outright while an active rule declares the table. That guard
-is the whole of the safety, and it is honest: nothing is silently half-removed.
-"""
-
 from __future__ import annotations
 
 from pathlib import Path
@@ -143,7 +111,6 @@ async def preview(
 
 
 def _row_count(path: Path) -> int | None:
-    """Total rows in the file, or None if the file will not parse."""
     try:
         return int(pl.scan_csv(path).select(pl.len().alias("n")).collect()["n"][0])
     except Exception:  # noqa: BLE001 - the preview is best-effort
@@ -172,12 +139,6 @@ async def available_dates_endpoint(
 # The one call the screen makes
 # ---------------------------------------------------------------------------
 async def _rules_using(session: SessionDep, entity: str) -> dict[str, list[str]]:
-    """Active rules that read each table, keyed by table name.
-
-    Read from `rules_master.declared_datasources`, which the validator already
-    writes as the union of DATASOURCES and every ctx.table() in the source. So
-    this is the recorded truth of what rules read, not a re-scan of the files.
-    """
     rows = (
         await session.execute(
             select(Rule.code, Rule.declared_datasources).where(

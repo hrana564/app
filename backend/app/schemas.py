@@ -1,5 +1,3 @@
-"""Pydantic contracts - API payloads and the rule return contract."""
-
 from __future__ import annotations
 
 from datetime import date, datetime
@@ -78,12 +76,6 @@ class UserOut(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def _resolve_permissions(cls, data: Any) -> Any:
-        """Fill `permissions` and `role_label` from the role.
-
-        Derived on the way out so every place that validates a User gets the
-        same list. There is no way to hand out a user without their
-        capabilities, and no call site that has to remember to ask.
-        """
         if isinstance(data, dict):
             role = data.get("role")
             if role is None:
@@ -309,6 +301,35 @@ class RuleOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class ExplanationStepDraft(BaseModel):
+    """One step of a description on its way to being stored.
+
+    The step number and the words. The line range is not here: it comes from
+    the source when the words are judged, so it cannot be wrong.
+    """
+
+    n: int
+    text: str = ""
+
+
+class ExplanationDraft(BaseModel):
+    """A description of a rule, on its way to being stored.
+
+    This is the ONE shape a description has. The engine produces it, the API
+    carries it, the browser hands it back, and it is stored - so there is
+    never a conversion between two versions of the same thing, because a
+    conversion is a place for two answers to drift.
+    """
+
+    breach_condition: str = ""
+    steps: list[ExplanationStepDraft] = Field(default_factory=list)
+    outputs: list[str] = Field(default_factory=list)
+    origin: str = "ai"
+    generated_by: str = ""
+    model: str = ""
+    prompt_version: str = ""
+
+
 class RuleCreate(BaseModel):
     code: str = Field(min_length=2, max_length=64)
     name: str = Field(min_length=2, max_length=255)
@@ -322,6 +343,10 @@ class RuleCreate(BaseModel):
     # a human read it - which is a different thing from a hand-written rule,
     # and a catalogue that cannot tell the two apart is not telling the truth.
     origin: RuleOrigin = "manual"
+    # The plain-English description, written by the agent that wrote the source.
+    # Optional: a rule whose description could not be written is still a rule,
+    # and the page shows the code instead.
+    explanation: ExplanationDraft | None = None
 
 
 class RuleUpdate(BaseModel):
@@ -336,6 +361,10 @@ class RuleUpdate(BaseModel):
     # even though the rule may have started life by hand, so the caller says so
     # rather than the new row silently inheriting the old one's answer.
     origin: RuleOrigin | None = None
+    # The description of the new source, when the caller has one. A revision
+    # brings its own, so the draft's description always matches the code it
+    # was written about.
+    explanation: ExplanationDraft | None = None
 
 
 class RulePublish(BaseModel):
@@ -480,6 +509,10 @@ class RuleGenerateResponse(BaseModel):
     attempts: list[GenerationAttempt] = Field(default_factory=list)
     suggested_code: str | None = None
     error: str | None = None
+    # The plain-English description of the rule, written while the source was
+    # still the one the agent had just written. None when it could not be
+    # written - the rule is still a rule, and the page shows the code.
+    explanation: ExplanationDraft | None = None
     # What the agent looked at, in order - the evidence behind the rule.
     trace: list[AgentStep] = Field(default_factory=list)
 
@@ -493,6 +526,32 @@ class RuleTestResponse(BaseModel):
     rows: list[dict[str, Any]]
     error_detail: str
     duration_ms: int
+
+
+# ---------------------------------------------------------------------------
+# A rule's source - what it declares, what it reads
+# ---------------------------------------------------------------------------
+class SourceBindingIn(BaseModel):
+    source_code: str
+    # The tables to declare. None asks only what the source says; a list asks
+    # for the source back with its DATASOURCES declaration set to that list.
+    names: list[str] | None = None
+
+
+class SourceBindingOut(BaseModel):
+    declared: list[str]
+    referenced: list[str]
+    # True when the source has no DATASOURCES declaration to read. The picker
+    # cannot bind a file it cannot read, and says so.
+    unreadable: bool
+    # Read but not declared: the validator refuses a rule in this state.
+    undeclared: list[str]
+    # Declared but never read: harmless, and usually left over.
+    unused: list[str]
+    # The declaration as it stands, for the screen to show.
+    declaration: str
+    # The source, rewritten when names were given.
+    source_code: str
 
 
 # ---------------------------------------------------------------------------
@@ -661,7 +720,6 @@ class ExplanationStepOut(BaseModel):
     n: int
     text: str
     lines: list[int]
-    kind: str = ""
     explainable: bool = True
 
 
@@ -678,8 +736,9 @@ class ExplanationOut(BaseModel):
     version: int
     source_sha256: str
 
-    # derived | ai | edited. What a reader is looking at decides what they are
-    # entitled to assume about it.
+    # ai | edited | none. What a reader is looking at decides what they are
+    # entitled to assume about it. "none" means there is no description yet -
+    # the rule was written by hand, or the model could not write one.
     origin: str
     stored: bool
     # True when a stored description no longer matches the file on disk. The
@@ -691,7 +750,6 @@ class ExplanationOut(BaseModel):
     breach_condition: str
     steps: list[ExplanationStepOut]
     outputs: list[str]
-    cannot_explain: list[dict[str, Any]]
     gates: list[GateOut]
 
     generated_by: str = ""

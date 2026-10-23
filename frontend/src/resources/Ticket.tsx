@@ -15,6 +15,7 @@ import DoneAllIcon from "@mui/icons-material/DoneAll";
 import ArrowForwardIcon from "@mui/icons-material/ArrowForward";
 import { api } from "../dataProvider";
 import { DotLabel, RowsTable } from "../components/ui";
+import { LIST_HEADER_SX } from "../components/listTable";
 import { severityColor, statusColor, SEVERITIES, FONT } from "../theme";
 import { useEntityScope } from "../entityScope";
 import { ruleShowPath } from "../rulePaths";
@@ -23,10 +24,6 @@ import { can, usePermissions } from "../permissions";
 const STATUS_OPTIONS = ["open", "acknowledged", "dismissed"] as const;
 const SEVERITY_OPTIONS = SEVERITIES;
 
-/**
- * How the inbox can be grouped - the ServiceNow "Group by" pattern, with a
- * None that removes grouping entirely.
- */
 const GROUPINGS = [
   { value: "rule_code", label: "Control" },
   { value: "severity", label: "Severity" },
@@ -36,7 +33,6 @@ const GROUPINGS = [
 
 type GroupKey = (typeof GROUPINGS)[number]["value"];
 
-/** Rule code -> name, so group headers can say what the rule actually is. */
 const useRuleNames = () => {
   const [names, setNames] = useState<Record<string, string>>({});
   useEffect(() => {
@@ -51,17 +47,6 @@ const useRuleNames = () => {
       .catch(() => setNames({}));
   }, []);
   return names;
-};
-
-const headCellSx = {
-  fontWeight: 700,
-  fontSize: FONT.label,
-  textTransform: "uppercase" as const,
-  letterSpacing: 0.5,
-  color: "#5b6b82",
-  backgroundColor: "#fafbfe",
-  py: 1.25,
-  whiteSpace: "nowrap" as const,
 };
 
 const SeverityDot = ({ value }: { value: string }) => (
@@ -223,7 +208,6 @@ interface BulkScope {
     severity?: string;
     q?: string;
     status?: string;
-    /** The client the inbox is scoped to. Part of the scope, not a detail. */
     entity?: string;
   };
 }
@@ -336,7 +320,6 @@ interface Group {
 
 const severityOrder = SEVERITIES;
 
-/** Wrapped in a TableBody because a bare <tr> may not sit directly under <table>. */
 const TableFooterRow = ({ children }: { children: React.ReactNode }) => (
   <TableBody>
     <TableRow>
@@ -368,11 +351,11 @@ const GroupedInbox = ({
       {/* The header describes the GROUP, because the group is what a row here is. */}
       <TableHead>
         <TableRow>
-          <TableCell sx={{ ...headCellSx, width: "26%" }}>Control</TableCell>
-          <TableCell sx={{ ...headCellSx, width: 150 }}>Severity</TableCell>
-          <TableCell sx={{ ...headCellSx, width: 120 }}>Open</TableCell>
-          <TableCell sx={headCellSx}>Findings</TableCell>
-          <TableCell align="right" sx={{ ...headCellSx, width: 190 }}>Actions</TableCell>
+          <TableCell sx={{ ...LIST_HEADER_SX, width: "26%" }}>Control</TableCell>
+          <TableCell sx={{ ...LIST_HEADER_SX, width: 150 }}>Severity</TableCell>
+          <TableCell sx={{ ...LIST_HEADER_SX, width: 120 }}>Open</TableCell>
+          <TableCell sx={LIST_HEADER_SX}>Findings</TableCell>
+          <TableCell align="right" sx={{ ...LIST_HEADER_SX, width: 190 }}>Actions</TableCell>
         </TableRow>
       </TableHead>
 
@@ -532,13 +515,13 @@ const FlatInbox = ({ tickets }: { tickets: any[] }) => {
     <>
       <TableHead>
         <TableRow>
-          <TableCell sx={{ ...headCellSx, width: 180 }}>Finding</TableCell>
-          <TableCell sx={{ ...headCellSx, width: 120 }}>Severity</TableCell>
-          <TableCell sx={{ ...headCellSx, width: 140 }}>Status</TableCell>
-          <TableCell sx={headCellSx}>Observation</TableCell>
-          <TableCell sx={{ ...headCellSx, width: 80 }}>Rows</TableCell>
-          <TableCell sx={{ ...headCellSx, width: 170 }}>Raised</TableCell>
-          <TableCell align="right" sx={{ ...headCellSx, width: 200 }}>Actions</TableCell>
+          <TableCell sx={{ ...LIST_HEADER_SX, width: 180 }}>Finding</TableCell>
+          <TableCell sx={{ ...LIST_HEADER_SX, width: 120 }}>Severity</TableCell>
+          <TableCell sx={{ ...LIST_HEADER_SX, width: 140 }}>Status</TableCell>
+          <TableCell sx={LIST_HEADER_SX}>Observation</TableCell>
+          <TableCell sx={{ ...LIST_HEADER_SX, width: 80 }}>Rows</TableCell>
+          <TableCell sx={{ ...LIST_HEADER_SX, width: 170 }}>Raised</TableCell>
+          <TableCell align="right" sx={{ ...LIST_HEADER_SX, width: 200 }}>Actions</TableCell>
         </TableRow>
       </TableHead>
       <TableBody>
@@ -683,7 +666,6 @@ export const TicketList = () => {
         : Object.fromEntries(groups.map((g) => [g.key, true])),
     );
 
-  /** Count the scope from the server - never from the rows on screen. */
   const onBulk = (s: BulkScope) => {
     if (s.count) {
       setScope(s);

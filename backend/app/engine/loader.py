@@ -1,5 +1,3 @@
-"""Load a rule .py file and expose its run(ctx) callable."""
-
 from __future__ import annotations
 
 import importlib.util
@@ -23,7 +21,6 @@ def resolve_rule_path(source_file: str, rules_dir: Path | None = None) -> Path:
 
 
 def _import_from(path: Path, module_name: str):
-    """Import a module from a path, discarding any cached copy first."""
     for key in [k for k in sys.modules if k == module_name or k.startswith(module_name + ".")]:
         del sys.modules[key]
 
@@ -47,19 +44,12 @@ def _require_run(module, path: Path):
 
 
 def load_rule(source_file: str, rules_dir: Path | None = None):
-    """Import the module fresh each call so edits take effect without a restart."""
     path = resolve_rule_path(source_file, rules_dir)
     module = _import_from(path, f"_rules.{path.stem}")
     return _require_run(module, path)
 
 
 def load_rule_at(path: Path):
-    """Import a rule from an explicit path.
-
-    Replay uses this to run the copy frozen into a run folder rather than
-    whatever version happens to sit in rules/ today - which is the only way a
-    replayed run reproduces the original.
-    """
     path = Path(path).resolve()
     if not path.exists():
         raise FileNotFoundError(f"Rule file not found: {path}")
@@ -72,7 +62,6 @@ def read_source(source_file: str, rules_dir: Path | None = None) -> str:
 
 
 def write_source(source_file: str, code: str, rules_dir: Path | None = None) -> Path:
-    """Persist a rule to disk. Filenames look like LAD-CA-03_v2.py."""
     base = (rules_dir or RULES_DIR).resolve()
     base.mkdir(parents=True, exist_ok=True)
     name = Path(str(source_file)).name

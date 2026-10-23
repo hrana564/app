@@ -1,44 +1,3 @@
-"""
-The rule agent: look at the data, write a rule, run it, and fix it until it works.
-
-    ask tools ─► write ─► run_rule ─► (fix ─► run_rule)* ─► submit ─► gate
-       ▲                                                               │
-       └───────────────────────────────────────────────────────────────┘
-
-The model is not handed a snapshot of the data and asked to imagine a rule. It
-is given tools that read the real bytes and it looks. Everything it learns about
-the estate, it learns by asking - `distinct_values` settles a value,
-`join_overlap` settles a key, `column_stats` settles a threshold and a date
-format. It then writes the rule and runs it with `run_rule` until the run is
-clean.
-
-WHY TOOLS
----------
-A prompt can carry only what we thought to put in it. A tool answers what the
-model actually needs. That is the difference between us guessing which value
-list matters and the model asking for the one it is about to compare against.
-
-THE GATE
---------
-`run_rule` is the truth: the code executed against the bytes the estate holds,
-never the model's opinion of its own code. The submitted source is run once more
-as the gate, so a rule is handed back only if it runs - whatever the model
-believed on the way.
-
-THE LOOP IS SYNCHRONOUS
------------------------
-The model call and the trial are both blocking, so the whole thing runs in a
-worker thread. Pretending otherwise would buy nothing but a way to lose the
-traceback.
-
-WHAT IS NOT HERE
-----------------
-No database, no ledger, no rule row. A generation writes nothing outside its own
-scratch space. A rule that has not been reviewed by a human does not belong in
-the catalogue, and a trial that raised a ticket would put a finding in the
-ledger that nobody asked for.
-"""
-
 from __future__ import annotations
 
 import json
@@ -50,20 +9,20 @@ from typing import Any, Callable
 from app.engine import rule_generator as gen
 from app.engine.agent_tools import TOOL_SCHEMAS, Toolbox
 from app.engine.catalog import Catalog
+from app.engine.llm import ModelReply, chat, strip_fences
 from app.engine.trial import TrialResult, run_trial
+from app.schemas import ExplanationDraft
 
 log = logging.getLogger("abm.agent")
 
 # The model turn, as a function: given the conversation and the tools, return
 # the next assistant message. Injected so the loop can be exercised without a
 # live endpoint.
-ModelStep = Callable[[list[dict[str, Any]], list[dict[str, Any]]], "gen.ModelReply"]
+ModelStep = Callable[[list[dict[str, Any]], list[dict[str, Any]]], ModelReply]
 
 
 @dataclass
 class GenerationResult:
-    """What the caller gets back."""
-
     ok: bool
     source: str | None
     name: str | None
@@ -73,6 +32,11 @@ class GenerationResult:
     attempts: list[dict[str, Any]]
     error: str | None
     fatal: str | None
+    # The plain-English description of the rule, written while the source was
+    # still the one the model had just written. None when the model could not
+    # be asked, or when its words did not survive the checks - a rule without
+    # a description is still a rule.
+    explanation: ExplanationDraft | None = None
     # What the agent looked at, in order. The review screen shows it, so a
     # person sees why the agent believes the rule is right - not just that it
     # ran.
@@ -80,7 +44,6 @@ class GenerationResult:
 
 
 def _summarise(name: str, result: dict[str, Any]) -> str:
-    """One readable line for the trace. Never the whole payload."""
     # A tool that failed returns {"error": ...} and nothing else. `run_rule`
     # returns an "error" key too, holding None on success - so the check is a
     # real error on a tool that has no verdict, not the key's presence.
@@ -136,6 +99,25 @@ def _final_run_summary(trial: TrialResult) -> dict[str, Any]:
     }
 
 
+def _describe(source: str, *, meta, llm: Any = None) -> ExplanationDraft | None:
+    try:
+        from app.engine import description
+
+        words, gates = description.write_words(source, meta, llm=llm)
+        if words is None:
+            # Said out loud, because a silent failure here reads as "the
+            # model cannot write descriptions" and costs an afternoon.
+            refused = "; ".join(f"{g.name}: {g.detail}" for g in gates if not g.ok)
+            log.warning(
+                "the rule was written but not described%s",
+                f": {refused}" if refused else " (the model did not answer with JSON)",
+            )
+        return words
+    except Exception as exc:  # noqa: BLE001
+        log.warning("could not describe the rule: %s", exc)
+        return None
+
+
 def run_generation(
     *,
     catalog: Catalog,
@@ -147,8 +129,7 @@ def run_generation(
     allowed: list[str] | None = None,
     llm: ModelStep | None = None,
 ) -> GenerationResult:
-    """Let the agent look at the data, write a rule, and prove it runs."""
-    call = llm or gen.chat
+    call = llm or chat
     selection = list(tables)
     permitted = list(allowed) if allowed is not None else list(tables)
 
@@ -190,14 +171,7 @@ def run_revision(
     allowed: list[str] | None = None,
     llm: ModelStep | None = None,
 ) -> GenerationResult:
-    """Change an existing rule to do what a plain-language request asks.
-
-    Identical to `run_generation` from the loop onward - the same tools, the same
-    `run_rule` gate, the same final trial on the submitted source. What differs
-    is the prompt: the source being changed is put in front of the model, and the
-    method tells it to leave the rest of the rule alone.
-    """
-    call = llm or gen.chat
+    call = llm or chat
     selection = list(tables)
     permitted = list(allowed) if allowed is not None else list(tables)
 
@@ -245,13 +219,6 @@ def _run(
     tables: list[str],
     allowed: list[str],
 ) -> GenerationResult:
-    """The half a generation and a revision share.
-
-    Both are the same thing after the prompt: the model asks, the tools answer,
-    and the source it finally submits is run once more as the gate. Keeping that
-    in one place is what makes "a revision is tested the same way a draft is" true
-    rather than a claim - there is only one gate to be tested by.
-    """
     toolbox = Toolbox(
         entity=entity,
         data_date=data_date,
@@ -275,6 +242,7 @@ def _run(
             "attempts": attempts,
             "error": None,
             "fatal": None,
+            "explanation": None,
             "trace": trace,
         }
         base.update(overrides)
@@ -314,6 +282,30 @@ def _run(
         }
     )
 
+    # The description of the control, written now while the source is still
+    # the one the model has just written. Publishing must not cost a model
+    # call, so this happens while the rule is being written rather than when
+    # it goes live.
+    explanation = None
+    if trial.ok:
+        def describe(system: str, user: str) -> str:
+            reply = call(
+                [{"role": "system", "content": system}, {"role": "user", "content": user}],
+                None,
+            )
+            return (reply.content or "").strip()
+
+        from app.engine import description
+
+        explanation = _describe(
+            source,
+            meta=description.Meta(
+                name=trial.name or "",
+                lookback_days=lookback_days,
+            ),
+            llm=describe,
+        )
+
     return result(
         ok=trial.ok,
         source=source,
@@ -321,6 +313,7 @@ def _run(
         description=trial.description,
         datasources_used=list(trial.referenced),
         trial=trial,
+        explanation=explanation,
         error=None if trial.ok else trial.error,
     )
 
@@ -333,13 +326,6 @@ def _run_loop(
     trace: list[dict[str, Any]],
     attempts: list[dict[str, Any]],
 ) -> str:
-    """Ask the model, run whatever tools it asked for, and repeat.
-
-    Ends when the model answers with source instead of a tool call, or when it
-    asks for exactly the same thing twice in a row. That second ending is a
-    stuck-detector, not a budget: it stops the loop when nothing new is coming
-    rather than capping how much the model may look.
-    """
     previous: tuple[Any, ...] | None = None
     while True:
         reply = call(messages, TOOL_SCHEMAS)
@@ -353,14 +339,14 @@ def _run_loop(
         messages.append(assistant)
 
         if not reply.tool_calls:
-            return gen.strip_fences(reply.content or "")
+            return strip_fences(reply.content or "")
 
         signature = tuple(
             (c.name, json.dumps(c.arguments, sort_keys=True))
             for c in reply.tool_calls
         )
         if signature == previous:
-            return gen.strip_fences(reply.content or "")
+            return strip_fences(reply.content or "")
         previous = signature
 
         for tool_call in reply.tool_calls:

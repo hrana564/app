@@ -107,35 +107,13 @@ interface Assurance {
 /* ================================================================== */
 /* Vocabulary                                                          */
 /* ================================================================== */
-/**
- * This page is written for a head of audit, so it uses the words they use.
- *
- *   control    the thing that runs                        CA-03
- *   finding    one control found something, one per day    LAD-CA-03-TKT-00042
- *   exception  one item inside a finding                   119 inside that finding
- *
- * The engine calls these a rule, an observation and an exception line. Those
- * are the words of the thing that executes; these are the words of the thing
- * being assured.
- */
 const PASSED = "#2e7d32";
 const BREACH = "#c62828";
 const ERRORED = "#ef6c00";
-/** Deliberately the colour of an absence: nothing happened here, not "good". */
 const UNCHECKED = "#c7d0de";
 const ABSENT = "#b6c0cf";
-/** Neither a pass nor a fault: a band that is simply where a finding sits. */
 const NEUTRAL = "#5b6b82";
 
-/**
- * The rating, its colour, and - the important part - the rule that produced it.
- *
- * A colour with no stated rule is a colour nobody can defend, and the one
- * question a head of audit is asked about a RAG rating is what put it there.
- * The rule rides on the rating word's tooltip rather than being printed under
- * it: it is a definition, not a fact about this estate, so it does not have to
- * be on screen every time somebody opens the page.
- */
 const RATING: Record<Rating, { word: string; colour: string; tint: string; rule: string }> = {
   red: {
     word: "Needs attention",
@@ -172,14 +150,11 @@ const longDate = (iso: string | null) =>
       })
     : "\u2014";
 
-/** The controls that actually looked at the day's data: they ran and had an answer. */
 const checkedOf = (d: DayRow) => d.passed + d.breach;
 
-/** A day of the week for the sparkline end labels, without the year. */
 const shortDay = (iso: string) =>
   new Date(`${iso}T00:00:00`).toLocaleDateString("en-GB", { day: "numeric", month: "short" });
 
-/** Severity's colour, read from the one palette map in `theme.ts`. */
 const useSeverityTone = () => {
   const theme = useTheme();
   return (level: string) => theme.palette[severityColor[level] ?? "info"].main;
@@ -188,18 +163,6 @@ const useSeverityTone = () => {
 /* ================================================================== */
 /* Furniture                                                           */
 /* ================================================================== */
-/**
- * A card that carries its own title.
- *
- * The page used to draw a heading and then a card under it, seven times: seven
- * overlines, each with a margin of its own, stacked above seven boxes. The
- * title is the top of the box now, which costs nothing and buys back the gap
- * seven times over.
- *
- * `flush` is for a card whose content is a table: the table runs to the card's
- * edge and its first cell is indented to line up with the title above it. A
- * table inset by a card's padding sits under the title with a visible step.
- */
 const Frame = ({ title, aside, children, flush = false, className }: {
   title: string;
   aside?: ReactNode;
@@ -266,7 +229,6 @@ const headCell = {
 
 const bodyCell = { py: 0.6, px: 1.5, borderColor: "#eef1f6", lineHeight: 1.4 };
 
-/** A table inside a `flush` Frame, indented to the title above it. */
 const flushTable = {
   "& th:first-of-type, & td:first-of-type": { pl: 2 },
   "& th:last-of-type, & td:last-of-type": { pr: 2 },
@@ -279,7 +241,6 @@ const Sev = ({ level }: { level: string }) => (
   />
 );
 
-/** A number that is zero reads as absent, not as a finding. */
 const Maybe = ({ n, emphasise }: { n: number; emphasise?: boolean }) => (
   <Box
     component="span"
@@ -293,7 +254,6 @@ const Maybe = ({ n, emphasise }: { n: number; emphasise?: boolean }) => (
   </Box>
 );
 
-/** Two lines, then an ellipsis. A finding summary is a sentence, not a cell. */
 const Clamp = ({ children, lines = 2 }: { children: string; lines?: number }) => (
   <Typography
     variant="caption"
@@ -308,22 +268,9 @@ interface BarRow {
   label: string;
   value: number;
   colour: string;
-  /** What the bar cannot say: the exception lines behind it. */
   note: string;
 }
 
-/**
- * One row per category: label, bar, count.
- *
- * Rows rather than a stacked bar, and rows rather than a pie. A zero-width
- * segment in a stacked bar or a pie is INVISIBLE - you cannot tell "0 findings
- * over 90 days" from "there is no 90+ band" - and that zero is the single best
- * piece of news on this page. A row that is present and empty says so.
- *
- * The exception-line figure lives in the tooltip. It is a second magnitude, not
- * another slice, and printing it inside every row is what made these two blocks
- * the tallest thing on the page.
- */
 const BarRows = ({ rows, total, labelWidth }: { rows: BarRow[]; total: number; labelWidth: number }) => (
   <Stack spacing={0.4} sx={{ width: "100%" }}>
     {rows.map((r) => (
@@ -367,15 +314,6 @@ const BarRows = ({ rows, total, labelWidth }: { rows: BarRow[]; total: number; l
 /* ================================================================== */
 /* 1. The verdict, as one line                                         */
 /* ================================================================== */
-/**
- * The rating and its drivers on one line.
- *
- * It used to be a five-line card saying the same thing three times: the reason,
- * the RAG rule restated underneath it, and "Position as at <date>" - which the
- * header already says as "LAST CHECKED". The rule is a definition, so it moved
- * to the tooltip on the word it defines, under a dotted underline that says
- * there is something to hover.
- */
 const VerdictStrip = ({ verdict }: { verdict: Assurance["verdict"] }) => {
   const tone = RATING[verdict.rating];
   return (
@@ -448,10 +386,6 @@ const AgeChart = ({ open }: { open: Assurance["open"] }) => {
   return <BarRows rows={rows} total={open.findings} labelWidth={46} />;
 };
 
-/**
- * One bar per data date, oldest on the left, so the shape of the window is
- * readable before any number is. Height is findings raised that day.
- */
 const Spark = ({ days }: { days: DayRow[] }) => {
   const peak = Math.max(1, ...days.map((d) => d.findings));
   const first = days[0];
@@ -533,14 +467,6 @@ const TravelChart = ({ movement, days, backlog }: {
 /* ================================================================== */
 /* 3. Did the controls look?                                           */
 /* ================================================================== */
-/**
- * The definitions the numbers depend on, on hover.
- *
- * These used to be printed as sentences under the figures - "a day a control
- * did not run is not a day it found nothing" - which is a design note being
- * read aloud on the page. They are definitions rather than facts about this
- * estate, so they belong on the thing they define.
- */
 const NOT_RUN = "A control that did not run has no opinion about the day. It is not a day it found nothing.";
 const FAILED = "The control errored before it could answer, so it has no opinion about the day either.";
 const NOT_ASSURING = "Never switched on, or not yet past the validation gate. It owes no opinion yet, so it is not counted as a gap.";
@@ -742,16 +668,6 @@ const ControlsTable = ({ rows }: { rows: ControlRow[] }) => {
 /* ================================================================== */
 /* 5. The evidence                                                     */
 /* ================================================================== */
-/**
- * One data date as four segments: green that the control ran and found nothing,
- * red that it raised a finding, orange that it failed to run, grey that it did
- * not run at all.
- *
- * This is the audit trail behind the briefing above, which is why it sits at
- * the bottom and drops out of the print. It is still the only place the four
- * states are visible per day, and folding grey into green is the single thing
- * this page exists to refuse.
- */
 const KEY: ReadonlyArray<readonly [string, string]> = [
   [PASSED, "ran, nothing found"],
   [BREACH, "raised a finding"],
@@ -759,7 +675,6 @@ const KEY: ReadonlyArray<readonly [string, string]> = [
   [UNCHECKED, "did not run"],
 ];
 
-/** The four-state key, on the daily evidence title's line rather than a strip. */
 const Key = () => (
   <Stack direction="row" spacing={1.5} useFlexGap sx={{ flexWrap: "wrap", alignItems: "center", rowGap: 0.25 }}>
     {KEY.map(([colour, label]) => (

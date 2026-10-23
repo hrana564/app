@@ -9,27 +9,7 @@ import { useCurrentUser } from "../permissions";
 import type { RoleMatrix as RoleMatrixData } from "../dataProvider";
 import { FONT } from "../theme";
 
-/**
- * Which role holds what, read down and across.
- *
- * This is READ-ONLY and it is meant to be: the matrix is decided in
- * `backend/app/permissions.py`, and an editor here would be a second place to
- * change it - one that the server never reads. The screen's whole job is to
- * answer the question an auditor asks when a button is greyed out: "what can
- * the other role do that I cannot?".
- *
- * The data comes from `GET /api/roles`, so the table is the server's matrix
- * rather than a copy of one. A copy written into the frontend would drift the
- * first time a capability was added, and it would drift silently - the table
- * would still draw, every tick still plausible, while describing a permission
- * model nobody had.
- *
- * Grouped by subject rather than listed as one run of seventeen rows: the
- * rows are the columns' meaning, and seven short blocks read faster than one
- * long one.
- */
 
-/** One cell. A tick, or a cross - and it says which, to a screen reader. */
 const HoldMark = ({ holds }: { holds: boolean }) => {
   const text = holds ? "holds this capability" : "does not hold this capability";
   return (
@@ -60,9 +40,6 @@ export const RoleMatrix = ({ matrix }: { matrix: RoleMatrixData }) => {
   const user = useCurrentUser();
   const mine = user?.role ?? "";
 
-  /** Capabilities, blocked by the subject they belong to. The response is
-   *  already in the server's reading order, so the blocks come out as they
-   *  arrive rather than being re-sorted here. */
   const blocks = useMemo(() => {
     const out: { label: string; rows: RoleMatrixData["capabilities"] }[] = [];
     for (const capability of matrix.capabilities) {

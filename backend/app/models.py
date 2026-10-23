@@ -1,14 +1,3 @@
-"""SQLAlchemy models for the audit control store.
-
-Seven tables. A rule is not one row - `rules_master` holds one row per VERSION
-of a rule, identified by `code`, with exactly one flagged `is_version_active`
-(the head). That single flag is enforced by a partial unique index, so two live
-versions of the same rule are impossible at the database level.
-
-Thresholds live in the rule source, not in a table. Changing one is a code
-change, which produces a new version row - so the audit trail records it.
-"""
-
 from __future__ import annotations
 
 from datetime import date, datetime
@@ -82,16 +71,6 @@ class Datasource(Base, TimestampMixin):
 # Rules - one row per VERSION
 # ---------------------------------------------------------------------------
 class Rule(Base, TimestampMixin):
-    """A single version of a rule.
-
-    `code` identifies the LOGICAL rule and repeats across versions.
-    `is_version_active` marks the head - the version the scheduler runs. The
-    partial unique index `uq_rules_master_active_version` guarantees one head per
-    code in the database, not just in application code. A draft that is NOT the
-    head is a candidate: it sits beside the live version without taking it off the
-    air, until it is published and the head moves to it.
-    """
-
     __tablename__ = "rules_master"
     __table_args__ = (
         UniqueConstraint("code", "version", name="uq_rules_master_code_version"),
@@ -148,15 +127,6 @@ class Rule(Base, TimestampMixin):
 # Schedules
 # ---------------------------------------------------------------------------
 class RuleSchedule(Base, TimestampMixin):
-    """A cadence for a rule.
-
-    Keyed by `rule_code`, NOT by a row id: a schedule belongs to the logical
-    rule, so a new version can never orphan it. There is no FK - `code` repeats
-    across versions and cannot be unique. The scheduler resolves
-    rule_code -> head version at fire time, and reports any code it cannot
-    resolve at startup rather than silently dropping those schedules.
-    """
-
     __tablename__ = "rule_schedules"
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -180,13 +150,6 @@ class RuleSchedule(Base, TimestampMixin):
 # Runs
 # ---------------------------------------------------------------------------
 class Run(Base):
-    """One execution of one rule version.
-
-    `rule_id` points at the EXACT version row that ran, so "what code produced
-    this run" is a single lookup. `rule_code` is denormalised for list views so
-    they never need a join.
-    """
-
     __tablename__ = "rule_runs"
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -227,16 +190,6 @@ class Run(Base):
 # Tickets (the alert an auditor acknowledges)
 # ---------------------------------------------------------------------------
 class Ticket(Base):
-    """The alert an auditor acknowledges.
-
-    One failing run opens one ticket. There is no dedupe: a breach that is still
-    open tomorrow produces another ticket tomorrow, because "it is still
-    breaching" is the fact an auditor needs, not "we told you before".
-
-    `severity` is a snapshot of the rule's severity at the moment the ticket
-    was raised. The summary is not stored here - it is read from the run.
-    """
-
     __tablename__ = "tickets"
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -267,22 +220,6 @@ class Ticket(Base):
 # Explanations (what a rule does, for somebody who does not read Python)
 # ---------------------------------------------------------------------------
 class RuleExplanation(Base, TimestampMixin):
-    """One description of one version of a rule.
-
-    Keyed by `rule_id` rather than by code, because a description is about a
-    piece of source and each version has its own. A new version therefore gets
-    its own row, and the previous one keeps describing the code it was written
-    for.
-
-    `source_sha256` is the authority: a row whose hash no longer matches the
-    file on disk is withheld rather than shown, because a stale sentence about a
-    control is worse than no sentence at all.
-
-    `origin` says who wrote the words - "derived" (from the source alone),
-    "ai" (a model, after passing the gates) or "edited" (a person corrected it).
-    A person may correct a model; a model may not silently replace a person.
-    """
-
     __tablename__ = "rule_explanations"
     __table_args__ = (
         UniqueConstraint("rule_id", name="uq_rule_explanations_rule"),
@@ -298,11 +235,10 @@ class RuleExplanation(Base, TimestampMixin):
 
     breach_condition: Mapped[str] = mapped_column(Text, default="")
     steps: Mapped[list[Any]] = mapped_column(JSONB, default=list, nullable=False)
-    cannot_explain: Mapped[list[Any]] = mapped_column(JSONB, default=list, nullable=False)
     outputs: Mapped[list[Any]] = mapped_column(JSONB, default=list, nullable=False)
 
     # --- who wrote it, and what checked it --------------------------------
-    origin: Mapped[str] = mapped_column(String(16), default="derived", nullable=False)
+    origin: Mapped[str] = mapped_column(String(16), default="ai", nullable=False)
     model: Mapped[str] = mapped_column(String(128), default="")
     prompt_version: Mapped[str] = mapped_column(String(16), default="")
     generated_by: Mapped[str] = mapped_column(String(64), default="")

@@ -1,19 +1,3 @@
-"""
-Turning a failing run into a ticket.
-
-One job, no policy:
-
-    a run failed with rows  ->  one ticket holding those rows
-    a run passed            ->  nothing
-
-This module deliberately imports no Rule. It reads the run and nothing else, so
-it can be exercised without a scheduler, a cadence or a rule object. Delivery
-policy lives in the rule file, which is the thing a developer actually edits.
-
-`ticket_no` is assigned after the insert because the number embeds the primary
-key, which does not exist until the row is flushed.
-"""
-
 from __future__ import annotations
 
 import logging
@@ -26,25 +10,10 @@ log = logging.getLogger("abm.ticketing")
 
 
 def run_status_for(rule_status: str) -> str:
-    """Did the rule EXECUTE? `success`|`failed` from the rule becomes the same.
-
-    Nothing here looks at the rows. A rule that runs and finds a breach ran
-    perfectly well, and recording that as a failed execution is how an audit
-    tool starts reporting its own successes as faults.
-    """
     return "success" if rule_status == "success" else "failed"
 
 
 def run_outcome_for(rule_status: str, row_count: int) -> str | None:
-    """What did the control FIND? `pass`|`fail`, or None if it never ran.
-
-    A rule that could not run has no opinion about the control, so it has no
-    outcome. That is the distinction this whole module exists to keep.
-
-    Both this and run_status_for are pure and are used by the runner AND the
-    replay tool - if the two derived them differently, a replay would report a
-    difference that is not one.
-    """
     if rule_status != "success":
         return None
     return "fail" if row_count else "pass"
@@ -53,7 +22,6 @@ def run_outcome_for(rule_status: str, row_count: int) -> str | None:
 async def raise_ticket(
     session: AsyncSession, *, run: Run, severity: str, schedule_id: int | None
 ) -> Ticket | None:
-    """Open one ticket for a breach. Returns None if there is nothing to report."""
     if run.outcome != "fail" or not run.rows:
         return None
 

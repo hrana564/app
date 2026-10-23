@@ -1,35 +1,3 @@
-"""
-Rule validation.
-
-A rule must pass this before it can be activated, so a broken rule never
-reaches an unattended 06:30 scheduled run. Validation is deliberately
-*static* - it compiles the module and inspects what it declares, without
-touching any data. That makes it cheap enough to run on every save.
-
-Checks:
-  1. the module imports and compiles
-  2. it defines run(ctx)
-  3. it does not import banned modules or call open()
-  4. every DATASOURCES entry is registered for the rule's entity
-  5. every ctx.table() in the SQL is registered, whether declared or not
-  6. a declared ENTITY matches the one the rule is registered under
-
-Check 4 reads the live catalogue, so removing a datasource stops a NEW rule
-referencing it. That is the enforcement point for the admin's decision - a rule
-that has already been validated against a table keeps running, because silently
-breaking a live control is worse than leaving it visible.
-
-WHAT A RULE READS
------------------
-`declared_tables()` below is the single answer to "which tables does this source
-touch", and every caller goes through it. It is pure text: no file, no database,
-no catalogue. That matters because the answer is needed in two places with
-different access - validating a rule reads the catalogue, while writing one only
-has the text it was just handed. Deriving it twice would let the two drift, and
-that drift is invisible: the rule would run correctly while the catalogue and
-the rule's own page disagreed about what it reads.
-"""
-
 from __future__ import annotations
 
 import ast
@@ -71,33 +39,32 @@ BANNED_CALLS = {"open", "eval", "exec", "compile", "__import__", "input"}
 # ---------------------------------------------------------------------------
 # What a rule reads - pure, shared by validation and by every write path
 # ---------------------------------------------------------------------------
-def _declared_constant(tree: ast.Module) -> list[str]:
-    """The module-level `DATASOURCES = [...]` literal, or [] if there isn't one.
-
-    Parsed rather than executed. A rule that built the list at import time would
-    need the module to run to be understood, and the write path has only text.
-    Rules are plain files holding a literal constant; anything else is treated
-    as "declares nothing", which validation then flags.
-    """
+def _datasources_assignment(tree: ast.Module) -> ast.Assign | None:
+    """The module-level `DATASOURCES = ...` statement, if there is one."""
     for node in tree.body:
         if not isinstance(node, ast.Assign):
             continue
-        if not any(isinstance(t, ast.Name) and t.id == "DATASOURCES" for t in node.targets):
-            continue
-        try:
-            return _as_list(ast.literal_eval(node.value))
-        except (ValueError, TypeError, SyntaxError):
-            return []
-    return []
+        if any(isinstance(t, ast.Name) and t.id == "DATASOURCES" for t in node.targets):
+            return node
+    return None
+
+
+def _declared_list(tree: ast.Module) -> list[str] | None:
+    """The declaration's names, or None when there is no list to read."""
+    node = _datasources_assignment(tree)
+    if node is None:
+        return None
+    try:
+        return _as_list(ast.literal_eval(node.value))
+    except (ValueError, TypeError, SyntaxError):
+        return None
+
+
+def _declared_constant(tree: ast.Module) -> list[str]:
+    return _declared_list(tree) or []
 
 
 def declared_names(source: str) -> list[str]:
-    """Only the module-level `DATASOURCES` literal - not what the code reads.
-
-    Kept separate from `declared_tables` because the difference is the whole
-    point of the warning in check 4: a rule that reads a table it never
-    declared is covered by validation but should still say so.
-    """
     try:
         return _declared_constant(ast.parse(source))
     except SyntaxError:
@@ -105,12 +72,6 @@ def declared_names(source: str) -> list[str]:
 
 
 def referenced_tables(source: str, tree: ast.Module | None = None) -> list[str]:
-    """Every table this source reads with ctx.table("x") or ctx.count_rows("x").
-
-    Both the plain call and the one written inside an SQL string, which no AST
-    pass can see. Union both, because a rule that skips the declaration and
-    names the table only in its SQL still reads it.
-    """
     if tree is None:
         try:
             tree = ast.parse(source)
@@ -130,23 +91,87 @@ def referenced_tables(source: str, tree: ast.Module | None = None) -> list[str]:
 
 
 def declared_tables(source: str) -> list[str]:
-    """Every table this source declares or reads, sorted and deduplicated.
-
-    The union, because a rule can name a table in `DATASOURCES` and never touch
-    it, or read one it never declared. Recording only half of that is how the
-    catalogue ends up disagreeing with the code that reads it.
-    """
     return sorted(set(declared_names(source)) | set(referenced_tables(source)))
 
 
-def _module_strings(tree: ast.Module) -> dict[str, str]:
-    """Module-level `NAME = "literal"` assignments, so a named constant resolves.
+# ---------------------------------------------------------------------------
+# The binding - what a source declares, what it reads, and the difference
+# ---------------------------------------------------------------------------
+def declaration_text(names: list[str]) -> str:
+    """The DATASOURCES line, written the way a person would write it."""
+    unique = sorted(set(names))
+    if not unique:
+        return "DATASOURCES = []"
+    if len(unique) <= 3:
+        return "DATASOURCES = [" + ", ".join(f'"{n}"' for n in unique) + "]"
+    return "DATASOURCES = [\n" + "".join(f'    "{n}",\n' for n in unique) + "]"
 
-    A rule that compares `pl.col("tender_type") == CASH_TENDER` names its value
-    rather than spelling it, and the literal is still the thing that has to
-    occur in the data. Only a plain string constant is resolved - anything
-    computed is left alone, because guessing it would be worse than not knowing.
+
+def binding(source: str) -> dict[str, Any]:
+    """What a source declares, what it reads, and where the two disagree.
+
+    One answer, from the AST. The browser used to work this out with a regex,
+    which could disagree with the validator about the same file - and the
+    validator is the one that decides whether a rule may be activated.
     """
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        tree = None
+
+    declared = _declared_list(tree) if tree is not None else None
+    referenced = referenced_tables(source, tree)
+    names = declared or []
+    unreadable = declared is None
+
+    return {
+        "declared": names,
+        "referenced": referenced,
+        "unreadable": unreadable,
+        "undeclared": referenced if unreadable else [t for t in referenced if t not in names],
+        "unused": [] if unreadable else [t for t in names if t not in referenced],
+        "declaration": "" if unreadable else declaration_text(names),
+    }
+
+
+def rewrite_datasources(source: str, names: list[str]) -> str:
+    """The source with its DATASOURCES declaration set to `names`.
+
+    The assignment is found with the AST and replaced where it stands, so a
+    declaration written across several lines, or with a comment inside it, is
+    replaced whole rather than half-matched.
+    """
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return source
+
+    text = declaration_text(names)
+    lines = source.splitlines(keepends=True)
+    node = _datasources_assignment(tree)
+
+    if node is not None:
+        start = node.lineno - 1
+        end = node.end_lineno or node.lineno
+        return "".join(lines[:start]) + text + "\n" + "".join(lines[end:])
+
+    # No declaration at all. Put one where Python expects it: after the
+    # imports and the module docstring, before anything that uses it.
+    anchor = 0
+    for stmt in tree.body:
+        if isinstance(stmt, (ast.Import, ast.ImportFrom)):
+            anchor = max(anchor, stmt.end_lineno or stmt.lineno)
+        elif (
+            isinstance(stmt, ast.Expr)
+            and isinstance(stmt.value, ast.Constant)
+            and isinstance(stmt.value.value, str)
+        ):
+            anchor = max(anchor, stmt.end_lineno or stmt.lineno)
+
+    return "".join(lines[:anchor]) + text + "\n\n" + "".join(lines[anchor:])
+
+
+def _module_strings(tree: ast.Module) -> dict[str, str]:
     found: dict[str, str] = {}
     for node in tree.body:
         if not isinstance(node, ast.Assign):
@@ -161,7 +186,6 @@ def _module_strings(tree: ast.Module) -> dict[str, str]:
 
 
 def _column_of(node: ast.AST) -> str | None:
-    """The column name in `pl.col("x")`, or None."""
     if not isinstance(node, ast.Call):
         return None
     if getattr(node.func, "attr", None) != "col" or not node.args:
@@ -173,7 +197,6 @@ def _column_of(node: ast.AST) -> str | None:
 
 
 def _string_of(node: ast.AST, constants: dict[str, str]) -> str | None:
-    """The literal value of `"x"` or a named module constant, or None."""
     if isinstance(node, ast.Constant) and isinstance(node.value, str):
         return node.value
     if isinstance(node, ast.Name):
@@ -182,20 +205,6 @@ def _string_of(node: ast.AST, constants: dict[str, str]) -> str | None:
 
 
 def compared_literals(source: str) -> list[tuple[str, str]]:
-    """Every (column, literal) this rule asserts a column equals.
-
-    `pl.col("x") == "y"` and `pl.col("x").is_in(["y", ...])`, on either side,
-    with the literal spelled out or held in a module constant. Pure text.
-
-    Only membership, never exclusion. `pl.col("x") != "y"` and a negated
-    `is_in` claim a value is ABSENT, which is a normal thing to write and a
-    normal thing for the data not to contain - checking those would warn on
-    every correctly-written exclusion.
-
-    The trial uses this to check each literal occurs in the data. A rule that
-    tests a column for a value the column does not hold finds nothing and still
-    reports a clean day - the one failure the execution check cannot see.
-    """
     try:
         tree = ast.parse(source)
     except SyntaxError:
@@ -248,15 +257,6 @@ def compared_literals(source: str) -> list[tuple[str, str]]:
 
 
 def scan_source(source: str) -> list[str]:
-    """Every reason this file may not run. Pure text - no file, no database.
-
-    The gate a rule must pass before it is allowed to execute. It is a function
-    of the source alone so that every caller gets the same answer: the
-    validator, and the trial that runs a candidate before it is saved.
-
-    A candidate that has not been through this gate is not executed. A rule is
-    code, and code that has not been read is code that does not get to run.
-    """
     try:
         tree = ast.parse(source)
     except SyntaxError as exc:
@@ -389,14 +389,6 @@ class RuleValidator:
         return result
 
     def _scan_source(self, source: str | None) -> tuple[list[str], list[str]]:
-        """AST scan for banned imports/calls, and collect ctx.table("x") refs.
-
-        Returns only what the scan is uniquely for - the problems. The table
-        names come from `referenced_tables()` so there is one implementation of
-        the tables it reads come from the shared helper, and the problems come
-        from `scan_source()` so there is one implementation of what is allowed
-        to run.
-        """
         if source is None:
             return [f"source file {self.source_file} does not exist"], []
 

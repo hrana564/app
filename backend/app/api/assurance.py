@@ -1,49 +1,3 @@
-"""
-The assurance read model behind the landing page.
-
-A head of audit does not ask how many rows are in `rule_runs`. They ask three
-questions, in this order:
-
-    1. Did my controls actually look at the data?
-    2. What did they find, and how much of it is still open?
-    3. Is it getting better or worse?
-
-This module answers exactly those, from the runs and tickets that already exist.
-Nothing is stored and nothing is denormalised into a summary table: the whole
-payload is derived on read, so it cannot drift from the ledger it describes.
-
-`verdict()` then collapses the answers into the one line that comes first on the
-page - a rating and the reason for it. It is a summary of the numbers beside it,
-never a number of its own, and it is decided on the FULL counts rather than the
-trimmed lists the screen shows.
-
-THE ONE RULE
-------------
-A control that did not run has no opinion. It is counted as UNCHECKED - never as
-pass, never as absent, never folded into a percentage that quietly excludes it.
-This is the distinction the product is built on (see app/engine/ticketing.py),
-and a dashboard that flattens it back into "excluded from the bars" throws away
-the only fact a head of audit needs: a day a control never ran is an UNASSURED
-day, not a clean one.
-
-Each data date therefore partitions the assured controls into four states which
-sum back to the total:
-
-    passed + breached + errored + unchecked == assured controls
-
-Exceptions sit alongside that partition rather than inside it. One breaching run
-can carry thousands of exception rows, so they are a separate magnitude - the
-exposure - not another slice of the same pie.
-
-WINDOWING
----------
-The window is measured in DATA DATES, not calendar days, and every figure in it
-is filtered the same way: runs by `rule_runs.data_date`, and tickets by the
-`data_date` of the run that raised them. A ticket carries no data date of its own
-because a finding is about the day the control looked at, not the moment it was
-written down.
-"""
-
 from __future__ import annotations
 
 from datetime import date, datetime, time, timezone
@@ -88,14 +42,6 @@ dashboard and the inbox it sends you to can never rank a finding differently."""
 # Pure derivations - readable without a database, and testable without one
 # ---------------------------------------------------------------------------
 def state_of(passed: int, breached: int, errored: int) -> str:
-    """Which of the four states one control is in, on one data date.
-
-    A breach outranks a pass on the same day, because a control that found
-    something and a control that found nothing are different facts and that day
-    had both. An execution failure only counts when nothing else happened: a
-    control that reported a breach after a failed morning still has an opinion,
-    and the failure is visible on its own in the Runs ledger.
-    """
     if breached:
         return BREACH
     if passed:
@@ -106,12 +52,6 @@ def state_of(passed: int, breached: int, errored: int) -> str:
 
 
 def summarise_day(assured: int, seen: dict[str, str]) -> dict[str, int]:
-    """One data date, as counts over the assured controls.
-
-    `seen` maps a control code to its state for this date. Anything absent owes an
-    opinion and did not give one, so `unchecked` is the shortfall rather than a
-    separate tally - which is what makes the four numbers sum to `assured`.
-    """
     tally = {PASSED: 0, BREACH: 0, ERRORED: 0}
     for value in seen.values():
         tally[value] += 1
@@ -120,19 +60,12 @@ def summarise_day(assured: int, seen: dict[str, str]) -> dict[str, int]:
 
 
 def age_in_days(moment: datetime | None, now: datetime) -> int:
-    """Whole days between two instants, never negative."""
     if moment is None:
         return 0
     return max(0, (now - moment).days)
 
 
 def rank_controls(rows: list[dict]) -> list[dict]:
-    """Worst control first.
-
-    Days breached outrank raw exception counts: a control that breached on every
-    day of the window is a systemic failure, while a large one-off count is a
-    single bad day that has already been raised. Exceptions only break the tie.
-    """
     return sorted(
         rows,
         key=lambda r: (-r["breached_days"], -r["exceptions"], -r["missing_days"], r["code"]),
@@ -151,12 +84,6 @@ AGE_BUCKETS: tuple[tuple[str, str, int | None], ...] = (
 
 
 def bucket_of(age: int) -> str:
-    """Which age band a finding is in.
-
-    `age` is a whole-day age from `age_in_days`, deliberately: deriving the age
-    a second time in SQL would let the band a finding sits in contradict the age
-    printed beside it, and both numbers would look plausible.
-    """
     for key, _, ceiling in AGE_BUCKETS:
         if ceiling is None or age <= ceiling:
             return key
@@ -175,21 +102,6 @@ def verdict(
     not_assured: int,
     errored_latest: int,
 ) -> dict[str, str]:
-    """The one rating a head of audit reads first, and the reason for it.
-
-        red     a critical finding is open, or a scheduled control missed a day
-        amber   something is open, a control owes an opinion, or a control
-                failed to run on the latest data day
-        green   every control ran and nothing is open
-
-    Coverage drives the rating alongside risk on purpose. A day a scheduled
-    control did not run is an unassured day, and a headline that stayed green
-    through it would be the one failure this page exists to prevent.
-
-    A control with no cadence is NOT in here. It owes no opinion on a day nobody
-    asked it for one, so its silence is a coverage note and never a fault - the
-    same `overdue` versus `gaps` distinction the rest of the payload keeps.
-    """
     if critical_open or overdue:
         rating = RATING_RED
     elif open_findings or not_assured or errored_latest:
@@ -507,11 +419,6 @@ async def dashboard(
 
     # --- movement over the window ---------------------------------------------
     async def raised(days_in: list[date]) -> tuple[int, int]:
-        """Findings and exception rows raised on the given data dates.
-
-        Only breaching runs carry rows, so filtering to them here makes the sum
-        exact rather than relying on passing runs contributing zero.
-        """
         if not days_in:
             return (0, 0)
         found = (

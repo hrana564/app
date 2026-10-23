@@ -1,47 +1,13 @@
-"""
-The tools the rule agent uses to look at the data and test its rule.
-
-The model is a bad database and a good investigator, so it is not handed a
-snapshot of the data in its prompt. It is handed tools that read the real bytes
-the rule will run against, and it asks. Everything it learns, it learns by
-looking.
-
-     list_tables       what it may read at all
-     describe_table    a table's columns, types, grain
-     sample_rows       a few real rows
-     distinct_values   the values a column holds, with counts
-     column_stats      count, nulls, distinct, min, max, mean
-     join_overlap      whether two tables actually share a key
-     filter_count      how many rows a set of conditions selects
-     validate_rule     the static gate, no data
-     run_rule          run a candidate against real data
-
-`run_rule` is also the universal query tool: the model can write a throwaway
-rule that returns whatever diagnostic it wants and run it through the same
-sandbox the real rule runs in. That is what makes "check the data" and "test
-the rule" one mechanism.
-
-THE SELECTION BINDS
--------------------
-Every tool reads only the tables the admin selected. A tool that answered about
-any table would reopen the hole the selection exists to close.
-
-THE ANSWERS ARE DATA, NOT OPINION
----------------------------------
-Each tool reads the estate and returns it. That is the point: a model asked
-"does this value exist?" will answer; `distinct_values` cannot. The final
-verdict is still `run_rule`, never the model's word.
-"""
-
 from __future__ import annotations
 
 import logging
 from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any, Literal
 
 import polars as pl
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from app.engine.catalog import Catalog
 from app.engine.snapshot import days_for
@@ -86,7 +52,6 @@ def _require_column(frame: pl.DataFrame, column: str) -> None:
 
 
 def _condition(frame: pl.DataFrame, column: str, op: str, value: Any) -> pl.Expr:
-    """One condition as a polars expression. Structured, never evaluated."""
     col = pl.col(column)
     is_string = frame[column].dtype == pl.String
 
@@ -128,8 +93,6 @@ def _condition(frame: pl.DataFrame, column: str, op: str, value: Any) -> pl.Expr
 # The toolbox
 # ---------------------------------------------------------------------------
 class Toolbox:
-    """Every tool, bound to one entity, one date and one selection."""
-
     def __init__(
         self,
         *,
@@ -150,14 +113,19 @@ class Toolbox:
 
     # -- dispatch --------------------------------------------------------
     def call(self, name: str, arguments: dict[str, Any] | None) -> dict[str, Any]:
-        """Run one tool by name. A bad call comes back as an error, not a raise."""
+        spec = TOOLS.get(name)
+        if spec is None:
+            return {"error": f"unknown tool '{name}'"}
+        model, _ = spec
         method = getattr(self, name, None)
-        if method is None or name.startswith("_"):
+        if method is None:
             return {"error": f"unknown tool '{name}'"}
         try:
-            return method(**(arguments or {}))
-        except TypeError as exc:
+            parsed = model.model_validate(arguments or {})
+        except ValidationError as exc:
             return {"error": f"bad arguments for {name}: {exc}"}
+        try:
+            return method(**parsed.model_dump())
         except Exception as exc:  # noqa: BLE001 - the model reads the error
             return {"error": f"{type(exc).__name__}: {exc}"}
 
@@ -190,7 +158,6 @@ class Toolbox:
 
     # -- the tools -------------------------------------------------------
     def list_tables(self) -> dict[str, Any]:
-        """The tables the admin selected, and what each holds."""
         return {
             "tables": [
                 {
@@ -205,7 +172,6 @@ class Toolbox:
         }
 
     def describe_table(self, table: str) -> dict[str, Any]:
-        """A table's columns, types, grain and row count."""
         frame = self._frame(table)
         entry = next(
             (e for e in self.catalog.entries_for(self.entity) if e.name == table), None
@@ -220,12 +186,10 @@ class Toolbox:
         }
 
     def sample_rows(self, table: str, n: int = 5) -> dict[str, Any]:
-        """A few real rows, so a field cannot be invented."""
         frame = self._frame(table).head(max(1, min(int(n), MAX_SAMPLE_ROWS)))
         return {"rows": _records(frame)}
 
     def distinct_values(self, table: str, column: str, limit: int = 50) -> dict[str, Any]:
-        """Every value a column holds, with counts. Use before testing a value."""
         frame = self._frame(table)
         _require_column(frame, column)
         cap = max(1, min(int(limit), MAX_VALUES))
@@ -247,7 +211,6 @@ class Toolbox:
         }
 
     def column_stats(self, table: str, column: str) -> dict[str, Any]:
-        """Count, nulls, distinct, min, max, mean - for thresholds and formats."""
         frame = self._frame(table)
         _require_column(frame, column)
         series = frame[column]
@@ -272,8 +235,6 @@ class Toolbox:
     def join_overlap(
         self, table_a: str, key_a: str, table_b: str, key_b: str
     ) -> dict[str, Any]:
-        """How many keys two tables share. A join on a key that does not match
-        finds nothing and still reports a clean day."""
         left = self._frame(table_a)
         right = self._frame(table_b)
         _require_column(left, key_a)
@@ -294,7 +255,6 @@ class Toolbox:
     def filter_count(
         self, table: str, conditions: list[dict[str, Any]]
     ) -> dict[str, Any]:
-        """How many rows a set of conditions selects, and a sample of them."""
         frame = self._frame(table)
         expression: pl.Expr | None = None
         for condition in conditions or []:
@@ -313,7 +273,6 @@ class Toolbox:
         }
 
     def validate_rule(self, source: str) -> dict[str, Any]:
-        """The static gate. No data is read and nothing runs."""
         return {
             "problems": scan_source(source),
             "declared": declared_names(source),
@@ -321,7 +280,6 @@ class Toolbox:
         }
 
     def run_rule(self, source: str) -> dict[str, Any]:
-        """Run a candidate against real data. This is the test, and the gate."""
         trial = run_trial(
             source,
             entity=self.entity,
@@ -340,99 +298,146 @@ class Toolbox:
 # ---------------------------------------------------------------------------
 # The schemas the model is given
 # ---------------------------------------------------------------------------
-def _tool(name: str, description: str, properties: dict, required: list[str]) -> dict:
-    return {
+# Each tool's arguments are a model. The schema the model is shown is generated
+# from that model and the arguments it sends are validated against it, so the
+# schema and the contract cannot drift apart: there is only one declaration of
+# what a tool takes.
+TableName = Annotated[str, Field(description="a table name from the selection")]
+ColumnName = Annotated[str, Field(description="a column name in that table")]
+SourceText = Annotated[str, Field(description="the full module source")]
+
+
+class _Args(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class ListTablesArgs(_Args):
+    pass
+
+
+class DescribeTableArgs(_Args):
+    table: TableName
+
+
+class SampleRowsArgs(_Args):
+    table: TableName
+    n: int = Field(default=5, description="how many rows")
+
+
+class DistinctValuesArgs(_Args):
+    table: TableName
+    column: ColumnName
+    limit: int = 50
+
+
+class ColumnStatsArgs(_Args):
+    table: TableName
+    column: ColumnName
+
+
+class JoinOverlapArgs(_Args):
+    table_a: TableName
+    key_a: ColumnName
+    table_b: TableName
+    key_b: ColumnName
+
+
+class Condition(BaseModel):
+    column: ColumnName
+    op: Literal["==", "!=", ">", "<", ">=", "<=", "in"]
+    value: Any = Field(description="the value, or a list for 'in'")
+
+
+class FilterCountArgs(_Args):
+    table: TableName
+    conditions: list[Condition]
+
+
+class ValidateRuleArgs(_Args):
+    source: SourceText
+
+
+class RunRuleArgs(_Args):
+    source: SourceText
+
+
+# The name the model calls, the arguments it takes, and what the tool is for.
+TOOLS: dict[str, tuple[type[_Args], str]] = {
+    "list_tables": (
+        ListTablesArgs,
+        "The tables you may read, with what each holds.",
+    ),
+    "describe_table": (
+        DescribeTableArgs,
+        "A table's columns and their types. Look before you write a column name.",
+    ),
+    "sample_rows": (
+        SampleRowsArgs,
+        "A few real rows from a table, to see what the values look like.",
+    ),
+    "distinct_values": (
+        DistinctValuesArgs,
+        "Every value a column holds, with counts. Use this before you compare a "
+        "column to a literal - a value that is not in the list matches nothing.",
+    ),
+    "column_stats": (
+        ColumnStatsArgs,
+        "Count, nulls, distinct, min, max and mean for a column. Use it to pick "
+        "a threshold and to learn a date or timestamp format.",
+    ),
+    "join_overlap": (
+        JoinOverlapArgs,
+        "How many keys two tables actually share. Use it before you join, so the "
+        "join does not silently match nothing.",
+    ),
+    "filter_count": (
+        FilterCountArgs,
+        "How many rows a set of conditions selects, and a sample. Use it to check "
+        "that your logic selects what you expect.",
+    ),
+    "validate_rule": (
+        ValidateRuleArgs,
+        "Check a rule against the static gate without running it. Cheap.",
+    ),
+    "run_rule": (
+        RunRuleArgs,
+        "Run a candidate rule against real data and see what it found. This is "
+        "how you test. Do not submit until this reports status 'ok'.",
+    ),
+}
+
+
+def _parameters(model: type[_Args]) -> dict[str, Any]:
+    defs = model.model_json_schema().get("$defs", {})
+
+    def walk(node: Any) -> Any:
+        if isinstance(node, dict):
+            ref = node.get("$ref")
+            if isinstance(ref, str) and ref.startswith("#/$defs/"):
+                merged = walk(defs.get(ref.rsplit("/", 1)[-1], {}))
+                for key, value in node.items():
+                    if key != "$ref":
+                        merged[key] = walk(value)
+                return merged
+            return {k: walk(v) for k, v in node.items() if k != "title"}
+        if isinstance(node, list):
+            return [walk(v) for v in node]
+        return node
+
+    schema = walk(model.model_json_schema())
+    schema.pop("$defs", None)
+    schema.pop("title", None)
+    return schema
+
+
+TOOL_SCHEMAS: list[dict[str, Any]] = [
+    {
         "type": "function",
         "function": {
             "name": name,
             "description": description,
-            "parameters": {
-                "type": "object",
-                "properties": properties,
-                "required": required,
-            },
+            "parameters": _parameters(model),
         },
     }
-
-
-_TABLE = {"type": "string", "description": "a table name from the selection"}
-_COLUMN = {"type": "string", "description": "a column name in that table"}
-
-TOOL_SCHEMAS: list[dict] = [
-    _tool(
-        "list_tables",
-        "The tables you may read, with what each holds.",
-        {}, [],
-    ),
-    _tool(
-        "describe_table",
-        "A table's columns and their types. Look before you write a column name.",
-        {"table": _TABLE}, ["table"],
-    ),
-    _tool(
-        "sample_rows",
-        "A few real rows from a table, to see what the values look like.",
-        {"table": _TABLE, "n": {"type": "integer", "description": "how many rows"}},
-        ["table"],
-    ),
-    _tool(
-        "distinct_values",
-        "Every value a column holds, with counts. Use this before you compare a "
-        "column to a literal - a value that is not in the list matches nothing.",
-        {"table": _TABLE, "column": _COLUMN, "limit": {"type": "integer"}},
-        ["table", "column"],
-    ),
-    _tool(
-        "column_stats",
-        "Count, nulls, distinct, min, max and mean for a column. Use it to pick "
-        "a threshold and to learn a date or timestamp format.",
-        {"table": _TABLE, "column": _COLUMN}, ["table", "column"],
-    ),
-    _tool(
-        "join_overlap",
-        "How many keys two tables actually share. Use it before you join, so the "
-        "join does not silently match nothing.",
-        {
-            "table_a": _TABLE, "key_a": _COLUMN,
-            "table_b": _TABLE, "key_b": _COLUMN,
-        },
-        ["table_a", "key_a", "table_b", "key_b"],
-    ),
-    _tool(
-        "filter_count",
-        "How many rows a set of conditions selects, and a sample. Use it to check "
-        "that your logic selects what you expect.",
-        {
-            "table": _TABLE,
-            "conditions": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "column": _COLUMN,
-                        "op": {
-                            "type": "string",
-                            "enum": ["==", "!=", ">", "<", ">=", "<=", "in"],
-                        },
-                        "value": {"description": "the value, or a list for 'in'"},
-                    },
-                    "required": ["column", "op", "value"],
-                },
-            },
-        },
-        ["table", "conditions"],
-    ),
-    _tool(
-        "validate_rule",
-        "Check a rule against the static gate without running it. Cheap.",
-        {"source": {"type": "string", "description": "the full module source"}},
-        ["source"],
-    ),
-    _tool(
-        "run_rule",
-        "Run a candidate rule against real data and see what it found. This is "
-        "how you test. Do not submit until this reports status 'ok'.",
-        {"source": {"type": "string", "description": "the full module source"}},
-        ["source"],
-    ),
+    for name, (model, description) in TOOLS.items()
 ]

@@ -208,7 +208,7 @@ then says whose control it was, without opening the record.
 | Edit logic | New row at `version = max+1` + new file `<CODE>_v<n>.py`; the old row loses the head flag. Starts as `draft` with validation reset |
 | `PUT .../status` | Lifecycle only - **no new version**. Pausing is not a logic change |
 | Rollback | Copies an old version's source into a **new** head. Reads as *"v3 restored v1's logic"*; version numbers only move forward |
-| Delete | Refused (409) if any run or ticket references it - findings must not vanish because a rule was deleted. Retire it instead |
+| Delete | Cascades: every version row, its runs, the findings those runs raised, its explanations and schedules, and the source files and run folders on disk. To stop a control but keep its history, retire it instead |
 
 ### Schedules are keyed by `rule_code`, not a relationship
 

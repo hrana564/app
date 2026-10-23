@@ -5,8 +5,8 @@ Rules are addressed by their permanent `code`, and each has one working draft.
 This suite covers that versioning behaviour explicitly: an edit rewrites the
 draft (a new version is minted only when a published rule is rewritten), editing
 resets validation, pausing does NOT burn a version, rollback appends forward, a
-draft can be discarded, schedules survive a version bump, and a rule with
-findings cannot be deleted.
+draft can be discarded, schedules survive a version bump, and deleting a rule
+cascades to the runs it performed and the findings those runs raised.
 
 All version assertions are DELTA based, so the suite is re-runnable.
 
@@ -1335,12 +1335,69 @@ def main() -> int:
             r = c.post(f"/api/tickets/{open_ticket['id']}/reopen", headers=ud)
             check("reopen works", r.status_code == 200 and r.json()["status"] == "open")
 
-        section("delete protection")
-        r = c.delete(f"/api/rules/{filed_code('CA-03')}", headers=ah)
-        check("a rule with findings cannot be deleted", r.status_code == 409,
-              f"got {r.status_code} {r.text[:140]}")
-        check("the message points at retiring instead",
-              "retired" in r.json().get("detail", "").lower(), r.text[:160])
+        # Deleting a rule is a cascade, not a refusal: the runs it performed and
+        # the findings those runs raised go with it. The probe raises its own
+        # finding so the suite proves the cascade without destroying the seeded
+        # estate, which the rest of the suite - and a re-run - still depend on.
+        section("delete cascades")
+        # The code is deliberately LONGER than 22 characters: a ticket number is
+        # `<code>-TKT-<5 digits>` and a rule code may be up to 64 characters
+        # (app/engine/rules.py). A shorter code would not exercise the widened
+        # `tickets.ticket_no`, so this proves the cascade AND the long-coded
+        # ticket in one probe.
+        RCODE = f"{ESTATE_CLIENT[ESTATE_RETAIL]}-SMOKE-CASCADE-PROBE"
+        c.delete(f"/api/rules/{RCODE}", headers=ah)  # idempotent re-run
+        rsrc = (
+            "DATASOURCES = ['ipos_sales']\n\n\n"
+            "def run(ctx):\n"
+            "    rows = ctx.table('ipos_sales').head(5).to_dicts()\n"
+            "    return {'status': 'success', 'error_message': None,\n"
+            "            'summary': f'{len(rows)} invoice(s)', 'metrics': {},\n"
+            "            'rows': rows}\n"
+        )
+        made = c.post("/api/rules", headers=ah, json={
+            "code": RCODE, "name": "cascade probe", "source_code": rsrc,
+            "entity": ESTATE_CLIENT[ESTATE_RETAIL], "status": "draft"})
+        check("cascade probe created", made.status_code == 201,
+              f"{made.status_code} {made.text[:140]}")
+        if made.status_code == 201:
+            rv = made.json()["version"]
+            ran = c.post(f"/api/rules/{RCODE}/test", headers=ah,
+                         json={"data_date": EXEC_EXPECTATIONS["CA-03"][0]})
+            ran_ok = ran.status_code == 200 and ran.json().get("outcome") == "fail"
+            check("the probe ran and raised a finding", ran_ok,
+                  f"{ran.status_code} {ran.text[:140]}")
+            if ran_ok:
+                run_id = ran.json()["run_id"]
+                run_folder = MOUNT_DIR / "Rules_Executions" / f"{run_id:06d}"
+                raised = c.get("/api/tickets", headers=ah,
+                               params={"rule_code": RCODE}).json()
+                check("the finding belongs to the probe", raised["total"] >= 1,
+                      f"total={raised['total']}")
+                ticket_no = raised["data"][0]["ticket_no"] if raised["data"] else ""
+                check("a rule code longer than 22 characters still raises a ticket",
+                      ticket_no.startswith(f"{RCODE}-TKT-"), ticket_no)
+                check("its run folder and source file exist before the delete",
+                      run_folder.exists() and (RULES_DIR / f"{RCODE}_v{rv}.py").exists(),
+                      f"folder={run_folder.exists()}")
+
+                gone = c.delete(f"/api/rules/{RCODE}", headers=ah)
+                check("deleting a rule with findings is allowed", gone.status_code == 204,
+                      f"{gone.status_code} {gone.text[:140]}")
+                check("the rule 404s afterwards",
+                      c.get(f"/api/rules/{RCODE}", headers=ud).status_code == 404)
+                check("its findings went with it",
+                      c.get("/api/tickets", headers=ah,
+                            params={"rule_code": RCODE}).json()["total"] == 0)
+                check("its runs went with it",
+                      c.get("/api/rule-runs", headers=ud,
+                            params={"rule_code": RCODE}).json()["total"] == 0)
+                check("its source files went with it",
+                      not any(RULES_DIR.glob(f"{RCODE}_v*.py")))
+                check("its run folder went with it", not run_folder.exists())
+            else:
+                c.delete(f"/api/rules/{RCODE}", headers=ah)  # do not leak the probe
+
         check("deleting an unknown rule 404s",
               c.delete("/api/rules/NOPE-99", headers=ah).status_code == 404)
 

@@ -845,8 +845,15 @@ const RunRuleDialog = ({
 };
 
 /* ================================================================== */
-/* Delete - typed confirmation, and a way out when the API refuses     */
+/* Delete - typed confirmation                                         */
 /* ================================================================== */
+/**
+ * Deleting a rule is a cascade: the backend removes every version, the runs
+ * the rule performed, the findings those runs raised, and the source files on
+ * disk. There is no refusal to escape from and no "retire instead" fork here -
+ * retiring is its own deliberate action on the rule page, not a consolation
+ * prize for a delete that would not go through.
+ */
 const DeleteRuleDialog = ({
   rule, onClose, onDone,
 }: {
@@ -857,11 +864,10 @@ const DeleteRuleDialog = ({
   const [typed, setTyped] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [refused, setRefused] = useState<string | null>(null);
   const notify = useNotify();
 
   useEffect(() => {
-    setTyped(""); setError(null); setRefused(null);
+    setTyped(""); setError(null);
   }, [rule]);
 
   if (!rule) return null;
@@ -875,22 +881,8 @@ const DeleteRuleDialog = ({
       onDone();
       onClose();
     } catch (e: any) {
-      // A rule with runs or tickets cannot be deleted - the backend says so, and
-      // says what to do instead. Show its sentence rather than a generic error.
-      setRefused(e.message);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const retire = async () => {
-    setBusy(true);
-    try {
-      await api.setRuleStatus(rule.code, "retired");
-      notify(`${rule.code} retired - its history is preserved`, { type: "success" });
-      onDone();
-      onClose();
-    } catch (e: any) {
+      // A genuine failure - the rule vanished under us, the session expired -
+      // is shown as it comes. The estate no longer refuses a delete.
       setError(e.message);
     } finally {
       setBusy(false);
@@ -903,44 +895,39 @@ const DeleteRuleDialog = ({
       <DialogContent>
         <Stack spacing={2} sx={{ mt: 1 }}>
           <Typography variant="body2">
-            This removes the rule and all {rule.version} of its versions, including
-            the Python source files on disk. It cannot be undone.
+            This removes the rule and all {rule.version} of its versions, the
+            Python source files on disk, the runs it performed and the findings
+            those runs raised. It cannot be undone.
           </Typography>
 
-          {refused ? (
-            <>
-              <Alert severity="warning">{refused}</Alert>
-              <Button onClick={retire} disabled={busy} startIcon={<HistoryIcon />}>
-                Retire instead
-              </Button>
-            </>
-          ) : (
-            <MuiTextField
-              size="small"
-              autoFocus
-              label={`Type ${rule.code} to confirm`}
-              value={typed}
-              onChange={(e) => setTyped(e.target.value)}
-              placeholder={rule.code}
-            />
-          )}
+          <Alert severity="warning">
+            A deletion takes the findings with it. To stop the control but keep
+            its history, retire the rule instead.
+          </Alert>
+
+          <MuiTextField
+            size="small"
+            autoFocus
+            label={`Type ${rule.code} to confirm`}
+            value={typed}
+            onChange={(e) => setTyped(e.target.value)}
+            placeholder={rule.code}
+          />
 
           {error && <Alert severity="error">{error}</Alert>}
         </Stack>
       </DialogContent>
       <DialogActions>
         <Button onClick={onClose} disabled={busy}>Cancel</Button>
-        {!refused && (
-          <Button
-            variant="contained"
-            color="error"
-            onClick={remove}
-            disabled={busy || !confirmed}
-            startIcon={busy ? <CircularProgress size={16} color="inherit" /> : undefined}
-          >
-            Delete
-          </Button>
-        )}
+        <Button
+          variant="contained"
+          color="error"
+          onClick={remove}
+          disabled={busy || !confirmed}
+          startIcon={busy ? <CircularProgress size={16} color="inherit" /> : undefined}
+        >
+          Delete
+        </Button>
       </DialogActions>
     </Dialog>
   );
@@ -1222,6 +1209,7 @@ const RuleDetails = ({ asked }: { asked?: number }) => {
   const [restoring, setRestoring] = useState(false);
   const [publishing, setPublishing] = useState(false);
   const [discardOpen, setDiscardOpen] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
   const notify = useNotify();
   const refresh = useRefresh();
 
@@ -1234,6 +1222,7 @@ const RuleDetails = ({ asked }: { asked?: number }) => {
   const mayWrite = can(perms, "rules.write");
   const mayActivate = can(perms, "rules.activate");
   const mayWriteSchedules = can(perms, "schedules.write");
+  const mayDelete = can(perms, "rules.delete");
 
   // react-admin does not export a title hook, so set the document title directly.
   useEffect(() => {
@@ -1558,6 +1547,12 @@ const RuleDetails = ({ asked }: { asked?: number }) => {
                       Discard draft
                     </Button>
                   )}
+                  {mayDelete && (
+                    <Button size="small" color="error" startIcon={<DeleteOutlinedIcon />}
+                      onClick={() => setDeleteOpen(true)}>
+                      Delete rule
+                    </Button>
+                  )}
                 </Stack>
               )
             ) : (
@@ -1589,6 +1584,18 @@ const RuleDetails = ({ asked }: { asked?: number }) => {
                         Activate
                       </Button>
                     ))}
+                  {mayActivate && record.status !== "retired" && (
+                    <Button size="small" startIcon={<HistoryIcon />}
+                      onClick={() => setStatus("retired")}>
+                      Retire
+                    </Button>
+                  )}
+                  {mayDelete && (
+                    <Button size="small" color="error" startIcon={<DeleteOutlinedIcon />}
+                      onClick={() => setDeleteOpen(true)}>
+                      Delete rule
+                    </Button>
+                  )}
                 </Stack>
               )
             )}
@@ -1706,6 +1713,15 @@ const RuleDetails = ({ asked }: { asked?: number }) => {
         rule={discardOpen ? record : null}
         onClose={() => setDiscardOpen(false)}
         onDone={refresh}
+      />
+
+      {/* A rule that has been deleted has no page to refresh into, so the
+          delete lands the reader back on the list rather than on a record
+          that no longer exists. */}
+      <DeleteRuleDialog
+        rule={deleteOpen ? record : null}
+        onClose={() => setDeleteOpen(false)}
+        onDone={() => navigate("/rules")}
       />
 
       <Dialog open={restoreOpen} onClose={() => setRestoreOpen(false)} maxWidth="sm" fullWidth>

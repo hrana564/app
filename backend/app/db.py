@@ -90,6 +90,16 @@ async def init_models() -> None:
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        # `create_all` never ALTERs, so a database created before the ticket
+        # number was widened keeps VARCHAR(32) forever. This one is widened in
+        # place rather than left to a reset: a rule code may be 64 characters
+        # (see app/engine/rules.py) and a ticket number is `<code>-TKT-<5
+        # digits>`, so the old width broke the first finding a long-coded rule
+        # raised. Widening a varchar needs no table rewrite, and running it
+        # every boot is a no-op - cheaper than dropping a database with data.
+        await conn.execute(
+            text("ALTER TABLE tickets ALTER COLUMN ticket_no TYPE varchar(80)")
+        )
         # create_all never ALTERs an existing table, so a database created before
         # a column was removed keeps the old shape forever. `datasources.is_active`
         # is exactly that case: the model no longer declares it, and a stale

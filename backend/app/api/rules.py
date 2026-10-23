@@ -16,12 +16,13 @@ Pausing a rule is not a logic change, so it must not burn a version number.
 from __future__ import annotations
 
 import logging
+import shutil
 from datetime import date
 from pathlib import Path
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
 from starlette.concurrency import run_in_threadpool
 
@@ -1385,15 +1386,18 @@ async def discard_draft(code: str, session: SessionDep, _user: RulesWriter) -> N
 @router.delete("/{code}", status_code=204)
 async def delete_rule(code: str, session: SessionDep, admin: RulesDeleter) -> None:
     """
-    Delete a rule and every version of it.
+    Delete a rule, every version of it, and everything it produced.
 
-    Findings are never deleted: a rule that has raised a ticket is refused, and
-    the caller is pointed at 'retired' so the history survives.
+    Delete is delete: the runs the rule performed, the findings those runs
+    raised, the explanations written about it and its schedules all belong to
+    the rule and go with it. A finding is not a reason to keep a rule alive -
+    keeping the history is what 'retired' is for, and retiring is a separate,
+    deliberate choice made on the rule's own status endpoint. Asking the
+    estate to forget a rule means forgetting what it found.
 
-    A rule that never ran on a schedule can be deleted along with its manual
-    test runs - an experiment must be discardable. A rule that RAN on a
-    schedule has history worth keeping even if it found nothing, so it is
-    refused too.
+    The whole thing is one transaction, ordered children-first so the RESTRICT
+    foreign keys are satisfied, and the disk artifacts (the version source
+    files and each run's folder) are removed once the rows are gone.
     """
     versions = (
         await session.execute(select(Rule).where(Rule.code == code))
@@ -1402,66 +1406,43 @@ async def delete_rule(code: str, session: SessionDep, admin: RulesDeleter) -> No
         raise HTTPException(status_code=404, detail=f"No rule with code {code!r}")
 
     ids = [r.id for r in versions]
+    run_ids = [
+        rid for (rid,) in await session.execute(
+            select(Run.id).where(Run.rule_id.in_(ids))
+        )
+    ]
 
-    findings = (
-        await session.execute(
-            select(func.count()).select_from(Ticket).where(Ticket.rule_id.in_(ids))
-        )
-    ).scalar_one()
-    if findings:
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                f"Rule {code} has {findings} finding(s) and cannot be deleted. "
-                f"Set it to 'retired' instead so the history is preserved."
-            ),
-        )
+    # Order is explicit and load-bearing. Rule, Run and Ticket carry no ORM
+    # relationship between them, so the unit of work has no dependency graph to
+    # sort by and would emit the rule DELETE first - which the RESTRICT foreign
+    # keys (rule_runs.rule_id, tickets.rule_id) refuse. A flush between the two
+    # groups makes the order the database sees the order written here.
+    if run_ids:
+        await session.execute(delete(Ticket).where(Ticket.run_id.in_(run_ids)))
+    await session.execute(delete(Ticket).where(Ticket.rule_id.in_(ids)))
+    await session.flush()
 
-    scheduled = (
-        await session.execute(
-            select(func.count())
-            .select_from(Run)
-            .where(Run.rule_id.in_(ids), Run.triggered_by == "schedule")
-        )
-    ).scalar_one()
-    if scheduled:
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                f"Rule {code} has {scheduled} scheduled run(s) and cannot be "
-                f"deleted. Set it to 'retired' instead so the history is preserved."
-            ),
-        )
-
-    # Only manual test runs can be attached at this point; they go with the rule
-    # rather than blocking it.
-    for run in (
-        await session.execute(select(Run).where(Run.rule_id.in_(ids)))
-    ).scalars().all():
-        await session.delete(run)
+    await session.execute(delete(Run).where(Run.rule_id.in_(ids)))
+    await session.flush()
 
     # Explanations describe version source that is about to stop existing.
-    for expl in (
-        await session.execute(
-            select(RuleExplanation).where(RuleExplanation.rule_id.in_(ids))
-        )
-    ).scalars().all():
-        await session.delete(expl)
+    await session.execute(
+        delete(RuleExplanation).where(RuleExplanation.rule_id.in_(ids))
+    )
 
-    # No FK from schedules, so they must be cleaned up explicitly.
+    # No FK from schedules, so they must be cleaned up explicitly - and pulled
+    # from the scheduler, or it would keep firing a code that no longer exists.
     for sched in (
         await session.execute(select(RuleSchedule).where(RuleSchedule.rule_code == code))
     ).scalars().all():
         await scheduler_remove(sched.id)
         await session.delete(sched)
 
-    # Collect the source files before the rows go, so the files on disk can be
+    # Collect the disk paths before the rows go, so the files on disk can be
     # removed with them - otherwise deleting a rule orphans its version files.
-    source_files = [r.source_file for r in versions if r.source_file]
-    file_names = {Path(f).name for f in source_files}
+    file_names = {Path(r.source_file).name for r in versions if r.source_file}
 
-    for rule in versions:
-        await session.delete(rule)
+    await session.execute(delete(Rule).where(Rule.id.in_(ids)))
     await session.commit()
 
     for name in file_names:
@@ -1470,6 +1451,16 @@ async def delete_rule(code: str, session: SessionDep, admin: RulesDeleter) -> No
         except OSError as exc:
             # A stray file is untidy, not dangerous - never fail the delete.
             log.warning("could not remove %s: %s", name, exc)
+
+    # Each run folder holds the exact source and the exact CSVs that run read.
+    # The run is gone, so the folder is a record of nothing.
+    for run_id in run_ids:
+        folder = Path(settings.runs_dir) / f"{run_id:06d}"
+        if folder.exists():
+            try:
+                shutil.rmtree(folder)
+            except OSError as exc:
+                log.warning("could not remove run folder %s: %s", folder, exc)
 
 
 async def scheduler_remove(schedule_id: int) -> None:

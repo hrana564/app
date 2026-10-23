@@ -240,7 +240,7 @@ class Ticket(Base):
     __tablename__ = "tickets"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    ticket_no: Mapped[str] = mapped_column(String(32), unique=True, nullable=False)
+    ticket_no: Mapped[str] = mapped_column(String(80), unique=True, nullable=False)
     run_id: Mapped[int] = mapped_column(
         ForeignKey("rule_runs.id", ondelete="CASCADE"), nullable=False, index=True
     )

@@ -1,14 +1,16 @@
 import polars as pl
 
-NAME = "Top 5 stores by net sales value"
+NAME = "Top 5 stores by daily sales value"
 DESCRIPTION = (
     "Ranks stores by total non-void invoice value for the audited day and "
-    "returns the top 5 stores."
+    "reports the top 5 stores with their net sales value."
 )
 DATASOURCES = ["ipos_sales"]
 
-# Number of stores reported in the ranking.
+# Number of stores reported in the daily sales ranking.
 TOP_N_STORES = 5
+
+TS_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 
 def run(ctx) -> dict:
@@ -18,50 +20,66 @@ def run(ctx) -> dict:
         return {
             "status": "success",
             "error_message": None,
-            "summary": f"No sales data for {ctx.date}",
+            "summary": f"No sales data staged for {ctx.date}",
             "metrics": {},
             "rows": [],
         }
 
-    net = sales.filter(pl.col("is_void") == False)
+    valid = sales.filter(pl.col("is_void") == False).with_columns(
+        sale_date=pl.col("invoice_ts").str.to_datetime(TS_FORMAT, strict=False).dt.date()
+    )
 
-    if net.height == 0:
+    if valid.height == 0:
         return {
             "status": "success",
             "error_message": None,
-            "summary": f"All invoices on {ctx.date} are void; no store ranking available",
+            "summary": f"No non-void invoices for {ctx.date}",
             "metrics": {},
             "rows": [],
         }
 
     ranked = (
-        net.group_by("store_id")
+        valid.group_by("store_id")
         .agg(
-            total_sales=pl.col("invoice_value").sum(),
+            sales_value=pl.col("invoice_value").sum(),
             invoice_count=pl.len(),
         )
-        .sort("total_sales", descending=True)
-        .head(TOP_N_STORES)
-        .with_columns(rank=pl.int_range(1, pl.len() + 1))
-        .select("rank", "store_id", "total_sales", "invoice_count")
-        .with_columns(total_sales=pl.col("total_sales").round(2))
+        .sort("sales_value", descending=True)
     )
 
-    rows = ranked.to_dicts()
-    best = rows[0]
-    summary = (
-        f"Top {len(rows)} stores by net sales on {ctx.date}: "
-        + ", ".join(f"{r['store_id']} {r['total_sales']:.2f}" for r in rows)
-    )
+    top = ranked.head(TOP_N_STORES)
+
+    rows = []
+    for i, r in enumerate(top.to_dicts(), start=1):
+        rows.append(
+            {
+                "rank": i,
+                "store_id": str(r["store_id"]),
+                "sales_value": round(float(r["sales_value"]), 2),
+                "invoice_count": int(r["invoice_count"]),
+            }
+        )
+
+    total_value = float(ranked["sales_value"].sum() or 0)
+    top_value = float(top["sales_value"].sum() or 0)
+    share = (top_value / total_value * 100) if total_value else 0.0
 
     return {
         "status": "success",
         "error_message": None,
-        "summary": summary,
+        "summary": (
+            f"Top {len(rows)} stores on {ctx.date} account for "
+            f"{top_value:.2f} AED of {total_value:.2f} AED total non-void sales "
+            f"({share:.1f}%); leader {rows[0]['store_id']} at {rows[0]['sales_value']:.2f} AED"
+        ),
         "metrics": {
-            "top_store_id": str(best["store_id"]),
-            "top_store_sales": float(best["total_sales"]),
-            "stores_ranked": len(rows),
+            "stores_ranked": int(ranked.height),
+            "top_n": TOP_N_STORES,
+            "top_stores_value": round(top_value, 2),
+            "total_sales_value": round(total_value, 2),
+            "top_stores_share_pct": round(share, 2),
+            "invoices_considered": int(valid.height),
+            "voids_excluded": int(sales.filter(pl.col("is_void") == True).height),
         },
         "rows": rows,
     }

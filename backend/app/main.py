@@ -23,7 +23,7 @@ log = logging.getLogger("audit")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    log.info("starting Audit Portal API")
+    log.info("starting SquareOne Holdings Agentic Data Analytics API")
     await init_models()
     await _bootstrap()
     scheduler.start()
@@ -103,7 +103,7 @@ async def _bootstrap() -> None:
 
 
 app = FastAPI(
-    title="Audit Portal API",
+    title="SquareOne Holdings — Agentic Data Analytics API",
     description=(
         "Continuous auditing platform.\n\n"
         "Rules are plain Python files. Each `run(ctx)` returns a `RuleResult` "

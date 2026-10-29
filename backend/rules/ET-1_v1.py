@@ -1,5 +1,5 @@
 """
-ABM-CA-22  -  Vendor bank details match employee bank details
+ET-1  -  Vendor bank details match employee bank details
 
 Systems: ERP (bc_vendors)  JOIN  HRMS (hr_employees)
 

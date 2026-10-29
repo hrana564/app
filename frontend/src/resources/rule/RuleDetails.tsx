@@ -52,7 +52,7 @@ export const RuleDetails = ({ asked }: { asked?: number }) => {
 
   // react-admin does not export a title hook, so set the document title directly.
   useEffect(() => {
-    if (record?.code) document.title = `${record.code} · Audit Portal`;
+    if (record?.code) document.title = `${record.code} · SquareOne Holdings`;
   }, [record?.code]);
 
   const load = () => {

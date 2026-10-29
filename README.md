@@ -1,4 +1,4 @@
-# Scope Investments — Audit Portal
+# SquareOne Holdings — Agentic Data Analytics
 
 **Intelligent Continuous Auditing — multiple portfolio companies**
 
@@ -9,7 +9,7 @@ auditors review and acknowledge.
 Rules are **plain Python files**. There is no rule DSL, no new language to learn, and no engine
 between you and the data.
 
-The portal audits two unrelated clients — **Client A** and **Client B**. Every
+The portal audits two unrelated clients — **Company A** and **Company B**. Every
 screen is scoped to one of them; the switch is in the app bar, and the scope is applied by the
 server rather than by the browser filtering what it already downloaded. See
 [the client scope](#the-client-scope).
@@ -95,8 +95,8 @@ The second one is the audit step, stated as the audit step.
 ## 2. Architecture
 
 ```
-CLIENT-A   Client A   POS   |  Warehouse  |  HRMS
-CLIENT-B   Client B   POS   |  HRMS       |  ERP
+SQT   SquareOne Technologies   POS   |  Warehouse  |  HRMS
+ET   EnsaanTech   POS   |  HRMS       |  ERP
 
 Power Automate ──▶ mount/SourceData/<ENTITY>/<YYYY-MM-DD>/<table>.csv
                         │
@@ -110,7 +110,7 @@ Power Automate ──▶ mount/SourceData/<ENTITY>/<YYYY-MM-DD>/<table>.csv
       mount/Rules_Executions/<run_id>/   the exact rule + CSVs that run read
                         │
                         ▼
-                  PostgreSQL  ABM_Audit_Portal
+                  PostgreSQL  SQ1_Agentic_Data_Analytics
                  rules_master · rule_schedules · rule_runs · tickets
                  datasources · users
                         │
@@ -132,7 +132,7 @@ and reports whether it still reproduces the recorded outcome.
 
 ## 3. Data model
 
-Six tables in `ABM_Audit_Portal`. Created on startup by `create_all`.
+Six tables in `SQ1_Agentic_Data_Analytics`. Created on startup by `create_all`.
 
 ```
 users          id, username, password_hash, role, is_active
@@ -173,9 +173,9 @@ identifies the logical rule and repeats across versions; exactly one row per cod
 is flagged `is_version_active` - the **head**.
 
 ```
-LAD-CA-03  v1   head=f   LAD-CA-03_v1.py  initial version
-LAD-CA-03  v2   head=f   LAD-CA-03_v2.py  smoke: bump
-LAD-CA-03  v3   head=t   LAD-CA-03_v3.py  rollback to v1
+SQT-1  v1   head=f   SQT-1_v1.py  initial version
+SQT-1  v2   head=f   SQT-1_v2.py  smoke: bump
+SQT-1  v3   head=t   SQT-1_v3.py  rollback to v1
 ```
 
 Two database constraints make this safe rather than conventional:
@@ -188,17 +188,17 @@ Two database constraints make this safe rather than conventional:
 Both are verified directly against Postgres in the smoke test.
 
 **Rules are addressed by `code`, never by row id** - a row id identifies one
-*version*, the code identifies the *rule*. URLs read `/api/rules/LAD-CA-03/...`.
+*version*, the code identifies the *rule*. URLs read `/api/rules/SQT-1/...`.
 
 ### The code names the client
 
-A rule's code is its client's code, then the control's own: `LAD-CA-03`. The
+A rule's code is its client's code, then the control's own: `SQT-1`. The
 prefix follows the rule's **row**, so it is applied when the rule is created
 and never written into the file - which is what keeps one file registrable for
 whichever client a deployment wants it for.
 
 A ticket's number is derived from the rule's code, so it carries the same
-prefix: `LAD-CA-03-TKT-00042`. A reference an auditor reads out of an email
+prefix: `SQT-1-TKT-00042`. A reference an auditor reads out of an email
 then says whose control it was, without opening the record.
 
 ### Behaviour
@@ -388,7 +388,7 @@ Validation is static and cheap, so it runs on every save:
 
 That union is what the run folder stages. It matters because the declared list
 is a claim and the call sites are the truth: a rule that calls
-`ctx.table("bc_vendors")` from a CLIENT-A rule has to fail validation, and it does.
+`ctx.table("bc_vendors")` from a SQT rule has to fail validation, and it does.
 
 ---
 
@@ -513,12 +513,12 @@ A rule only ever sees its own entity's tables, so one client's rule cannot accid
 
 | Entity | System | Tables |
 |---|---|---|
-| **CLIENT-A** | POS | `ipos_sales`, `ipos_items`, `ipos_voids`, `ipos_discounts` |
-| **CLIENT-A** | Warehouse | `syn_inventory`, `syn_recipes`, `syn_wastage`, `syn_stock_transfers` |
-| **CLIENT-A** | HRMS | `hr_employees`, `hr_attendance` |
-| **CLIENT-B** | POS | `ipos_sales`, `ipos_price_overrides`, `ipos_discounts` |
-| **CLIENT-B** | HRMS | `hr_employees`, `hr_attendance` |
-| **CLIENT-B** | ERP | `bc_purchase_orders`, `bc_goods_receipts`, `bc_vendors`, `bc_customer_credit` |
+| **SQT** | POS | `ipos_sales`, `ipos_items`, `ipos_voids`, `ipos_discounts` |
+| **SQT** | Warehouse | `syn_inventory`, `syn_recipes`, `syn_wastage`, `syn_stock_transfers` |
+| **SQT** | HRMS | `hr_employees`, `hr_attendance` |
+| **ET** | POS | `ipos_sales`, `ipos_price_overrides`, `ipos_discounts` |
+| **ET** | HRMS | `hr_employees`, `hr_attendance` |
+| **ET** | ERP | `bc_purchase_orders`, `bc_goods_receipts`, `bc_vendors`, `bc_customer_credit` |
 
 ### The sample data is deliberately relatable
 
@@ -534,9 +534,9 @@ Shared keys, **not** remapped ones — that is what lets one rule join three sys
 
 Two of the four seeded rules prove this works:
 
-- **`ABM-CA-22`** joins HRMS employees to ERP vendors on the IBAN — a payments-fraud
+- **`ET-1`** joins HRMS employees to ERP vendors on the IBAN — a payments-fraud
   indicator (requirements #22/#23).
-- **`LAD-CA-06`** joins POS activity to HRMS employment status to find exited staff still
+- **`SQT-3`** joins POS activity to HRMS employment status to find exited staff still
   transacting (requirement #9).
 
 ---
@@ -611,7 +611,7 @@ The database name contains underscores and mixed case, so it **must be quoted** 
 fold it to lowercase:
 
 ```sql
-CREATE DATABASE "ABM_Audit_Portal";
+CREATE DATABASE "SQ1_Agentic_Data_Analytics";
 ```
 
 ### Step 2 — backend
@@ -647,23 +647,23 @@ the API is.
 
 Generates `mount/SourceData/` for both entities across 8 days, with **deliberately planted breaches**:
 
-| Date | Client A | Client B |
+| Date | SquareOne Technologies | EnsaanTech |
 |---|---|---|
 | 2026-10-15 | clean | vendor/employee bank match |
-| 2026-10-16 | **last-hour spike** (LAD-CA-03) | vendor/employee bank match |
-| 2026-10-17 | **single-staff cash dominance** (LAD-CA-04) | vendor/employee bank match |
-| 2026-10-18 | **both** + ex-staff POS activity (LAD-CA-06) | vendor/employee bank match |
+| 2026-10-16 | **last-hour spike** (SQT-1) | vendor/employee bank match |
+| 2026-10-17 | **single-staff cash dominance** (SQT-2) | vendor/employee bank match |
+| 2026-10-18 | **both** + ex-staff POS activity (SQT-3) | vendor/employee bank match |
 | 2026-10-19 | clean | vendor/employee bank match |
 | 2026-10-20 | clean | vendor/employee bank match |
-| 2026-10-21 | **last-hour spike** (LAD-CA-03) | vendor/employee bank match |
-| 2026-10-22 | **single-staff cash dominance** (LAD-CA-04) | vendor/employee bank match |
+| 2026-10-21 | **last-hour spike** (SQT-1) | vendor/employee bank match |
+| 2026-10-22 | **single-staff cash dominance** (SQT-2) | vendor/employee bank match |
 
 And on **18, 20 and 22 October**, in both estates, two more:
 
 | Planted | What it looks like | Read by |
 |---|---|---|
-| **early close** | one store's staff clock out at 21:00 and the tills keep selling until the day's end | `LAD-GEN-02` |
-| **outsized discounts** | one employee at one store gives four discounts of 400-900, against an estate range of 5-120 | `LAD-GEN-01` |
+| **early close** | one store's staff clock out at 21:00 and the tills keep selling until the day's end | `SQT-5` / `ET-3` |
+| **outsized discounts** | one employee at one store gives four discounts of 400-900, against an estate range of 5-120 | `SQT-4` / `ET-2` |
 
 Without planted breaches you cannot tell a working rule from a broken one.
 
@@ -671,7 +671,7 @@ Person and company names come from Faker (`en_GB`), seeded per key so the same
 record gets the same name on every regeneration. That matters more than it looks:
 an earlier version wrote `Second Employee 0007` and `First Staff 0042`, which
 differ from one another by a single digit and therefore score **93%** under
-character similarity. `ABM-CA-22` flagged **87 unrelated pairs** against a real
+character similarity. `ET-1` flagged **87 unrelated pairs** against a real
 answer of 3, so the fixture could not tell a working control from a broken one.
 Real names put the highest-scoring unrelated pair at **75%**, and the control now
 returns exactly the 3 planted collisions.
@@ -736,8 +736,8 @@ app/
 ├── licenses/                          canonical licence texts, one per SPDX id
 ├── mount/                           external data: read by the app, never owned
 │   ├── SourceData/                  <ENTITY>/<date>/<table>.csv (generated; gitignored)
-│   │   ├── CLIENT-A/2026-10-15/ipos_sales.csv ...
-│   │   └── CLIENT-B/2026-10-15/bc_vendors.csv ...
+│   │   ├── SQT/2026-10-15/ipos_sales.csv ...
+│   │   └── ET/2026-10-15/bc_vendors.csv ...
 │   └── Rules_Executions/            one folder per run (gitignored)
 │       └── 000123/                  rule.py + metadata.json + the CSVs it read
 ├── backend/
@@ -766,7 +766,7 @@ app/
 │   │   └── engine/
 │   │       ├── catalog.py          THE CONTRACT: what an entity may read
 │   │       ├── discovery.py        what the ETL landed, and its first rows. Filesystem only.
-│   │       ├── datasources.py      client entities only (CLIENT-A/CLIENT-B and their systems)
+│   │       ├── datasources.py      client entities only (SQT/ET and their systems)
 │   │       ├── ctx.py              RuleContext: a table -> a polars DataFrame
 │   │       ├── snapshot.py         stage one run's inputs. No ORM, no DB.
 │   │       ├── loader.py           rule file load/save
@@ -785,12 +785,12 @@ app/
 │   │       └── trial.py            run a candidate rule without touching the ledger
 │   ├── rules/
 │   │   ├── _template.py
-│   │   ├── LAD-CA-03_v1.py   last-hour trading spike
-│   │   ├── LAD-CA-04_v1.py   single-staff cash dominance
-│   │   ├── ABM-CA-22_v1.py   vendor/employee bank match
-│   │   ├── LAD-CA-06_v1.py   ex-staff still transacting
-│   │   ├── LAD-GEN-01_v1.py  discounts beyond the limit
-│   │   └── LAD-GEN-02_v1.py  sales posted after the store closed
+│   │   ├── SQT-1_v1.py   last-hour trading spike
+│   │   ├── SQT-2_v1.py   single-staff cash dominance
+│   │   ├── ET-1_v1.py   vendor/employee bank match
+│   │   ├── SQT-3_v1.py   ex-staff still transacting
+│   │   ├── SQT-4_v1.py / ET-2_v1.py  discounts beyond the limit
+│   │   └── SQT-5_v1.py / ET-3_v1.py  sales posted after the store closed
 │   └── scripts/
 │       ├── make_sample_data.py     generate SourceData with planted breaches
 │       ├── smoke_test.py           end-to-end test suite
@@ -830,7 +830,7 @@ POSTGRES_HOST=localhost
 POSTGRES_PORT=5432
 POSTGRES_USER=postgres
 POSTGRES_PASSWORD=postgres
-POSTGRES_DB=ABM_Audit_Portal
+POSTGRES_DB=SQ1_Agentic_Data_Analytics
 
 # --- Auth ---
 JWT_SECRET=<random>          # auto-generated ephemeral secret if blank
@@ -876,11 +876,11 @@ token like everything else.
 
 ### The client scope
 
-The portal audits two clients, **Client A** and **Client B**.
+The portal audits two clients, **Company A** and **Company B**.
 Every screen is scoped to one of them, chosen once in the app bar and applied by
 the server — never by the browser filtering what it already downloaded.
 
-`?entity=CLIENT-A|CLIENT-B` is accepted on rules, runs, tickets (including `/grouped`,
+`?entity=SQT|ET` is accepted on rules, runs, tickets (including `/grouped`,
 `/summary` and `acknowledge-all`), both summaries, `/api/dashboard` and the
 datasource overview. Omit it and the endpoint answers for every client.
 
@@ -909,7 +909,7 @@ rule that produced them, so those endpoints join to reach it — that join lives
 | POST | `/api/rules/{id}/validate` | `rules.write` | Run the static gate, store the verdict |
 | GET | `/api/rules/{id}/validate-report` | `rules.read` | Last stored verdict without re-running |
 | GET | `/api/rules/generate/status` | `rules.read` | Is the LLM configured? |
-| GET | `/api/rules/generate/context?entity=CLIENT-A` | `rules.read` | What the LLM would be shown |
+| GET | `/api/rules/generate/context?entity=SQT` | `rules.read` | What the LLM would be shown |
 | POST | `/api/rules/generate` | `rules.generate` | Prompt + selection + lookback → a rule **that has been run**. Creates nothing |
 | POST | `/api/source/binding` | `rules.read` | What a source declares and reads, and — with `names` — the source with its `DATASOURCES` set to them. Nothing is saved |
 
@@ -936,7 +936,7 @@ rule that produced them, so those endpoints join to reach it — that join lives
 | GET | `/api/datasources/entities` | `datasources.read` | The two entities and their systems |
 | GET | `/api/datasources/overview?entity=&data_date=` | `datasources.read` | **One call** — registered tables, what the ETL delivered, and which rules read each |
 | GET | `/api/datasources/preview?entity=&name=&data_date=&limit=10` | `datasources.read` | First rows of one landed file, plus the file's true row count |
-| GET | `/api/datasources/available-dates?entity=CLIENT-A` | `datasources.read` | Day folders present, plus the latest |
+| GET | `/api/datasources/available-dates?entity=SQT` | `datasources.read` | Day folders present, plus the latest |
 | POST | `/api/datasources` | `datasources.write` | Register a table. Columns default to the file's header |
 | DELETE | `/api/datasources/{id}` | `datasources.write` | Remove a registration. 409 naming the rules, while any active rule reads it |
 | GET | `/api/dashboard?entity=&window=14` | `assurance.read` | The **assurance read model** — see below |
@@ -1365,7 +1365,7 @@ something is open or a scheduled control is late, a critical finding is always r
 repeated findings are groups of more than one and lead with the worst severity, and
 nothing without a cadence is ever called overdue), the dashboard being unreachable without a
 token, generation status, and **the client
-scope** (CLIENT-A + CLIENT-B must equal the whole on every list and summary, a scoped list carries only that
+scope** (SQT + ET must equal the whole on every list and summary, a scoped list carries only that
 client's rules, the scoped dashboard agrees with the scoped lists, and the bulk acknowledge reaches
 only the client it was given — then puts every ticket back).
 

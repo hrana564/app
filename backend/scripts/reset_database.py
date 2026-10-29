@@ -49,14 +49,14 @@ from app.settings import settings  # noqa: E402
 # only has to say the two things a file cannot: how serious the control is,
 # and whether a person or the agent wrote it.
 SEVERITIES: dict[str, tuple[str, str]] = {
-    "ABM-CA-22": ("critical", "manual"),
-    "LAD-CA-03": ("high", "manual"),
-    "LAD-CA-04": ("critical", "manual"),
-    "LAD-CA-06": ("high", "manual"),
-    "LAD-GEN-01": ("medium", "llm"),
-    "LAD-GEN-02": ("medium", "llm"),
-    "LAD-GEN-03": ("medium", "llm"),
-    "LAD-GEN-04": ("medium", "llm"),
+    "ET-1": ("critical", "manual"),
+    "SQT-1": ("high", "manual"),
+    "SQT-2": ("critical", "manual"),
+    "SQT-3": ("high", "manual"),
+    "SQT-4": ("medium", "llm"),
+    "SQT-5": ("medium", "llm"),
+    "ET-2": ("medium", "llm"),
+    "ET-3": ("medium", "llm"),
 }
 
 

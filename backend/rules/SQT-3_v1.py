@@ -1,5 +1,5 @@
 """
-LAD-CA-06  -  Ex-staff member still transacting in the POS
+SQT-3  -  Ex-staff member still transacting in the POS
 
 Systems: POS (ipos_sales)  JOIN  HRMS (hr_employees)
 

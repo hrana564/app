@@ -17,7 +17,7 @@ export const theme = createTheme({
     success: { main: "#2e7d32" },
     info: { main: "#0277bd" },
   },
-  shape: { borderRadius: 10 },
+  shape: { borderRadius: 12 },
   typography: {
     fontFamily:
       '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif',
@@ -34,6 +34,11 @@ export const theme = createTheme({
     overline: { fontSize: FONT.label, fontWeight: 700, letterSpacing: 0.6 },
   },
   components: {
+    MuiButton: {
+      styleOverrides: {
+        root: { borderRadius: 10, fontWeight: 700 },
+      },
+    },
     MuiCard: {
       styleOverrides: {
         root: {

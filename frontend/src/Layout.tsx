@@ -362,9 +362,16 @@ const AuditAppBar = ({ alwaysOn, title: _title, ...props }: AppBarProps) => (
     <Typography
       variant="h6"
       component="h1"
-      sx={{ color: "#fff", fontWeight: 700, whiteSpace: "nowrap" }}
+      sx={{ color: "#fff", fontWeight: 700, whiteSpace: "nowrap", display: "flex", alignItems: "baseline", gap: 1 }}
     >
-      Scope Investments — Audit Portal
+      SquareOne Holdings
+      <Typography
+        component="span"
+        variant="body2"
+        sx={{ color: "rgba(255,255,255,0.78)", fontWeight: 400, display: { xs: "none", sm: "inline" } }}
+      >
+        Agentic Data Analytics
+      </Typography>
     </Typography>
     <Box sx={{ flex: 1 }} />
     <EntitySwitch />

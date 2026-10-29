@@ -84,7 +84,7 @@ const Portal = () => {
       dataProvider={dataProvider}
       authProvider={authProvider}
       theme={theme}
-      title="Scope Investments â€” Audit Portal"
+      title="SquareOne Holdings — Agentic Data Analytics"
       loginPage={Login}
       dashboard={Dashboard}
       layout={Layout}

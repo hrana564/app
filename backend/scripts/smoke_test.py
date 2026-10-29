@@ -74,37 +74,47 @@ ESTATE_ERP = "erp"
 
 # The base code of each demo rule, and the estate it belongs to. The code it
 # is FILED under carries the client's code as well - see filed_code().
+# Full codes (SQT-1, ET-1) so each estate's sequence is unique and realistic.
 RULE_SPECS = [
-    ("CA-03", "high",
+    ("SQT-1", "high",
      "Value settled in the last hour of trading exceeds a multiple of the hourly average.",
      ESTATE_RETAIL),
-    ("CA-04", "critical",
+    ("SQT-2", "critical",
      "One staff member settles more than the permitted share of the day's cash invoices.",
      ESTATE_RETAIL),
-    ("CA-22", "critical",
+    ("ET-1", "critical",
      "Vendor bank details in the ERP match employee bank details in HRMS.",
      ESTATE_ERP),
-    ("CA-06", "high",
+    ("SQT-3", "high",
      "Exited employees still settling POS transactions.",
      ESTATE_RETAIL),
     # The two the rule agent wrote, kept as the demo estate's own controls:
     # they read the planted exceptions, so a fresh deployment can see them
-    # working without anybody writing a prompt first.
-    ("GEN-01", "medium",
+    # working without anybody writing a prompt first. Duplicated per entity
+    # so both SQT and ET catch the same planted days.
+    ("SQT-4", "medium",
      "Discounts given beyond the agreed limit, by store and by employee.",
      ESTATE_RETAIL),
-    ("GEN-02", "medium",
+    ("SQT-5", "medium",
      "Sales posted after the store had closed for the day.",
      ESTATE_RETAIL),
+    ("ET-2", "medium",
+     "Discounts given beyond the agreed limit, by store and by employee.",
+     ESTATE_ERP),
+    ("ET-3", "medium",
+     "Sales posted after the store had closed for the day.",
+     ESTATE_ERP),
 ]
 
 EXEC_EXPECTATIONS = {
-    "CA-03": ("2026-10-19", "2026-10-16"),
-    "CA-04": ("2026-10-19", "2026-10-17"),
-    "CA-22": (None, "2026-10-15"),
-    "CA-06": ("2026-10-16", "2026-10-15"),
-    "GEN-01": ("2026-10-19", "2026-10-20"),
-    "GEN-02": ("2026-10-19", "2026-10-20"),
+    "SQT-1": ("2026-10-19", "2026-10-16"),
+    "SQT-2": ("2026-10-19", "2026-10-17"),
+    "ET-1": (None, "2026-10-15"),
+    "SQT-3": ("2026-10-16", "2026-10-15"),
+    "SQT-4": ("2026-10-19", "2026-10-20"),
+    "SQT-5": ("2026-10-19", "2026-10-20"),
+    "ET-2": ("2026-10-19", "2026-10-20"),
+    "ET-3": ("2026-10-19", "2026-10-20"),
 }
 
 # Which client each estate went to, and the code a rule is filed under. Both
@@ -803,7 +813,7 @@ def main() -> int:
                          params={"entity": RETAIL}).json()
         with_rules = {d["name"]: d for d in ov_rules["registered"]}
         check("rule dependency is reported",
-              filed_code("CA-03") in with_rules["ipos_sales"]["used_by"],
+              filed_code("SQT-1") in with_rules["ipos_sales"]["used_by"],
               str(with_rules["ipos_sales"]["used_by"]))
         check("a table no rule reads shows no dependents",
               with_rules.get("syn_wastage", {}).get("used_by") == [],
@@ -817,21 +827,21 @@ def main() -> int:
             check(why, r.status_code in (400, 409), f"{bad} -> {r.status_code}")
 
         r = c.post("/api/rules", headers=ah,
-                   json={"code": "ca-99", "name": "lowercase probe",
+                   json={"code": "sqt-99", "name": "lowercase probe",
                          "entity": ESTATE_CLIENT[ESTATE_RETAIL],
                          "source_code": probe})
         check("lowercase code normalised to uppercase",
               r.status_code == 201
-              and r.json()["code"] == f"{ESTATE_CLIENT[ESTATE_RETAIL]}-CA-99",
+              and r.json()["code"] == f"{ESTATE_CLIENT[ESTATE_RETAIL]}-99",
               f"{r.status_code} {r.text[:120]}")
         if r.status_code == 201:
             dup = c.post("/api/rules", headers=ah,
-                         json={"code": "CA-99", "name": "duplicate probe",
+                         json={"code": "SQT-99", "name": "duplicate probe",
                                "entity": ESTATE_CLIENT[ESTATE_RETAIL],
                                "source_code": probe})
             check("duplicate code rejected (409)", dup.status_code == 409,
                   f"got {dup.status_code}")
-            c.delete(f"/api/rules/{ESTATE_CLIENT[ESTATE_RETAIL]}-CA-99", headers=ah)
+            c.delete(f"/api/rules/{ESTATE_CLIENT[ESTATE_RETAIL]}-99", headers=ah)
 
         # The code NAMES THE CLIENT, so a reference read out of an email says
         # whose control it is. The prefix follows the ROW, so it can never be
@@ -840,22 +850,22 @@ def main() -> int:
         client = ESTATE_CLIENT[ESTATE_RETAIL]
         other = ESTATE_CLIENT[ESTATE_ERP]
         r = c.post("/api/rules", headers=ah,
-                   json={"code": "CA-97", "name": "prefix probe",
+                   json={"code": "PROBE-97", "name": "prefix probe",
                          "entity": client, "source_code": probe})
         check("a rule's code is prefixed with its client's code",
-              r.status_code == 201 and r.json()["code"] == f"{client}-CA-97",
+              r.status_code == 201 and r.json()["code"] == f"{client}-PROBE-97",
               f"{r.status_code} {r.text[:120]}")
         if r.status_code == 201:
-            c.delete(f"/api/rules/{client}-CA-97", headers=ah)
+            c.delete(f"/api/rules/{client}-PROBE-97", headers=ah)
 
         r = c.post("/api/rules", headers=ah,
-                   json={"code": f"{other}-CA-96", "name": "wrong prefix probe",
+                   json={"code": f"{other}-PROBE-96", "name": "wrong prefix probe",
                          "entity": client, "source_code": probe})
         check("a code carrying another client's prefix is corrected, not stacked",
-              r.status_code == 201 and r.json()["code"] == f"{client}-CA-96",
+              r.status_code == 201 and r.json()["code"] == f"{client}-PROBE-96",
               f"{r.status_code} {r.text[:120]}")
         if r.status_code == 201:
-            c.delete(f"/api/rules/{client}-CA-96", headers=ah)
+            c.delete(f"/api/rules/{client}-PROBE-96", headers=ah)
 
         section("validate and activate")
         for base, *_ in RULE_SPECS:
@@ -873,7 +883,7 @@ def main() -> int:
         # where on a fresh database nothing reads the table yet and the DELETE
         # would succeed and destroy seeded data.
         #
-        # On the RETAIL estate, because that is where LAD-CA-03 lives. The other
+        # On the RETAIL estate, because that is where SQT-1 lives. The other
         # estate has an ipos_sales of its own that no rule reads, and deleting
         # THAT one would have succeeded - which is how this suite deleted a
         # live table once.
@@ -888,7 +898,7 @@ def main() -> int:
                   f"got {blocked.status_code}")
             body = blocked.json().get("detail", {})
             check("the refusal names the dependent rules",
-                  filed_code("CA-03") in (body.get("dependents") or []),
+                  filed_code("SQT-1") in (body.get("dependents") or []),
                   str(body)[:160])
             check("the refusal says the rule fails on its next run",
                   "next run" in (body.get("hint") or "").lower(),
@@ -1369,7 +1379,7 @@ def main() -> int:
 
         section("rule return contract")
         # A clean day returns success + empty rows -> outcome=pass, no ticket
-        r = c.post(f"/api/rules/{filed_code('CA-03')}/test", headers=ud,
+        r = c.post(f"/api/rules/{filed_code('SQT-1')}/test", headers=ud,
                    json={"data_date": "2026-10-19"}).json()
         check("clean day -> run.status=success", r.get("status") == "success",
               str(r.get("status")))
@@ -1418,16 +1428,16 @@ def main() -> int:
               str({x["outcome"] for x in executed["data"]}))
 
         section("cross-system join")
-        r = c.post(f"/api/rules/{filed_code('CA-22')}/test", headers=ud,
+        r = c.post(f"/api/rules/{filed_code('ET-1')}/test", headers=ud,
                    json={"data_date": "2026-10-15"}).json()
         rows = r.get("rows", [])
-        check("ABM-CA-22 joined HRMS employees to ERP vendors",
+        check("ET-1 joined HRMS employees to ERP vendors",
               bool(rows) and "employee_id" in rows[0] and "vendor_id" in rows[0],
               str(rows[:1])[:200])
-        r = c.post(f"/api/rules/{filed_code('CA-06')}/test", headers=ud,
+        r = c.post(f"/api/rules/{filed_code('SQT-3')}/test", headers=ud,
                    json={"data_date": "2026-10-15"}).json()
         rows = r.get("rows", [])
-        check("LAD-CA-06 joined POS activity to HRMS employment status",
+        check("SQT-3 joined POS activity to HRMS employment status",
               bool(rows) and "exit_date" in rows[0], str(rows[:1])[:200])
 
         section("tickets")
@@ -1447,7 +1457,7 @@ def main() -> int:
               str([(t["rule_code"], t["ticket_no"]) for t in tickets["data"][:4]]))
         check("filter by rule_code works",
               c.get("/api/tickets", headers=ud,
-                    params={"rule_code": filed_code("CA-22"), "perPage": 50}).json()["total"] >= 1)
+                    params={"rule_code": filed_code("ET-1"), "perPage": 50}).json()["total"] >= 1)
         check("ticket summary aggregates",
               c.get("/api/tickets/summary", headers=ud).json()["total"] > 0)
 
@@ -1494,7 +1504,7 @@ def main() -> int:
         if made.status_code == 201:
             rv = made.json()["version"]
             ran = c.post(f"/api/rules/{RCODE}/test", headers=ah,
-                         json={"data_date": EXEC_EXPECTATIONS["CA-03"][0]})
+                         json={"data_date": EXEC_EXPECTATIONS["SQT-1"][0]})
             ran_ok = ran.status_code == 200 and ran.json().get("outcome") == "fail"
             check("the probe ran and raised a finding", ran_ok,
                   f"{ran.status_code} {ran.text[:140]}")
@@ -1593,7 +1603,7 @@ def main() -> int:
 
         section("schedules keyed by rule code")
         r = c.post("/api/rule-schedules", headers=ud,
-                   json={"rule_code": filed_code("CA-03"), "kind": "DAILY",
+                   json={"rule_code": filed_code("SQT-1"), "kind": "DAILY",
                          "config": {"time_of_day": "06:30"}})
         check("auditor CANNOT create schedules", r.status_code == 403, f"got {r.status_code}")
         r = c.post("/api/rule-schedules", headers=ah,
@@ -1603,7 +1613,7 @@ def main() -> int:
               r.status_code == 404, f"got {r.status_code}")
 
         for s in c.get("/api/rule-schedules", headers=ud,
-                       params={"rule_code": filed_code("CA-03")}).json()["data"]:
+                       params={"rule_code": filed_code("SQT-1")}).json()["data"]:
             c.delete(f"/api/rule-schedules/{s['id']}", headers=ah)
 
         created = []
@@ -1613,7 +1623,7 @@ def main() -> int:
             ("Month-end deep dive", "MONTHLY", {"time_of_day": "07:00", "day_of_month": 28}),
         ]:
             r = c.post("/api/rule-schedules", headers=ah, json={
-                "rule_code": filed_code("CA-03"), "label": label, "kind": kind,
+                "rule_code": filed_code("SQT-1"), "label": label, "kind": kind,
                 "config": cfg, "timezone": "Asia/Dubai", "data_lag_days": 1})
             if r.status_code == 201:
                 created.append(r.json())
@@ -1630,7 +1640,7 @@ def main() -> int:
                   all(f"rule_schedule_{s['id']}" in registered for s in created),
                   str(sorted(registered))[:200])
             r = c.post("/api/rule-schedules", headers=ah,
-                       json={"rule_code": "LAD-CA-03", "kind": "DAILY",
+                       json={"rule_code": filed_code("SQT-1"), "kind": "DAILY",
                              "config": {"time_of_day": "06:30"}})
             check("duplicate cadence rejected (409)", r.status_code == 409,
                   f"got {r.status_code}")
@@ -2176,7 +2186,7 @@ def main() -> int:
         registered = [d["name"] for d in overview["registered"]]
         other_table = next((n for n in registered if n != "ipos_sales"), None)
 
-        good = read_source(rule_source("CA-03").name, app_settings.rules_dir)
+        good = read_source(rule_source("SQT-1").name, app_settings.rules_dir)
         t = run_trial(good, entity=entity, tables=["ipos_sales"],
                       data_date=date.fromisoformat(test_day), lookback_days=1,
                       allowed=["ipos_sales"])
@@ -2392,8 +2402,8 @@ def main() -> int:
         # and are asserted here, without a model in the loop.
         from app.engine.explain import derive, source_hash
 
-        code = filed_code("CA-03")
-        source = rule_source("CA-03").read_text(encoding="utf-8")
+        code = filed_code("SQT-1")
+        source = rule_source("SQT-1").read_text(encoding="utf-8")
         lines = source.splitlines()
 
         outline = derive(source)

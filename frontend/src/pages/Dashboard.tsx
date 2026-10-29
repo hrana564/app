@@ -832,7 +832,7 @@ export const Dashboard = () => {
           <Typography variant="h5">{current?.name ?? entity} — assurance position</Typography>
           <Typography variant="body2" sx={{ color: "text.secondary" }}>
             {data.controls.assured} {plural(data.controls.assured, "control", "controls")} assuring ·{" "}
-            last {data.window_days} data {plural(data.window_days, "day", "days")}
+            last {data.window_days} data {plural(data.window_days, "day", "days")} · Part of SquareOne Holdings
           </Typography>
         </Box>
         <Box sx={{ textAlign: "right", flexShrink: 0 }}>

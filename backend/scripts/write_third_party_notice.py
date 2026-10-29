@@ -400,7 +400,7 @@ def main() -> int:
     w("THIRD-PARTY NOTICES")
     w("=" * 72)
     w("")
-    w(f"Audit Portal - generated {date.today().isoformat()} by")
+    w(f"SquareOne Holdings Agentic Data Analytics - generated {date.today().isoformat()} by")
     w("backend/scripts/write_third_party_notice.py")
     w("")
     w("This product bundles the third-party software listed below. Each package is")

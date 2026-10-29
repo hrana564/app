@@ -34,7 +34,7 @@ class Settings(BaseSettings):
     postgres_port: int = 5432
     postgres_user: str = "postgres"
     postgres_password: str = "postgres"
-    postgres_db: str = "ABM_Audit_Portal"
+    postgres_db: str = "SQ1_Agentic_Data_Analytics"
 
     # --- auth -----------------------------------------------------------
     jwt_secret: str = ""
@@ -96,14 +96,14 @@ class Settings(BaseSettings):
     # checked at boot rather than at the first request.
     client_entities: list[ClientEntity] = [
         ClientEntity(
-            code="CLIENT-A",
-            name="Client A",
-            systems=["POS", "Warehouse", "HRMS"],
+            code="SQT",
+            name="SquareOne Technologies",
+            systems=["iPOS (SaaS)", "Azure Synapse", "HRMS"],
         ),
         ClientEntity(
-            code="CLIENT-B",
-            name="Client B",
-            systems=["POS", "HRMS", "ERP"],
+            code="ET",
+            name="EnsaanTech",
+            systems=["iPOS", "HRMS", "Business Central"],
         ),
     ]
 

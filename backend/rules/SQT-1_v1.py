@@ -1,5 +1,5 @@
 """
-LAD-CA-03  -  Last hour of trading volume spike
+SQT-1  -  Last hour of trading volume spike
 
 System : POS  ->  ipos_sales
 

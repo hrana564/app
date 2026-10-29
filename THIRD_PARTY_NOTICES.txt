@@ -1,7 +1,7 @@
 THIRD-PARTY NOTICES
 ========================================================================
 
-Audit Portal - generated 2026-10-22 by
+SquareOne Holdings Agentic Data Analytics - generated 2026-10-22 by
 backend/scripts/write_third_party_notice.py
 
 This product bundles the third-party software listed below. Each package is

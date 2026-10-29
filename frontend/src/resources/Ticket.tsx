@@ -865,7 +865,7 @@ const TicketDetails = () => {
   const navigate = useNavigate();
 
   useEffect(() => {
-    if (record?.ticket_no) document.title = `${record.ticket_no} · Audit Portal`;
+    if (record?.ticket_no) document.title = `${record.ticket_no} · SquareOne Holdings`;
   }, [record?.ticket_no]);
 
   if (!record) return null;

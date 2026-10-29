@@ -82,7 +82,7 @@ def main() -> int:
         buckets[row[4]].append(row)
 
     print("=" * 78)
-    print("LICENSE AUDIT - Audit Portal (backend Python + frontend npm)")
+    print("LICENSE AUDIT - SquareOne Holdings Agentic Data Analytics (backend Python + frontend npm)")
     print("=" * 78)
     print(f"  python distributions : {len(python_rows):>4}")
     print(f"  npm packages         : {len(npm_rows):>4}")

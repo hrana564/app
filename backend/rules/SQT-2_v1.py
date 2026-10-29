@@ -1,5 +1,5 @@
 """
-LAD-CA-04  -  Single staff member dominates a day's cash settlement
+SQT-2  -  Single staff member dominates a day's cash settlement
 
 System : POS  ->  ipos_sales
 
